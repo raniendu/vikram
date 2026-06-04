@@ -1,0 +1,41 @@
+# VCS / IDE
+.git
+.github
+.idea
+.vscode
+.claude
+
+# Python build artifacts
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.egg-info
+build
+dist
+
+# Local env / state - must be supplied by the runtime
+.env
+.env.*
+.venv
+.vikram
+
+# Test / dev tooling
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.hypothesis
+tests
+evals
+.pre-commit-config.yaml
+
+# Docs and personal scratch - not needed in the image
+docs
+spec/superpowers
+AGENTS.md
+README.md
+model_providers_comparison.md
+
+# OS noise
+.DS_Store
+Thumbs.db

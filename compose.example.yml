@@ -1,0 +1,68 @@
+# Standalone Docker Compose for smoke-testing the vikram image locally.
+# Brings up vikram + ollama on a private network. Add your own reverse proxy
+# and TLS termination for production deployments.
+#
+# Usage:
+#   docker compose -f compose.example.yml --env-file .env up --build
+#   curl http://localhost:8000/healthz
+#
+# Required env (in .env or shell):
+#   VIKRAM_MODEL=qwen3                 # whatever Ollama tag you have pulled
+#   VIKRAM_TELEGRAM_BOT_TOKEN=...      # only if testing the default Telegram bot
+#   VIKRAM_TELEGRAM_WEBHOOK_SECRET=...
+#   VIKRAM_TELEGRAM_ALLOWED_CHAT_IDS=...
+
+name: vikram-local
+
+services:
+  vikram:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/raniendu/vikram:local
+    container_name: vikram
+    env_file:
+      - path: ${VIKRAM_CONTAINER_ENV_FILE:-.env}
+        required: false
+    environment:
+      VIKRAM_MODEL_PROVIDER: ${VIKRAM_MODEL_PROVIDER:-ollama}
+      VIKRAM_MODEL: ${VIKRAM_MODEL:-qwen3}
+      OLLAMA_BASE_URL: http://ollama:11434/v1
+      VIKRAM_OPENAI_COMPAT_API_KEY: ${VIKRAM_OPENAI_COMPAT_API_KEY:-}
+      VIKRAM_OPENAI_COMPAT_BASE_URL: ${VIKRAM_OPENAI_COMPAT_BASE_URL:-https://api.openai.com/v1}
+      VIKRAM_AGENT: ${VIKRAM_AGENT:-vikram}
+      PARALLEL_API_KEY: ${PARALLEL_API_KEY:-}
+    volumes:
+      - vikram-state:/app/.vikram
+    ports:
+      - "8000:8000"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - vikram
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: vikram-ollama
+    volumes:
+      - ollama-models:/root/.ollama
+    ports:
+      - "11434:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    networks:
+      - vikram
+    restart: unless-stopped
+
+networks:
+  vikram:
+
+volumes:
+  vikram-state:
+  ollama-models:

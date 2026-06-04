@@ -1,0 +1,29 @@
+name = "Vikram"
+description = "General-purpose assistant agent."
+system_prompt = "system_prompt.md"
+
+# Local resources - relative to spec/vikram/
+context_files = []
+skills = []
+
+# Shared resources - relative to spec/shared/
+shared_context_files = ["context/production.md"]
+shared_skills = []
+
+# Tools - names resolved from vikram.tools.TOOL_REGISTRY
+tools = ["web_search"]
+
+# Model knobs - passed verbatim to pydantic_ai ModelSettings.
+[model_settings]
+temperature = 0.3                  # Sampling randomness. 0.0 = deterministic, ~1.0 = creative. Lower for assistants, higher for brainstorming.
+# top_p = 0.95                     # Nucleus sampling cutoff (0–1). Alternative to temperature; usually leave at default.
+# max_tokens = 2048                # Hard cap on response length. Useful to bound cost/latency.
+# seed = 42                        # Reproducibility seed. Honored best-effort; Ollama support is partial.
+# presence_penalty = 0.0           # -2.0 to 2.0. Positive values discourage repeating any token already used.
+# frequency_penalty = 0.0          # -2.0 to 2.0. Positive values penalize tokens by usage count (stronger anti-repeat than presence).
+# stop_sequences = ["</done>"]     # Strings that, if generated, end the response immediately.
+# parallel_tool_calls = false      # Allow the model to issue multiple tool calls in one turn. Leave false for local Ollama models — flaky.
+# thinking = "low"                 # Reasoning effort: false | true | "minimal" | "low" | "medium" | "high" | "xhigh". No-op unless the model supports reasoning (DeepSeek-R1, Qwen3-thinking, OpenAI o-series, Anthropic extended thinking).
+# timeout = 60                     # Per-request timeout in seconds.
+# service_tier = "auto"            # Provider routing: "auto" | "default" | "flex" | "priority". OpenAI/Anthropic only.
+# extra_headers = { "X-My-Header" = "value" }   # Passthrough HTTP headers.

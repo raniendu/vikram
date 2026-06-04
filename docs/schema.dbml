@@ -1,0 +1,14 @@
+Table threads {
+  interface text [pk]
+  external_thread_id text [pk]
+  agent_name text [not null]
+  message_history_json blob
+  created_at text [not null]
+  updated_at text [not null]
+}
+
+Table telegram_updates {
+  bot_name text [pk]
+  update_id integer [pk]
+  created_at text [not null]
+}
