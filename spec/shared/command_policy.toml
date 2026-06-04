@@ -1,0 +1,101 @@
+# Tiered command-execution policy for run_command / inspect_command.
+#
+#   Tier 1 (read_only): auto-run, no approval.
+#   Tier 3 (deny):      refused even if a human approves.
+#   Anything not Tier 1 and not Tier 3  =>  Tier 2: approval required.
+#
+# This file is the shared default. An agent may point at it (or another file)
+# via `command_policy = "<file>"` in its agent.toml, and may extend it with a
+# `[command_policy_override]` block. Merge semantics:
+#   - read_only.* (always, git.*) in an override REPLACE the shared value.
+#   - deny.rule is APPEND-ONLY: an agent can add deny rules but can never
+#     remove a shared one, so the catastrophic backstop cannot be weakened.
+
+schema_version = 1
+
+# ---- Tier 1: read-only classifier (small, conservative, stable) ----
+[read_only]
+  # Executables that are read-only regardless of arguments.
+  always = ["pwd", "true"]
+
+  # git: only these subcommands, and only without write/exec flags.
+  [read_only.git]
+    subcommands = [
+      "status", "diff", "log", "show", "branch", "remote",
+      "ls-files", "ls-tree", "rev-list", "rev-parse",
+    ]
+    # A token equal to or prefixed by any of these makes the command NOT
+    # read-only (it then falls through to Tier 2 approval).
+    forbidden_flag_substrings = ["--output", "--ext-diff", "--external-diff"]
+    # For these subcommands, ANY positional (non-flag) argument disqualifies
+    # read-only — e.g. `git branch -D main`, `git remote add origin ...`.
+    mutating_subcommand_args = ["branch", "remote"]
+
+# ---- Tier 3: hard deny backstop (refused even if approved) ----
+[[deny.rule]]
+  name = "git force/delete push"
+  executable = "git"
+  subcommand = "push"
+  any_flag = ["--force", "-f", "--force-with-lease", "--delete", "--mirror"]
+  message = "force/delete/mirror push is irreversible and is never allowed."
+
+[[deny.rule]]
+  name = "git history rewrite (amend)"
+  executable = "git"
+  subcommand = "commit"
+  any_flag = ["--amend"]
+  message = "amending committed history is not allowed."
+
+[[deny.rule]]
+  name = "git rebase"
+  executable = "git"
+  subcommand = "rebase"
+  message = "rebase rewrites history and is not allowed."
+
+[[deny.rule]]
+  name = "git hard reset"
+  executable = "git"
+  subcommand = "reset"
+  any_flag = ["--hard"]
+  message = "hard reset discards work and is not allowed."
+
+[[deny.rule]]
+  name = "git hook bypass"
+  executable = "git"
+  any_flag = ["--no-verify"]
+  message = "bypassing hooks with --no-verify is not allowed."
+
+[[deny.rule]]
+  name = "git delete-remote refspec"
+  executable = "git"
+  subcommand = "push"
+  any_flag_prefixes = [":"]  # e.g. `git push origin :main` deletes the ref
+  message = "deleting a remote ref via a ':' refspec is not allowed."
+
+[[deny.rule]]
+  name = "privilege escalation"
+  executable = ["sudo", "doas", "su"]
+  message = "privilege escalation is not allowed."
+
+[[deny.rule]]
+  name = "recursive remove"
+  executable = "rm"
+  any_flag = ["-r", "-R", "-rf", "-fr", "--recursive"]
+  message = "recursive rm is not allowed; delete specific files instead."
+
+[[deny.rule]]
+  name = "touch secret/credential files"
+  path_globs = [
+    ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx",
+    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+    "*.tfstate", "*.tfstate.backup",
+  ]
+  exclude_path_globs = [".env.example"]
+  message = "touching secret/credential files is not allowed."
+
+# Inert under argv-only execution (no token contains a pipe), but future-proofs
+# the engine if a shell is ever introduced.
+[[deny.rule]]
+  name = "pipe download into a shell"
+  raw_substrings = ["| sh", "| bash", "|sh", "|bash"]
+  message = "piping a download into a shell is not allowed."

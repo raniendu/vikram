@@ -1,0 +1,28 @@
+name = "Coder"
+description = "CLI-only coding agent for local repository work."
+system_prompt = "system_prompt.md"
+cli_only = true
+
+# Local resources — relative to spec/coder/
+context_files = []
+skills = []
+
+# Shared resources — relative to spec/shared/
+shared_context_files = ["context/production.md"]
+shared_skills = []
+
+# Tools — names resolved from vikram.tools.TOOL_REGISTRY
+tools = [
+  "read_file",
+  "glob",
+  "grep",
+  "inspect_command",
+  "write_file",
+  "edit_file",
+  "run_command",
+]
+
+# Model knobs — passed verbatim to pydantic_ai ModelSettings.
+[model_settings]
+temperature = 0.2
+parallel_tool_calls = false

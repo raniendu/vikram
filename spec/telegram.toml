@@ -1,0 +1,10 @@
+default_bot = "vikram"
+
+[[bots]]
+name = "vikram"
+default_agent = "vikram"
+token_env = "VIKRAM_TELEGRAM_BOT_TOKEN"
+webhook_secret_env = "VIKRAM_TELEGRAM_WEBHOOK_SECRET"
+allowed_chat_ids_env = "VIKRAM_TELEGRAM_ALLOWED_CHAT_IDS"
+api_base_url_env = "VIKRAM_TELEGRAM_API_BASE_URL"
+username_env = "VIKRAM_TELEGRAM_BOT_USERNAME"
