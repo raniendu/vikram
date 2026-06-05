@@ -6,7 +6,7 @@ Vikram can run directly with `uv`, as a `uv tool`, or in Docker.
 
 ```bash
 uv sync --locked
-cp .env.example .env
+uv run vikram configure
 uv run vikram-api
 curl http://127.0.0.1:8000/healthz
 ```
@@ -23,11 +23,15 @@ state across container restarts.
 
 ## Required Runtime Env
 
+For direct app installs, `vikram configure` writes local model config to
+`~/.config/vikram/config.toml`. Deployment environments can use env vars
+instead; provider and model must be set explicitly.
+
 For local Ollama:
 
 ```env
 VIKRAM_MODEL_PROVIDER=ollama
-VIKRAM_MODEL=qwen3
+VIKRAM_MODEL=<model-tag>
 OLLAMA_BASE_URL=http://localhost:11434/v1
 ```
 

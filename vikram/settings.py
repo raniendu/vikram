@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import AliasChoices, Field
 from pydantic_ai.models import Model
@@ -10,6 +10,9 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.ollama import OllamaProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings.sources import PydanticBaseSettingsSource
+
+from vikram.config import load_config
 
 ModelProvider = Literal["ollama", "openai-compatible"]
 
@@ -41,6 +44,14 @@ def _default_spec_root() -> Path:
     return _resolve_spec_root(Path(__file__).resolve().parent.parent / "spec")
 
 
+class VikramConfigSettingsSource(PydanticBaseSettingsSource):
+    def get_field_value(self, field, field_name: str) -> tuple[Any, str, bool]:
+        return None, field_name, False
+
+    def __call__(self) -> dict[str, Any]:
+        return load_config()
+
+
 class VikramSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -50,11 +61,11 @@ class VikramSettings(BaseSettings):
         populate_by_name=True,
     )
 
-    model_provider: ModelProvider = Field(
-        default="ollama", validation_alias="VIKRAM_MODEL_PROVIDER"
+    model_provider: ModelProvider | None = Field(
+        default=None, validation_alias="VIKRAM_MODEL_PROVIDER"
     )
-    model: str = Field(
-        default="qwen3",
+    model: str | None = Field(
+        default=None,
         validation_alias="VIKRAM_MODEL",
     )
     ollama_base_url: str = Field(
@@ -134,6 +145,23 @@ class VikramSettings(BaseSettings):
         validation_alias="VIKRAM_CONTEXT_WARNING_RATIO",
     )
 
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (
+            init_settings,
+            env_settings,
+            dotenv_settings,
+            VikramConfigSettingsSource(settings_cls),
+            file_secret_settings,
+        )
+
     @property
     def normalized_ollama_base_url(self) -> str:
         base_url = self.ollama_base_url.strip().rstrip("/")
@@ -168,6 +196,16 @@ class VikramSettings(BaseSettings):
 
 def build_model(settings: VikramSettings | None = None) -> Model:
     settings = settings or VikramSettings()
+    if not settings.model_provider:
+        raise RuntimeError(
+            "Vikram model provider is not configured. Run `vikram configure` "
+            "or set VIKRAM_MODEL_PROVIDER."
+        )
+    if not settings.model:
+        raise RuntimeError(
+            "Vikram model is not configured. Run `vikram configure` or set "
+            "VIKRAM_MODEL."
+        )
     if settings.model_provider == "ollama":
         return OllamaModel(
             settings.model,
@@ -176,9 +214,9 @@ def build_model(settings: VikramSettings | None = None) -> Model:
     if settings.model_provider == "openai-compatible":
         if not settings.openai_compat_api_key:
             raise RuntimeError(
-                "VIKRAM_OPENAI_COMPAT_API_KEY is not set. Add it to .env or "
-                "the runtime environment to use the openai-compatible model "
-                "provider."
+                "VIKRAM_OPENAI_COMPAT_API_KEY is not set. Run `vikram "
+                "configure`, add it to .env, or set it in the runtime "
+                "environment to use the openai-compatible model provider."
             )
         return OpenAIChatModel(
             settings.model,

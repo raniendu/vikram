@@ -49,7 +49,10 @@ class _LazyVersionAction(argparse.Action):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="vikram")
+    parser = argparse.ArgumentParser(
+        prog="vikram",
+        epilog="Commands: vikram configure, vikram update",
+    )
     parser.add_argument(
         "--version",
         action=_LazyVersionAction,
@@ -110,6 +113,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         from vikram.update import run as run_update
 
         sys.exit(run_update(raw_args[1:]))
+    if raw_args and raw_args[0] == "configure":
+        from vikram.config import run_configure
+
+        code = run_configure(raw_args[1:])
+        if code:
+            sys.exit(code)
+        return
 
     parser = build_parser()
     args = parser.parse_args(raw_args)

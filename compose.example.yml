@@ -7,7 +7,8 @@
 #   curl http://localhost:8000/healthz
 #
 # Required env (in .env or shell):
-#   VIKRAM_MODEL=qwen3                 # whatever Ollama tag you have pulled
+#   VIKRAM_MODEL_PROVIDER=ollama       # or openai-compatible
+#   VIKRAM_MODEL=...                   # whatever model id you have configured
 #   VIKRAM_TELEGRAM_BOT_TOKEN=...      # only if testing the default Telegram bot
 #   VIKRAM_TELEGRAM_WEBHOOK_SECRET=...
 #   VIKRAM_TELEGRAM_ALLOWED_CHAT_IDS=...
@@ -25,9 +26,9 @@ services:
       - path: ${VIKRAM_CONTAINER_ENV_FILE:-.env}
         required: false
     environment:
-      VIKRAM_MODEL_PROVIDER: ${VIKRAM_MODEL_PROVIDER:-ollama}
-      VIKRAM_MODEL: ${VIKRAM_MODEL:-qwen3}
-      OLLAMA_BASE_URL: http://ollama:11434/v1
+      VIKRAM_MODEL_PROVIDER: ${VIKRAM_MODEL_PROVIDER:-}
+      VIKRAM_MODEL: ${VIKRAM_MODEL:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
       VIKRAM_OPENAI_COMPAT_API_KEY: ${VIKRAM_OPENAI_COMPAT_API_KEY:-}
       VIKRAM_OPENAI_COMPAT_BASE_URL: ${VIKRAM_OPENAI_COMPAT_BASE_URL:-https://api.openai.com/v1}
       VIKRAM_AGENT: ${VIKRAM_AGENT:-vikram}

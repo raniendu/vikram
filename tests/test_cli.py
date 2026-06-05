@@ -1,5 +1,6 @@
 import importlib
 import json
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +28,7 @@ def test_cli_file_execution_shows_help():
     assert "--once" in result.stdout
     assert "--prompt" in result.stdout
     assert "--json" in result.stdout
+    assert "vikram configure" in result.stdout
 
 
 class FakeSettings:
@@ -122,6 +124,27 @@ def test_cli_once_json_outputs_agent_and_output(monkeypatch, capsys):
         "agent": "Coder",
         "output": "reply: status",
     }
+
+
+def test_cli_configure_writes_ollama_local_config(monkeypatch, tmp_path, capsys):
+    from vikram.cli import main
+
+    answers = iter(["ollama", "llama3.2", "http://localhost:11434"])
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+
+    main(["configure"])
+
+    config_path = tmp_path / "vikram" / "config.toml"
+    assert config_path.is_file()
+    assert config_path.read_text(encoding="utf-8") == (
+        "# Written by `vikram configure`.\n"
+        'model_provider = "ollama"\n'
+        'model = "llama3.2"\n'
+        'ollama_base_url = "http://localhost:11434"\n'
+    )
+    assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
+    assert str(config_path) in capsys.readouterr().out
 
 
 def test_prompt_requires_once(capsys):

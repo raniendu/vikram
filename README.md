@@ -23,26 +23,31 @@ coding tools for the CLI-only `coder` agent.
 
 ```bash
 uv sync
-cp .env.example .env
+uv run vikram configure
 uv run vikram --once --prompt "say pong"
 ```
 
-The default model provider is local Ollama:
+Vikram does not ship with a default model provider or model name. Configuration
+lives in `~/.config/vikram/config.toml`; environment variables and `.env` still
+override that local file for development and deployment.
+
+For local Ollama, pull a model you want to use, then run `vikram configure` and
+enter that exact tag:
 
 ```bash
-ollama pull qwen3
+ollama pull <model-tag>
 ollama serve
 ```
 
-Set these in `.env` for local Ollama:
+Equivalent `.env` settings for local Ollama:
 
 ```env
 VIKRAM_MODEL_PROVIDER=ollama
-VIKRAM_MODEL=qwen3
+VIKRAM_MODEL=<model-tag>
 OLLAMA_BASE_URL=http://localhost:11434/v1
 ```
 
-For a hosted OpenAI-compatible endpoint:
+Equivalent `.env` settings for a hosted OpenAI-compatible endpoint:
 
 ```env
 VIKRAM_MODEL_PROVIDER=openai-compatible
@@ -54,6 +59,7 @@ VIKRAM_MODEL=gpt-4.1-mini
 ## CLI
 
 ```bash
+uv run vikram configure
 uv run vikram
 uv run vikram --agent coder
 uv run vikram --once --prompt "summarize this repo"
@@ -119,8 +125,10 @@ On another machine after authentication with GitHub CLI:
 VIKRAM_INSTALL_DIR="$HOME/.local/share/vikram" bash install.sh
 ```
 
-The installer records metadata in `~/.config/vikram/install.toml` so
-`vikram update` can fast-forward and reinstall the `uv tool`.
+The installer asks for model configuration and writes it to
+`~/.config/vikram/config.toml`. It records install metadata in
+`~/.config/vikram/install.toml` so `vikram update` can fast-forward and
+reinstall the `uv tool`.
 
 ## Docker
 
