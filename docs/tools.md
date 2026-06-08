@@ -1,6 +1,9 @@
 # Tools
 
-Agent specs reference tool names from `vikram.tools.TOOL_REGISTRY`.
+Agent specs reference tool names from `vikram.tools.TOOL_REGISTRY`. Agents can
+also gain tools from external MCP servers (`[[mcp_servers]]`) and on-demand
+instruction packs (skills); both are documented in
+[mcp_and_skills.md](mcp_and_skills.md).
 
 ## `web_search`
 
@@ -23,3 +26,9 @@ The `coder` spec enables these CLI-only tools:
 
 Command policy lives in `spec/shared/command_policy.toml`. Deny rules are a
 hard backstop and cannot be bypassed by approval.
+
+## `load_skill`
+
+Added automatically to any agent that has skills configured. It takes a skill
+`name` and returns that skill's full instructions plus a listing of its bundled
+resource files. See [mcp_and_skills.md](mcp_and_skills.md).

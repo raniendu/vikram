@@ -12,6 +12,8 @@ flowchart LR
     service --> factory
     factory --> spec[(spec/<agent>/agent.toml)]
     factory --> tools[TOOL_REGISTRY]
+    factory --> mcp[MCP servers]
+    factory --> skills[Skills]
     service --> store[(.vikram/vikram.sqlite3)]
     dispatch --> dbos[(.vikram/dbos.sqlite3)]
 ```
@@ -22,7 +24,9 @@ flowchart LR
 | --- | --- |
 | `vikram/settings.py` | Env configuration and model provider setup |
 | `vikram/spec.py` | Loads TOML agent specs and assembles instructions |
-| `vikram/agent.py` | Builds Pydantic AI agents from specs, settings, and tools |
+| `vikram/agent.py` | Builds Pydantic AI agents from specs, settings, tools, MCP servers, and skills |
+| `vikram/mcp.py` | Declarative MCP server specs and toolset construction |
+| `vikram/skills.py` | Agent Skills discovery, instructions, and the `load_skill` tool |
 | `vikram/cli.py` | Interactive and one-shot CLI |
 | `vikram/acp.py` | ACP adapter for local editor integration |
 | `vikram/api.py` | FastAPI routes and app lifespan |
@@ -47,8 +51,13 @@ and `/agent`, then enqueue ordinary text messages through the threaded flow.
 
 ## Built-In Specs
 
-- `vikram`: public-safe general assistant with `web_search`.
-- `coder`: CLI-only local coding agent with file/search/edit/command tools.
+- `vikram`: public-safe general assistant with `web_search` and the shared
+  `web-research` skill.
+- `coder`: CLI-only local coding agent with file/search/edit/command tools and
+  the `conventional-commits` skill.
 
 Specs with `cli_only = true` are rejected by HTTP, threaded, and Telegram
 surfaces.
+
+Agents may also declare `[[mcp_servers]]` to attach external MCP tool servers.
+See [mcp_and_skills.md](mcp_and_skills.md) for the MCP and skills reference.

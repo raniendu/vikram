@@ -16,6 +16,10 @@ coding tools for the CLI-only `coder` agent.
   `/reset` plus `/agent` commands.
 - Tools: Parallel web search, safe file/search/edit tools, and argv-only command
   execution guarded by a declarative command policy.
+- MCP: attach external Model Context Protocol tool servers per agent via
+  `[[mcp_servers]]`, with `${ENV_VAR}` secret references and automatic lifecycle.
+- Skills: progressive-disclosure instruction packs under `spec/.../skills/`,
+  surfaced by name/description and loaded on demand through `load_skill`.
 - Runtime state: local SQLite for thread history and DBOS workflow state.
 - Observability: structured JSON logs and optional OpenLIT/OpenTelemetry traces.
 
@@ -70,6 +74,35 @@ vikram update --check
 The `coder` agent is CLI-only. It can read/search files, request approval for
 edits, and run commands through `spec/shared/command_policy.toml`. CLI-only
 specs are rejected by HTTP, threaded, and Telegram surfaces.
+
+## MCP servers and skills
+
+Agents can be extended in two declarative ways, both configured in
+`spec/<agent>/agent.toml`. See [docs/mcp_and_skills.md](docs/mcp_and_skills.md)
+for the full reference.
+
+- **MCP servers** add external tools. Each `[[mcp_servers]]` entry becomes a
+  Pydantic AI toolset that Vikram starts and stops automatically per run.
+  Secrets are referenced as `${ENV_VAR}` so specs stay safe to commit:
+
+  ```toml
+  [[mcp_servers]]
+  name = "github"
+  transport = "stdio"            # stdio | http | sse
+  command = "npx"
+  args = ["-y", "@modelcontextprotocol/server-github"]
+  env = { GITHUB_PERSONAL_ACCESS_TOKEN = "${GITHUB_TOKEN}" }
+  ```
+
+- **Skills** are folders of expert instructions (`SKILL.md` with `name` and
+  `description` frontmatter) under `spec/<agent>/skills/` or
+  `spec/shared/skills/`. Only each skill's name and description load up front;
+  the agent reads the full body on demand through the `load_skill` tool:
+
+  ```toml
+  skills = ["skills/conventional-commits"]   # relative to the agent dir
+  shared_skills = ["skills/web-research"]     # relative to spec/shared
+  ```
 
 ## HTTP API
 

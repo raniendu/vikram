@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from vikram.command_policy import POLICY_FILENAME, CommandPolicy, load_command_policy
+from vikram.mcp import MCPServerSpec
 
 SHARED_DIR_NAME = "shared"
 
@@ -25,6 +26,7 @@ class AgentSpec(BaseModel):
     shared_context_files: list[Path] = []
     shared_skills: list[Path] = []
     tools: list[str] = []
+    mcp_servers: list[MCPServerSpec] = []
     model_settings: dict[str, Any] = {}
     command_policy: Path = Path(POLICY_FILENAME)
     command_policy_override: dict[str, Any] = {}

@@ -1,11 +1,13 @@
 import pytest
 from pydantic_ai import Agent
+from pydantic_ai.mcp import MCPServer
 from pydantic_ai.models.ollama import OllamaModel
 from pydantic_ai.models.openai import OpenAIChatModel
 
 from vikram.agent import build_agent
+from vikram.mcp import MCPServerSpec
 from vikram.settings import VikramSettings, build_model
-from vikram.spec import AgentSpec
+from vikram.spec import AgentSpec, load_spec
 
 VIKRAM_ENV_VARS = (
     "VIKRAM_MODEL",
@@ -167,3 +169,70 @@ def test_build_model_openai_compatible_requires_api_key(monkeypatch, tmp_path):
     )
     with pytest.raises(RuntimeError, match="VIKRAM_OPENAI_COMPAT_API_KEY"):
         build_model(settings)
+
+
+def _local_model_settings(monkeypatch, tmp_path) -> VikramSettings:
+    return clean_settings(
+        monkeypatch,
+        tmp_path,
+        VIKRAM_MODEL_PROVIDER="ollama",
+        VIKRAM_MODEL="test-model",
+        OLLAMA_BASE_URL="http://localhost:11434",
+    )
+
+
+def test_build_agent_registers_load_skill_when_spec_has_skills(monkeypatch, tmp_path):
+    settings = _local_model_settings(monkeypatch, tmp_path)
+    spec = load_spec("vikram", settings.spec_root)
+
+    agent = build_agent(spec=spec, settings=settings)
+
+    # The real vikram spec ships the web-research skill, so build_agent attaches
+    # the load_skill tool alongside the spec's own tools.
+    assert "load_skill" in agent._function_toolset.tools
+    assert "web_search" in agent._function_toolset.tools
+
+
+def test_build_agent_without_skills_has_no_load_skill(monkeypatch, tmp_path):
+    settings = _local_model_settings(monkeypatch, tmp_path)
+    (tmp_path / "system_prompt.md").write_text("PROMPT", encoding="utf-8")
+    spec = AgentSpec(
+        name="Plain",
+        description="No skills",
+        system_prompt=tmp_path / "system_prompt.md",
+        agent_dir=tmp_path,
+        # Reuse the real shared dir so the command policy file resolves.
+        shared_dir=settings.spec_root / "shared",
+    )
+
+    agent = build_agent(spec=spec, settings=settings)
+
+    assert "load_skill" not in agent._function_toolset.tools
+
+
+def test_build_agent_attaches_mcp_servers_as_toolsets(monkeypatch, tmp_path):
+    settings = _local_model_settings(monkeypatch, tmp_path)
+    monkeypatch.setenv("DEMO_MCP_TOKEN", "tok")
+    (tmp_path / "system_prompt.md").write_text("PROMPT", encoding="utf-8")
+    spec = AgentSpec(
+        name="MCPAgent",
+        description="demo",
+        system_prompt=tmp_path / "system_prompt.md",
+        agent_dir=tmp_path,
+        # Reuse the real shared dir so the command policy file resolves.
+        shared_dir=settings.spec_root / "shared",
+        mcp_servers=[
+            MCPServerSpec(
+                name="github",
+                command="npx",
+                args=["-y", "srv"],
+                env={"TOKEN": "${DEMO_MCP_TOKEN}"},
+            )
+        ],
+    )
+
+    agent = build_agent(spec=spec, settings=settings)
+
+    servers = [t for t in agent.toolsets if isinstance(t, MCPServer)]
+    assert [s.id for s in servers] == ["github"]
+    assert servers[0].env == {"TOKEN": "tok"}
