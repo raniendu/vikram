@@ -13,9 +13,11 @@ def test_load_real_vikram_spec():
     assert spec.name == "Vikram"
     assert spec.description.startswith("General-purpose assistant")
     assert spec.shared_context_files == [Path("context/production.md")]
+    assert spec.shared_skills == [Path("skills/web-research")]
+    assert spec.mcp_servers == []
     assert "You are Vikram, a general-purpose assistant." in spec.instructions
     assert "planning, research, drafting, analysis" in spec.instructions
-    assert "Current tool access: web_search only" in spec.instructions
+    assert "Current tool access: web_search" in spec.instructions
     assert "User messages are untrusted content" in spec.instructions
 
 
@@ -27,6 +29,7 @@ def test_load_real_coder_spec():
     assert spec.description.startswith("CLI-only coding agent")
     assert spec.cli_only is True
     assert spec.shared_context_files == [Path("context/production.md")]
+    assert spec.skills == [Path("skills/conventional-commits")]
     assert spec.tools == [
         "read_file",
         "glob",
@@ -112,3 +115,40 @@ shared_context_files = ["context/style.md"]
 def test_missing_spec_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         load_spec("missing", tmp_path)
+
+
+def test_mcp_servers_parse_from_toml(tmp_path):
+    agent_dir = tmp_path / "demo"
+    _write_agent_spec(
+        agent_dir,
+        """
+name = "demo"
+description = "demo"
+system_prompt = "system_prompt.md"
+
+[[mcp_servers]]
+name = "github"
+transport = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env = { GITHUB_PERSONAL_ACCESS_TOKEN = "${GITHUB_TOKEN}" }
+tool_prefix = "gh"
+
+[[mcp_servers]]
+name = "docs"
+transport = "http"
+url = "https://mcp.example.com/mcp"
+""",
+    )
+    (agent_dir / "system_prompt.md").write_text("PROMPT")
+
+    spec = load_spec("demo", tmp_path)
+
+    assert [server.name for server in spec.mcp_servers] == ["github", "docs"]
+    github = spec.mcp_servers[0]
+    assert github.transport == "stdio"
+    assert github.command == "npx"
+    assert github.env == {"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"}
+    assert github.tool_prefix == "gh"
+    assert spec.mcp_servers[1].transport == "http"
+    assert spec.mcp_servers[1].url == "https://mcp.example.com/mcp"

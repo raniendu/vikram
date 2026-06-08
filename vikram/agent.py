@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic_ai import Agent
 
 from vikram.context import agent_identity, current_datetime
+from vikram.mcp import build_mcp_servers
 from vikram.settings import VikramSettings, build_model
+from vikram.skills import discover_skills, make_load_skill_tool, skills_instructions
 from vikram.spec import AgentSpec, load_spec
 from vikram.tools import TOOL_REGISTRY, ToolEntry, set_command_policy
 
@@ -32,16 +36,28 @@ def build_agent(
     spec = spec or load_spec(settings.default_agent, settings.spec_root)
     tools = _resolve_tools(spec)
     set_command_policy(spec.load_command_policy())
+
+    # Skills are progressively disclosed: only names + descriptions go in the
+    # instructions; the load_skill tool reveals full bodies on demand.
+    skills = discover_skills(spec)
+    instructions: list[Any] = [spec.instructions, agent_identity(spec.name)]
+    skills_block = skills_instructions(skills)
+    if skills_block:
+        instructions.append(skills_block)
+        tools = [*tools, make_load_skill_tool(skills)]
+    instructions.append(current_datetime)
+
+    # MCP servers are toolsets; Pydantic AI starts and stops them automatically
+    # for each agent run, so no explicit lifecycle management is needed here.
+    mcp_servers = build_mcp_servers(spec.mcp_servers)
+
     return Agent(
         build_model(settings),
         name=spec.name,
         description=spec.description,
-        instructions=[
-            spec.instructions,
-            agent_identity(spec.name),
-            current_datetime,
-        ],
+        instructions=instructions,
         tools=tools,
+        toolsets=mcp_servers or None,
         model_settings=spec.model_settings or None,
     )
 

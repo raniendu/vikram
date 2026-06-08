@@ -217,3 +217,61 @@ async def test_cli_deferred_tool_handler_prompts_for_approval():
     assert isinstance(results.approvals["call-1"], ToolApproved)
     assert isinstance(results.approvals["call-2"], ToolDenied)
     assert len(session.prompts) == 2
+
+
+def _patch_interactive_io(monkeypatch, tmp_path):
+    """Stub the prompt/rich plumbing so run_interactive exits after one turn."""
+    import prompt_toolkit
+    import prompt_toolkit.history
+    import pydantic_ai._cli
+    import rich.console
+
+    from vikram import cli
+
+    class _EOFSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def prompt_async(self, *args, **kwargs):
+            raise EOFError
+
+    class _SilentConsole:
+        def print(self, *args, **kwargs):
+            pass
+
+    monkeypatch.setattr(prompt_toolkit, "PromptSession", _EOFSession)
+    monkeypatch.setattr(prompt_toolkit.history, "FileHistory", lambda *a, **k: None)
+    monkeypatch.setattr(pydantic_ai._cli, "CustomAutoSuggest", lambda *a, **k: None)
+    monkeypatch.setattr(
+        pydantic_ai._cli, "handle_slash_command", lambda *a, **k: (None, False)
+    )
+    monkeypatch.setattr(rich.console, "Console", _SilentConsole)
+    monkeypatch.setattr(cli, "HISTORY_PATH", tmp_path / "hist")
+
+
+class _RecordingAgent:
+    def __init__(self):
+        self.enter_count = 0
+
+    async def __aenter__(self):
+        self.enter_count += 1
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+@pytest.mark.parametrize("keep_warm", [True, False])
+async def test_run_interactive_keeps_servers_warm(monkeypatch, tmp_path, keep_warm):
+    from vikram.cli import run_interactive
+
+    _patch_interactive_io(monkeypatch, tmp_path)
+    agent = _RecordingAgent()
+
+    await run_interactive(
+        agent, prog_name="Demo", quiet=False, keep_servers_warm=keep_warm
+    )
+
+    # The agent context is entered exactly once for the session only when MCP
+    # servers need to stay connected across turns.
+    assert agent.enter_count == (1 if keep_warm else 0)

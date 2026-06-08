@@ -7,11 +7,38 @@ context_files = []
 skills = []
 
 # Shared resources - relative to spec/shared/
+# skills / shared_skills point at skill folders (each holding a SKILL.md).
+# Only their name + description load up front; load_skill reveals the body.
 shared_context_files = ["context/production.md"]
-shared_skills = []
+shared_skills = ["skills/web-research"]
 
 # Tools - names resolved from vikram.tools.TOOL_REGISTRY
 tools = ["web_search"]
+
+# MCP servers - external Model Context Protocol tool servers exposed to this
+# agent. Each [[mcp_servers]] entry becomes a Pydantic AI toolset that Vikram
+# starts and stops automatically per run. Reference secrets as ${ENV_VAR};
+# never inline them. Uncomment and adapt:
+#
+# [[mcp_servers]]
+# name = "fetch"                # stable id, used for errors and as the toolset id
+# transport = "stdio"           # stdio | http | sse
+# command = "uvx"
+# args = ["mcp-server-fetch"]
+#
+# [[mcp_servers]]
+# name = "github"
+# transport = "stdio"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-github"]
+# env = { GITHUB_PERSONAL_ACCESS_TOKEN = "${GITHUB_TOKEN}" }
+# tool_prefix = "gh"            # namespaces this server's tools as gh_*
+#
+# [[mcp_servers]]
+# name = "docs"
+# transport = "http"            # streamable HTTP MCP endpoint
+# url = "https://mcp.example.com/mcp"
+# headers = { Authorization = "Bearer ${DOCS_MCP_TOKEN}" }
 
 # Model knobs - passed verbatim to pydantic_ai ModelSettings.
 [model_settings]

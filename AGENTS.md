@@ -7,7 +7,9 @@ shared policy/context lives under `spec/shared/`. Tests live in `tests/`. Runtim
 state belongs under `.vikram/` and must not be committed.
 
 Key modules:
-- `agent.py`: builds Pydantic AI agents from specs and registered tools.
+- `agent.py`: builds Pydantic AI agents from specs, tools, MCP servers, and skills.
+- `mcp.py`: declarative `[[mcp_servers]]` specs and MCP toolset construction.
+- `skills.py`: Agent Skills discovery and the `load_skill` progressive-disclosure tool.
 - `cli.py`: `vikram` command, including interactive and one-shot modes.
 - `acp.py`: `vikram-acp` editor-facing Agent Client Protocol adapter.
 - `api.py`: FastAPI app for `/chat`, threaded events, Telegram webhooks, and health.
