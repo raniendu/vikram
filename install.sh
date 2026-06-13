@@ -39,27 +39,53 @@ fi
 
 if [ -z "$source_dir" ]; then
   bold "Fetching $REPO into $INSTALL_DIR"
-  if ! command -v gh >/dev/null 2>&1; then
-    err "gh (GitHub CLI) is required to clone the repo."
-    err "Install from https://cli.github.com/ and rerun."
-    exit 1
+  
+  # Determine if we can use the fast/encrypted gh path. Otherwise, fallback to tarball archive via curl.
+  uses_gh=false
+  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    uses_gh=true
   fi
-  if ! gh auth status >/dev/null 2>&1; then
-    err "gh is not authenticated. Run: gh auth login"
-    exit 1
-  fi
-  mkdir -p "$(dirname "$INSTALL_DIR")"
-  if [ -d "$INSTALL_DIR/.git" ]; then
-    if [ -n "$(git -C "$INSTALL_DIR" status --porcelain)" ]; then
-      warn "$INSTALL_DIR has uncommitted changes; skipping pull."
+
+  source_dir="" # Will be populated by either branch below
+  
+  mkdir -p "$(dirname "$INSTALL_DIR")" "$INSTALL_DIR"
+
+  if [ "$uses_gh" = true ]; then
+    info "Cloning via GitHub CLI (preferred)."
+    if [ -d "$INSTALL_DIR/.git" ]; then
+      if [ -n "$(git -C "$INSTALL_DIR" status --porcelain)" ]; then
+        warn "$INSTALL_DIR has uncommitted changes; skipping pull."
+      else
+        info "Updating existing checkout"
+        git -C "$INSTALL_DIR" pull --ff-only
+      fi
     else
-      info "Updating existing checkout"
-      git -C "$INSTALL_DIR" pull --ff-only
+      gh repo clone "$REPO" "$INSTALL_DIR"
     fi
+    source_dir="$INSTALL_DIR"
   else
-    gh repo clone "$REPO" "$INSTALL_DIR"
+    warn "No GitHub CLI auth found; fetching repository archive via curl."
+    tmp_dir="$(mktemp -d)"
+    if curl -LsSf "https://github.com/$REPO/archive/refs/heads/main.tar.gz" \
+        | tar -xzf - -C "$tmp_dir" --strip-components=1; then
+      
+      # If target dir is already provisioned with files, clear it first.
+      if [ "$(ls -A "$INSTALL_DIR")" ]; then
+        warn "Target directory $INSTALL_DIR contains existing files; clearing before extraction."
+        find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} \;
+      fi
+      
+      cp -a "$tmp_dir"/. "$INSTALL_DIR/"
+      source_dir="$INSTALL_DIR"
+    else
+      err "Failed to fetch repository archive via curl."
+      exit 1
+    fi
+    rm -rf "$tmp_dir"
+
+    warn "Installed from github archive (no .git directory present in $source_dir)."
   fi
-  source_dir="$INSTALL_DIR"
+fi
 else
   bold "Using existing checkout at $source_dir"
 fi

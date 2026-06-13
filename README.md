@@ -176,11 +176,17 @@ uv run python -m vikram.local_webhook https://example.ngrok-free.app
 
 ## Install
 
-From a checkout:
+### Zero-Auth Install (Recommended for first-time setup)
+
+Install Vikram on a brand-new machine without cloning or authenticating via GitHub CLI:
 
 ```bash
-bash install.sh
+curl -LsSf https://raw.githubusercontent.com/raniendu/vikram/main/install.sh | bash
 ```
+
+This single command downloads the installer, installs `uv` if missing, fetches the Vikram source archive, and configures your environment.
+
+### From a git checkout or with `gh`
 
 On another machine after authentication with GitHub CLI:
 
