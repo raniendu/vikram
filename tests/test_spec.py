@@ -41,7 +41,7 @@ def test_load_real_coder_spec():
     ]
     assert "cwd is the workspace" in spec.instructions
     assert "Use read_file, glob, and grep" in spec.instructions
-    assert "Use inspect_command for read-only git inspection" in spec.instructions
+    assert "Inspect → Edit → Validate" in spec.instructions
 
 
 def _write_agent_spec(agent_dir: Path, body: str) -> None:
