@@ -152,3 +152,42 @@ url = "https://mcp.example.com/mcp"
     assert github.tool_prefix == "gh"
     assert spec.mcp_servers[1].transport == "http"
     assert spec.mcp_servers[1].url == "https://mcp.example.com/mcp"
+
+
+def test_hooks_parse_from_toml(tmp_path):
+    agent_dir = tmp_path / "demo"
+    _write_agent_spec(
+        agent_dir,
+        """
+name = "demo"
+description = "demo"
+system_prompt = "system_prompt.md"
+
+[[hooks]]
+event = "PreToolUse"
+matcher = "run_command"
+transport = "command"
+command = "./hooks/guard.sh"
+args = ["--strict"]
+env = { TOKEN = "${GUARD_TOKEN}" }
+
+[[hooks]]
+event = "Stop"
+transport = "python"
+entrypoint = "myhooks.notify:on_stop"
+""",
+    )
+    (agent_dir / "system_prompt.md").write_text("PROMPT")
+
+    spec = load_spec("demo", tmp_path)
+
+    assert [hook.event for hook in spec.hooks] == ["PreToolUse", "Stop"]
+    guard = spec.hooks[0]
+    assert guard.matcher == "run_command"
+    assert guard.transport == "command"
+    assert guard.command == "./hooks/guard.sh"
+    assert guard.args == ["--strict"]
+    assert guard.env == {"TOKEN": "${GUARD_TOKEN}"}
+    notifier = spec.hooks[1]
+    assert notifier.transport == "python"
+    assert notifier.entrypoint == "myhooks.notify:on_stop"

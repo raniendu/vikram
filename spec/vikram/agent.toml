@@ -40,6 +40,21 @@ tools = ["web_search"]
 # url = "https://mcp.example.com/mcp"
 # headers = { Authorization = "Bearer ${DOCS_MCP_TOKEN}" }
 
+# Hooks - programs or Python callables run at lifecycle events (PreToolUse,
+# PostToolUse, UserPromptSubmit, Stop). The handler receives the event payload
+# as JSON on stdin; for command hooks, exit code 2 blocks the action and stderr
+# is the reason. Reference secrets as ${ENV_VAR}. See docs/hooks.md. Uncomment:
+#
+# [[hooks]]
+# event = "UserPromptSubmit"     # fire when a prompt enters a run
+# transport = "command"
+# command = "./hooks/inject_context.sh"   # stdout JSON may add context or block
+#
+# [[hooks]]
+# event = "Stop"                 # fire when a run finishes (advisory)
+# transport = "python"
+# entrypoint = "myhooks.notify:on_stop"   # "module:function"
+
 # Model knobs - passed verbatim to pydantic_ai ModelSettings.
 [model_settings]
 temperature = 0.3                  # Sampling randomness. 0.0 = deterministic, ~1.0 = creative. Lower for assistants, higher for brainstorming.

@@ -20,6 +20,9 @@ coding tools for the CLI-only `coder` agent.
   `[[mcp_servers]]`, with `${ENV_VAR}` secret references and automatic lifecycle.
 - Skills: progressive-disclosure instruction packs under `spec/.../skills/`,
   surfaced by name/description and loaded on demand through `load_skill`.
+- Hooks: run external commands or Python callables at lifecycle events
+  (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`) to observe, augment,
+  or block what the agent does, via `[[hooks]]`.
 - Runtime state: local SQLite for thread history and DBOS workflow state.
 - Observability: structured JSON logs and optional OpenLIT/OpenTelemetry traces.
 
@@ -102,6 +105,33 @@ for the full reference.
   ```toml
   skills = ["skills/conventional-commits"]   # relative to the agent dir
   shared_skills = ["skills/web-research"]     # relative to spec/shared
+  ```
+
+## Hooks
+
+Hooks run your own code at agent lifecycle events to observe, augment, or block
+what the agent does. They are declared per agent in `spec/<agent>/agent.toml`
+under `[[hooks]]` and apply on every surface. See [docs/hooks.md](docs/hooks.md)
+for the full reference.
+
+- **Events**: `PreToolUse` and `PostToolUse` (wrap every built-in and MCP tool
+  call; can block), `UserPromptSubmit` (inject context or block a run), and
+  `Stop` (advisory, for notifications/logging).
+- **Transports**: a `command` handler gets the event payload as JSON on stdin
+  and blocks with exit code `2`; a `python` handler is a `module:function`
+  callable run in-process. Secrets are referenced as `${ENV_VAR}`.
+
+  ```toml
+  [[hooks]]
+  event = "PreToolUse"
+  matcher = "run_command"          # glob on the tool name (default "*")
+  transport = "command"
+  command = "./hooks/guard.sh"     # exit 2 (stderr = reason) blocks the call
+
+  [[hooks]]
+  event = "Stop"
+  transport = "python"
+  entrypoint = "myhooks.notify:on_stop"   # "module:function"
   ```
 
 ## HTTP API

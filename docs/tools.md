@@ -5,6 +5,9 @@ also gain tools from external MCP servers (`[[mcp_servers]]`) and on-demand
 instruction packs (skills); both are documented in
 [mcp_and_skills.md](mcp_and_skills.md).
 
+Tool calls can be observed or blocked with `PreToolUse` and `PostToolUse`
+hooks. Hooks are configured separately from tools; see [hooks.md](hooks.md).
+
 ## `web_search`
 
 Uses `PARALLEL_API_KEY` and returns compact source-backed search results. Specs

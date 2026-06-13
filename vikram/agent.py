@@ -3,8 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from pydantic_ai import Agent
+from pydantic_ai.toolsets import CombinedToolset, FunctionToolset
 
 from vikram.context import agent_identity, current_datetime
+from vikram.hooks import HookedAgent, HookSet, HookToolset, build_hooks
 from vikram.mcp import build_mcp_servers
 from vikram.settings import VikramSettings, build_model
 from vikram.skills import discover_skills, make_load_skill_tool, skills_instructions
@@ -51,15 +53,53 @@ def build_agent(
     # for each agent run, so no explicit lifecycle management is needed here.
     mcp_servers = build_mcp_servers(spec.mcp_servers)
 
-    return Agent(
+    # Hooks fire at lifecycle events. Tool hooks (Pre/PostToolUse) wrap the
+    # combined toolset so they cover built-in and MCP tools alike; run hooks
+    # (UserPromptSubmit/Stop) are fired by HookedAgent around each run.
+    hooks = build_hooks(spec.hooks)
+    return _build_agent_object(
         build_model(settings),
-        name=spec.name,
-        description=spec.description,
+        spec=spec,
         instructions=instructions,
         tools=tools,
-        toolsets=mcp_servers or None,
-        model_settings=spec.model_settings or None,
+        mcp_servers=mcp_servers,
+        hooks=hooks,
     )
+
+
+def _build_agent_object(
+    model: Any,
+    *,
+    spec: AgentSpec,
+    instructions: list[Any],
+    tools: list[ToolEntry],
+    mcp_servers: list[Any],
+    hooks: HookSet,
+) -> Agent[None, str]:
+    common: dict[str, Any] = {
+        "name": spec.name,
+        "description": spec.description,
+        "instructions": instructions,
+        "model_settings": spec.model_settings or None,
+    }
+
+    if hooks.has_tool_hooks:
+        # Route every tool through one wrapped toolset so Pre/PostToolUse hooks
+        # intercept built-in and MCP tool calls uniformly.
+        base = FunctionToolset(tools)
+        inner = CombinedToolset([base, *mcp_servers]) if mcp_servers else base
+        wrapped = HookToolset(
+            inner, pre=hooks.pre, post=hooks.post, agent_name=spec.name
+        )
+        common["tools"] = []
+        common["toolsets"] = [wrapped]
+    else:
+        common["tools"] = tools
+        common["toolsets"] = mcp_servers or None
+
+    if hooks.has_run_hooks:
+        return HookedAgent(model, run_hooks=hooks, **common)
+    return Agent(model, **common)
 
 
 def __getattr__(name: str) -> Agent[None, str]:
