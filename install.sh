@@ -115,19 +115,54 @@ installed_at="$(date -u +"%Y-%m-%dT%H:%M:%S+00:00")"
   fi
 } > "$meta_file"
 
-# 5. Post-install summary ---------------------------------------------------
-
 if bin_dir="$(uv tool dir --bin 2>/dev/null)"; then
   :
 else
   bin_dir="$HOME/.local/bin"
 fi
 
+# 5. Configure the local model ----------------------------------------------
+
+config_file="$meta_dir/config.toml"
+bold "Model configuration"
+info "Vikram has no default model provider or model name."
+
+if [ -t 0 ]; then
+  if [ -f "$config_file" ]; then
+    info "Existing local config: $config_file"
+    printf 'Reconfigure model settings now? [y/N] '
+    read -r configure_answer
+    configure_answer="${configure_answer:-n}"
+  else
+    printf 'Configure model settings now? [Y/n] '
+    read -r configure_answer
+    configure_answer="${configure_answer:-y}"
+  fi
+
+  case "$configure_answer" in
+    y|Y|yes|YES)
+      if "$bin_dir/vikram" configure; then
+        :
+      else
+        warn "Model configuration was not written. Run: $bin_dir/vikram configure"
+      fi
+      ;;
+    *)
+      warn "Skipped model configuration. Run before first chat: $bin_dir/vikram configure"
+      ;;
+  esac
+else
+  warn "No interactive stdin; run before first chat: $bin_dir/vikram configure"
+fi
+
+# 6. Post-install summary ---------------------------------------------------
+
 bold "Installed."
 info "Binaries:    $bin_dir/vikram, $bin_dir/vikram-api"
 info "Spec root:   $spec_root"
 info "Source tree: $source_dir"
 info "Metadata:    $meta_file"
+info "Config:      $config_file"
 
 case ":$PATH:" in
   *":$bin_dir:"*) ;;
@@ -146,18 +181,9 @@ cat <<EOF
   export DBOS_SYSTEM_DATABASE_URL="sqlite:///$state_dir/dbos.sqlite3"
 EOF
 
-bold "Model provider (pick one):"
-cat <<EOF
-  # Local Ollama (default):
-  export OLLAMA_BASE_URL="http://localhost:11434/v1"
-  export VIKRAM_MODEL="qwen3"
-
-  # Or any OpenAI-compatible hosted endpoint:
-  # export VIKRAM_MODEL_PROVIDER=openai-compatible
-  # export VIKRAM_OPENAI_COMPAT_API_KEY=...
-  # export VIKRAM_OPENAI_COMPAT_BASE_URL="https://api.openai.com/v1"
-  # export VIKRAM_MODEL="gpt-4.1-mini"
-EOF
+bold "Model config:"
+info "Run or rerun: $bin_dir/vikram configure"
+info "Env vars like VIKRAM_MODEL_PROVIDER and VIKRAM_MODEL still override $config_file."
 
 bold "Optional (see $vikram_dir/.env.example for the full list):"
 info "PARALLEL_API_KEY, VIKRAM_TELEGRAM_BOT_TOKEN, VIKRAM_TELEGRAM_WEBHOOK_SECRET, ..."

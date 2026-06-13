@@ -4,8 +4,10 @@ system_prompt = "system_prompt.md"
 cli_only = true
 
 # Local resources — relative to spec/coder/
+# skills point at skill folders under spec/coder/; only each skill's name and
+# description load up front, and the load_skill tool reveals the full body.
 context_files = []
-skills = []
+skills = ["skills/conventional-commits"]
 
 # Shared resources — relative to spec/shared/
 shared_context_files = ["context/production.md"]
@@ -21,6 +23,32 @@ tools = [
   "edit_file",
   "run_command",
 ]
+
+# MCP servers — external Model Context Protocol tool servers. Each entry becomes
+# a Pydantic AI toolset started and stopped automatically per run. Reference
+# secrets as ${ENV_VAR}; never inline them. Uncomment and adapt:
+#
+# [[mcp_servers]]
+# name = "fetch"
+# transport = "stdio"
+# command = "uvx"
+# args = ["mcp-server-fetch"]
+
+# Hooks — programs or Python callables that run at lifecycle events. See
+# docs/hooks.md for the full reference. Events: PreToolUse, PostToolUse,
+# UserPromptSubmit, Stop. The handler gets the event payload as JSON on stdin;
+# exit code 2 blocks the action (stderr is the reason). Uncomment and adapt:
+#
+# [[hooks]]
+# event = "PreToolUse"           # fire before a tool runs
+# matcher = "run_command"        # glob on the tool name (default "*")
+# transport = "command"          # command | python
+# command = "./hooks/guard.sh"   # ${ENV_VAR} expansion is supported
+#
+# [[hooks]]
+# event = "PostToolUse"          # fire after a tool returns
+# transport = "python"           # in-process callable, imported at build time
+# entrypoint = "myhooks.audit:on_tool"   # "module:function"
 
 # Model knobs — passed verbatim to pydantic_ai ModelSettings.
 [model_settings]

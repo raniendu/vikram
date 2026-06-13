@@ -6,6 +6,21 @@ from vikram.settings import VikramSettings
 from vikram.telegram_config import TelegramBotConfig, TelegramConfig
 
 
+def configured_settings(tmp_path) -> VikramSettings:
+    return VikramSettings(
+        _env_file=None,
+        VIKRAM_MODEL_PROVIDER="ollama",
+        VIKRAM_MODEL="test-model",
+        VIKRAM_DB_PATH=tmp_path / "vikram.sqlite3",
+        DBOS_SYSTEM_DATABASE_URL=f"sqlite:///{tmp_path / 'dbos.sqlite3'}",
+    )
+
+
+def configure_test_api(monkeypatch, tmp_path) -> None:
+    api._agents.clear()
+    monkeypatch.setattr(api, "_settings", configured_settings(tmp_path))
+
+
 class FakeDispatcher:
     def __init__(self):
         self.messages = []
@@ -23,8 +38,9 @@ class FakeDispatcher:
         }
 
 
-def test_thread_message_endpoint_enqueues_message(monkeypatch):
+def test_thread_message_endpoint_enqueues_message(monkeypatch, tmp_path):
     dispatcher = FakeDispatcher()
+    configure_test_api(monkeypatch, tmp_path)
     monkeypatch.setattr(api, "_get_dispatcher", lambda: dispatcher)
 
     with TestClient(api.app) as client:
@@ -43,8 +59,9 @@ def test_thread_message_endpoint_enqueues_message(monkeypatch):
     assert dispatcher.messages[0].external_thread_id == "abc"
 
 
-def test_thread_message_endpoint_rejects_cli_only_agent(monkeypatch):
+def test_thread_message_endpoint_rejects_cli_only_agent(monkeypatch, tmp_path):
     dispatcher = FakeDispatcher()
+    configure_test_api(monkeypatch, tmp_path)
     monkeypatch.setattr(api, "_get_dispatcher", lambda: dispatcher)
 
     with TestClient(api.app) as client:
@@ -58,8 +75,9 @@ def test_thread_message_endpoint_rejects_cli_only_agent(monkeypatch):
     assert dispatcher.messages == []
 
 
-def test_event_status_endpoint_returns_dispatcher_status(monkeypatch):
+def test_event_status_endpoint_returns_dispatcher_status(monkeypatch, tmp_path):
     dispatcher = FakeDispatcher()
+    configure_test_api(monkeypatch, tmp_path)
     monkeypatch.setattr(api, "_get_dispatcher", lambda: dispatcher)
 
     with TestClient(api.app) as client:
@@ -70,7 +88,7 @@ def test_event_status_endpoint_returns_dispatcher_status(monkeypatch):
     assert response.json()["result"] == {"output": "hello"}
 
 
-def test_telegram_webhook_rejects_bad_secret(monkeypatch):
+def test_telegram_webhook_rejects_bad_secret(monkeypatch, tmp_path):
     config = TelegramConfig(
         default_bot_name="vikram",
         bots={
@@ -84,7 +102,7 @@ def test_telegram_webhook_rejects_bad_secret(monkeypatch):
             )
         },
     )
-    monkeypatch.setattr(api, "_settings", VikramSettings(_env_file=None))
+    configure_test_api(monkeypatch, tmp_path)
     monkeypatch.setattr(api, "_get_telegram_config", lambda: config)
 
     with TestClient(api.app) as client:
@@ -97,7 +115,7 @@ def test_telegram_webhook_rejects_bad_secret(monkeypatch):
     assert response.status_code == 403
 
 
-def test_named_telegram_webhook_dispatches_to_selected_bot(monkeypatch):
+def test_named_telegram_webhook_dispatches_to_selected_bot(monkeypatch, tmp_path):
     class FakeAdapter:
         def __init__(self):
             self.updates = []
@@ -120,7 +138,7 @@ def test_named_telegram_webhook_dispatches_to_selected_bot(monkeypatch):
             )
         },
     )
-    monkeypatch.setattr(api, "_settings", VikramSettings(_env_file=None))
+    configure_test_api(monkeypatch, tmp_path)
     monkeypatch.setattr(api, "_get_telegram_config", lambda: config)
     monkeypatch.setattr(api, "_get_telegram_adapter", lambda bot_name: adapter)
 
@@ -136,7 +154,7 @@ def test_named_telegram_webhook_dispatches_to_selected_bot(monkeypatch):
     assert adapter.updates == [{"update_id": 1}]
 
 
-def test_legacy_telegram_webhook_uses_default_bot(monkeypatch):
+def test_legacy_telegram_webhook_uses_default_bot(monkeypatch, tmp_path):
     class FakeAdapter:
         async def handle_update(self, update):
             return type("Result", (), {"status": "handled", "workflow_id": None})()
@@ -155,7 +173,7 @@ def test_legacy_telegram_webhook_uses_default_bot(monkeypatch):
         },
     )
     called = []
-    monkeypatch.setattr(api, "_settings", VikramSettings(_env_file=None))
+    configure_test_api(monkeypatch, tmp_path)
     monkeypatch.setattr(api, "_get_telegram_config", lambda: config)
     monkeypatch.setattr(
         api,

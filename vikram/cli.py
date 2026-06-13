@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
 from collections.abc import AsyncIterator, Sequence
@@ -49,7 +50,10 @@ class _LazyVersionAction(argparse.Action):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="vikram")
+    parser = argparse.ArgumentParser(
+        prog="vikram",
+        epilog="Commands: vikram configure, vikram update",
+    )
     parser.add_argument(
         "--version",
         action=_LazyVersionAction,
@@ -110,6 +114,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         from vikram.update import run as run_update
 
         sys.exit(run_update(raw_args[1:]))
+    if raw_args and raw_args[0] == "configure":
+        from vikram.config import run_configure
+
+        code = run_configure(raw_args[1:])
+        if code:
+            sys.exit(code)
+        return
 
     parser = build_parser()
     args = parser.parse_args(raw_args)
@@ -143,10 +154,23 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     import asyncio
 
-    asyncio.run(run_interactive(agent, prog_name=spec.name, quiet=args.quiet))
+    asyncio.run(
+        run_interactive(
+            agent,
+            prog_name=spec.name,
+            quiet=args.quiet,
+            keep_servers_warm=bool(spec.mcp_servers),
+        )
+    )
 
 
-async def run_interactive(agent: "Agent", *, prog_name: str, quiet: bool) -> None:
+async def run_interactive(
+    agent: "Agent",
+    *,
+    prog_name: str,
+    quiet: bool,
+    keep_servers_warm: bool = False,
+) -> None:
     from prompt_toolkit import PromptSession
     from prompt_toolkit.history import FileHistory
     from pydantic_ai._cli import CustomAutoSuggest, handle_slash_command
@@ -161,40 +185,46 @@ async def run_interactive(agent: "Agent", *, prog_name: str, quiet: bool) -> Non
     multiline = False
     auto_suggest = CustomAutoSuggest(["/markdown", "/multiline", "/exit", "/cp"])
 
-    while True:
-        try:
-            text = await session.prompt_async(
-                f"{prog_name} ➤ ", auto_suggest=auto_suggest, multiline=multiline
-            )
-        except (KeyboardInterrupt, EOFError):
-            console.print("[dim]Exiting…[/dim]")
-            return
+    async with contextlib.AsyncExitStack() as stack:
+        # Enter the agent once when MCP servers are configured so they stay
+        # connected for the whole session instead of restarting every turn.
+        if keep_servers_warm:
+            await stack.enter_async_context(agent)
 
-        if not text.strip():
-            continue
-
-        ident_prompt = text.lower().strip().replace(" ", "-")
-        if ident_prompt.startswith("/"):
-            exit_value, multiline = handle_slash_command(
-                ident_prompt, messages, multiline, console, CODE_THEME
-            )
-            if exit_value is not None:
+        while True:
+            try:
+                text = await session.prompt_async(
+                    f"{prog_name} ➤ ", auto_suggest=auto_suggest, multiline=multiline
+                )
+            except (KeyboardInterrupt, EOFError):
+                console.print("[dim]Exiting…[/dim]")
                 return
-            continue
 
-        try:
-            messages = await _render_turn(
-                agent,
-                text,
-                messages,
-                console,
-                quiet=quiet,
-                approval_session=session,
-            )
-        except KeyboardInterrupt:
-            console.print("[dim]Interrupted[/dim]")
-        except Exception as exc:  # pragma: no cover - surface anything else to user
-            console.print(f"\n[red]{type(exc).__name__}[/red]: {exc}")
+            if not text.strip():
+                continue
+
+            ident_prompt = text.lower().strip().replace(" ", "-")
+            if ident_prompt.startswith("/"):
+                exit_value, multiline = handle_slash_command(
+                    ident_prompt, messages, multiline, console, CODE_THEME
+                )
+                if exit_value is not None:
+                    return
+                continue
+
+            try:
+                messages = await _render_turn(
+                    agent,
+                    text,
+                    messages,
+                    console,
+                    quiet=quiet,
+                    approval_session=session,
+                )
+            except KeyboardInterrupt:
+                console.print("[dim]Interrupted[/dim]")
+            except Exception as exc:  # pragma: no cover - surface anything to user
+                console.print(f"\n[red]{type(exc).__name__}[/red]: {exc}")
 
 
 async def _render_turn(

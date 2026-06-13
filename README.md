@@ -16,6 +16,13 @@ coding tools for the CLI-only `coder` agent.
   `/reset` plus `/agent` commands.
 - Tools: Parallel web search, safe file/search/edit tools, and argv-only command
   execution guarded by a declarative command policy.
+- MCP: attach external Model Context Protocol tool servers per agent via
+  `[[mcp_servers]]`, with `${ENV_VAR}` secret references and automatic lifecycle.
+- Skills: progressive-disclosure instruction packs under `spec/.../skills/`,
+  surfaced by name/description and loaded on demand through `load_skill`.
+- Hooks: run external commands or Python callables at lifecycle events
+  (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`) to observe, augment,
+  or block what the agent does, via `[[hooks]]`.
 - Runtime state: local SQLite for thread history and DBOS workflow state.
 - Observability: structured JSON logs and optional OpenLIT/OpenTelemetry traces.
 
@@ -23,26 +30,31 @@ coding tools for the CLI-only `coder` agent.
 
 ```bash
 uv sync
-cp .env.example .env
+uv run vikram configure
 uv run vikram --once --prompt "say pong"
 ```
 
-The default model provider is local Ollama:
+Vikram does not ship with a default model provider or model name. Configuration
+lives in `~/.config/vikram/config.toml`; environment variables and `.env` still
+override that local file for development and deployment.
+
+For local Ollama, pull a model you want to use, then run `vikram configure` and
+enter that exact tag:
 
 ```bash
-ollama pull qwen3
+ollama pull <model-tag>
 ollama serve
 ```
 
-Set these in `.env` for local Ollama:
+Equivalent `.env` settings for local Ollama:
 
 ```env
 VIKRAM_MODEL_PROVIDER=ollama
-VIKRAM_MODEL=qwen3
+VIKRAM_MODEL=<model-tag>
 OLLAMA_BASE_URL=http://localhost:11434/v1
 ```
 
-For a hosted OpenAI-compatible endpoint:
+Equivalent `.env` settings for a hosted OpenAI-compatible endpoint:
 
 ```env
 VIKRAM_MODEL_PROVIDER=openai-compatible
@@ -54,6 +66,7 @@ VIKRAM_MODEL=gpt-4.1-mini
 ## CLI
 
 ```bash
+uv run vikram configure
 uv run vikram
 uv run vikram --agent coder
 uv run vikram --once --prompt "summarize this repo"
@@ -64,6 +77,62 @@ vikram update --check
 The `coder` agent is CLI-only. It can read/search files, request approval for
 edits, and run commands through `spec/shared/command_policy.toml`. CLI-only
 specs are rejected by HTTP, threaded, and Telegram surfaces.
+
+## MCP servers and skills
+
+Agents can be extended in two declarative ways, both configured in
+`spec/<agent>/agent.toml`. See [docs/mcp_and_skills.md](docs/mcp_and_skills.md)
+for the full reference.
+
+- **MCP servers** add external tools. Each `[[mcp_servers]]` entry becomes a
+  Pydantic AI toolset that Vikram starts and stops automatically per run.
+  Secrets are referenced as `${ENV_VAR}` so specs stay safe to commit:
+
+  ```toml
+  [[mcp_servers]]
+  name = "github"
+  transport = "stdio"            # stdio | http | sse
+  command = "npx"
+  args = ["-y", "@modelcontextprotocol/server-github"]
+  env = { GITHUB_PERSONAL_ACCESS_TOKEN = "${GITHUB_TOKEN}" }
+  ```
+
+- **Skills** are folders of expert instructions (`SKILL.md` with `name` and
+  `description` frontmatter) under `spec/<agent>/skills/` or
+  `spec/shared/skills/`. Only each skill's name and description load up front;
+  the agent reads the full body on demand through the `load_skill` tool:
+
+  ```toml
+  skills = ["skills/conventional-commits"]   # relative to the agent dir
+  shared_skills = ["skills/web-research"]     # relative to spec/shared
+  ```
+
+## Hooks
+
+Hooks run your own code at agent lifecycle events to observe, augment, or block
+what the agent does. They are declared per agent in `spec/<agent>/agent.toml`
+under `[[hooks]]` and apply on every surface. See [docs/hooks.md](docs/hooks.md)
+for the full reference.
+
+- **Events**: `PreToolUse` and `PostToolUse` (wrap every built-in and MCP tool
+  call; can block), `UserPromptSubmit` (inject context or block a run), and
+  `Stop` (advisory, for notifications/logging).
+- **Transports**: a `command` handler gets the event payload as JSON on stdin
+  and blocks with exit code `2`; a `python` handler is a `module:function`
+  callable run in-process. Secrets are referenced as `${ENV_VAR}`.
+
+  ```toml
+  [[hooks]]
+  event = "PreToolUse"
+  matcher = "run_command"          # glob on the tool name (default "*")
+  transport = "command"
+  command = "./hooks/guard.sh"     # exit 2 (stderr = reason) blocks the call
+
+  [[hooks]]
+  event = "Stop"
+  transport = "python"
+  entrypoint = "myhooks.notify:on_stop"   # "module:function"
+  ```
 
 ## HTTP API
 
@@ -119,8 +188,10 @@ On another machine after authentication with GitHub CLI:
 VIKRAM_INSTALL_DIR="$HOME/.local/share/vikram" bash install.sh
 ```
 
-The installer records metadata in `~/.config/vikram/install.toml` so
-`vikram update` can fast-forward and reinstall the `uv tool`.
+The installer asks for model configuration and writes it to
+`~/.config/vikram/config.toml`. It records install metadata in
+`~/.config/vikram/install.toml` so `vikram update` can fast-forward and
+reinstall the `uv tool`.
 
 ## Docker
 

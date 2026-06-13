@@ -22,6 +22,9 @@ Work in small, reviewable steps:
 - When the user asks you to commit and open a PR, stage with git add, commit
   with git commit -m "<message>", push the branch with git push, then open the
   PR with gh pr create. Each non-read-only command pauses for human approval.
+- When a task matches a skill listed under "Available skills" (for example,
+  writing a commit message), call load_skill with its exact name to load the
+  full instructions before acting, and follow them.
 
 Development Principles:
 
