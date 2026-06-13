@@ -74,7 +74,12 @@ class VikramSettings(BaseSettings):
     )
     openai_compat_api_key: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("VIKRAM_OPENAI_COMPAT_API_KEY", "OPENAI_API_KEY"),
+        validation_alias=AliasChoices(
+            "VIKRAM_OPENAI_COMPAT_API_KEY",
+            "OPENAI_API_KEY",
+            "DIGITALOCEAN_ACCESS_TOKEN",
+            "SARVAM_API_KEY",
+        ),
     )
     openai_compat_base_url: str = Field(
         default="https://api.openai.com/v1",

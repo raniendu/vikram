@@ -27,6 +27,8 @@ ENV_KEY_MAP = {
     "OLLAMA_BASE_URL": "ollama_base_url",
     "VIKRAM_OPENAI_COMPAT_API_KEY": "openai_compat_api_key",
     "OPENAI_API_KEY": "openai_compat_api_key",
+    "DIGITALOCEAN_ACCESS_TOKEN": "openai_compat_api_key",
+    "SARVAM_API_KEY": "openai_compat_api_key",
     "VIKRAM_OPENAI_COMPAT_BASE_URL": "openai_compat_base_url",
 }
 
@@ -159,10 +161,12 @@ def configure_interactive(
         )
 
     base_url = input_fn(
-        "OpenAI-compatible base URL (blank uses https://api.openai.com/v1): "
+        "OpenAI-compatible base URL (blank uses https://api.openai.com/v1,\n"
+        "  DigitalOcean serverless inference: https://inference.do-ai.run/v1\n"
+        "  Sarvam AI: https://api.sarvam.ai/v1): "
     ).strip()
     api_key = _prompt_required(
-        "OpenAI-compatible API key: ",
+        "API key (DIGITALOCEAN_ACCESS_TOKEN / SARVAM_API_KEY also accepted): ",
         input_fn=secret_input_fn,
         output_fn=output_fn,
     )
