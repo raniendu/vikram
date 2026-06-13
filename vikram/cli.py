@@ -13,6 +13,8 @@ if TYPE_CHECKING:
     from pydantic_ai.messages import ModelMessage
     from rich.console import Console
 
+    from vikram.settings import VikramSettings
+
 CODE_THEME = "monokai"
 HISTORY_PATH = Path.home() / ".vikram" / "cli_history"
 
@@ -160,6 +162,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             prog_name=spec.name,
             quiet=args.quiet,
             keep_servers_warm=bool(spec.mcp_servers),
+            settings=settings,
         )
     )
 
@@ -170,6 +173,7 @@ async def run_interactive(
     prog_name: str,
     quiet: bool,
     keep_servers_warm: bool = False,
+    settings: "VikramSettings" | None = None,
 ) -> None:
     from prompt_toolkit import PromptSession
     from prompt_toolkit.history import FileHistory
@@ -184,6 +188,7 @@ async def run_interactive(
     messages: list[ModelMessage] = []
     multiline = False
     auto_suggest = CustomAutoSuggest(["/markdown", "/multiline", "/exit", "/cp"])
+    context_percent = 0
 
     async with contextlib.AsyncExitStack() as stack:
         # Enter the agent once when MCP servers are configured so they stay
@@ -193,8 +198,12 @@ async def run_interactive(
 
         while True:
             try:
+                if settings is not None and settings.context_window_tokens > 0:
+                    prompt_prefix = f"{prog_name} ({context_percent}%) ➤ "
+                else:
+                    prompt_prefix = f"{prog_name} ➤ "
                 text = await session.prompt_async(
-                    f"{prog_name} ➤ ", auto_suggest=auto_suggest, multiline=multiline
+                    prompt_prefix, auto_suggest=auto_suggest, multiline=multiline
                 )
             except (KeyboardInterrupt, EOFError):
                 console.print("[dim]Exiting…[/dim]")
@@ -213,14 +222,17 @@ async def run_interactive(
                 continue
 
             try:
-                messages = await _render_turn(
+                messages, percent = await _render_turn(
                     agent,
                     text,
                     messages,
                     console,
                     quiet=quiet,
                     approval_session=session,
+                    settings=settings,
                 )
+                if percent is not None:
+                    context_percent = percent
             except KeyboardInterrupt:
                 console.print("[dim]Interrupted[/dim]")
             except Exception as exc:  # pragma: no cover - surface anything to user
@@ -235,7 +247,8 @@ async def _render_turn(
     *,
     quiet: bool,
     approval_session: Any | None = None,
-) -> list["ModelMessage"]:
+    settings: "VikramSettings" | None = None,
+) -> tuple[list["ModelMessage"], int | None]:
     from pydantic_ai import Agent as _Agent
     from pydantic_ai.capabilities import HandleDeferredToolCalls
 
@@ -263,7 +276,21 @@ async def _render_turn(
                         stream, console, quiet=quiet, tool_timers=tool_timers
                     )
         assert agent_run.result is not None
-        return list(agent_run.result.all_messages())
+
+        percent = None
+        if settings is not None:
+            context_window = settings.context_window_tokens
+            usage_fn = getattr(agent_run.result, "usage", None)
+            if context_window > 0 and callable(usage_fn):
+                try:
+                    usage = usage_fn()
+                    input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+                    if input_tokens > 0:
+                        percent = round((input_tokens / context_window) * 100)
+                except Exception:
+                    pass
+
+        return list(agent_run.result.all_messages()), percent
 
 
 async def _resolve_deferred_tool_requests(
