@@ -275,3 +275,141 @@ async def test_run_interactive_keeps_servers_warm(monkeypatch, tmp_path, keep_wa
     # The agent context is entered exactly once for the session only when MCP
     # servers need to stay connected across turns.
     assert agent.enter_count == (1 if keep_warm else 0)
+
+
+@pytest.mark.asyncio
+async def test_cli_render_turn_returns_context_percentage():
+    import contextlib
+
+    from vikram.cli import _render_turn
+    from vikram.settings import VikramSettings
+
+    class FakeUsage:
+        input_tokens = 450
+
+    class FakeResult:
+        output = "hello output"
+
+        def all_messages(self):
+            return []
+
+        def usage(self):
+            return FakeUsage()
+
+    class FakeAgent:
+        @contextlib.asynccontextmanager
+        async def iter(self, prompt, message_history, capabilities):
+            class FakeRun:
+                ctx = None
+                result = FakeResult()
+
+                async def __aiter__(self):
+                    if False:
+                        yield None
+
+            yield FakeRun()
+
+    class FakeConsole:
+        def print(self, *args, **kwargs):
+            pass
+
+    console = FakeConsole()
+    settings = VikramSettings(
+        _env_file=None,
+        VIKRAM_CONTEXT_WINDOW_TOKENS=1000,
+        VIKRAM_CONTEXT_WARNING_RATIO=0.1,
+    )
+
+    _, percent = await _render_turn(
+        FakeAgent(),
+        "test prompt",
+        [],
+        console,
+        quiet=False,
+        settings=settings,
+    )
+
+    assert percent == 45
+
+
+@pytest.mark.asyncio
+async def test_run_interactive_prompts_with_context_usage(monkeypatch, tmp_path):
+    import contextlib
+
+    import prompt_toolkit
+    import prompt_toolkit.history
+    import pydantic_ai._cli
+    import rich.console
+
+    from vikram.cli import run_interactive
+    from vikram.settings import VikramSettings
+
+    prompts_requested = []
+
+    class FakeSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def prompt_async(self, prompt, **kwargs):
+            prompts_requested.append(prompt)
+            if len(prompts_requested) == 1:
+                return "hello"
+            raise EOFError
+
+    class SilentConsole:
+        def print(self, *args, **kwargs):
+            pass
+
+    monkeypatch.setattr(prompt_toolkit, "PromptSession", FakeSession)
+    monkeypatch.setattr(prompt_toolkit.history, "FileHistory", lambda *a, **k: None)
+    monkeypatch.setattr(pydantic_ai._cli, "CustomAutoSuggest", lambda *a, **k: None)
+    monkeypatch.setattr(
+        pydantic_ai._cli, "handle_slash_command", lambda *a, **k: (None, False)
+    )
+    from vikram import cli
+
+    monkeypatch.setattr(rich.console, "Console", SilentConsole)
+    monkeypatch.setattr(cli, "HISTORY_PATH", tmp_path / "hist")
+
+    class FakeUsage:
+        input_tokens = 200
+
+    class FakeResult:
+        output = "reply"
+
+        def all_messages(self):
+            return []
+
+        def usage(self):
+            return FakeUsage()
+
+    class FakeAgent:
+        @contextlib.asynccontextmanager
+        async def iter(self, prompt, message_history, capabilities):
+            class FakeRun:
+                ctx = None
+                result = FakeResult()
+
+                async def __aiter__(self):
+                    if False:
+                        yield None
+
+            yield FakeRun()
+
+    settings = VikramSettings(
+        _env_file=None,
+        VIKRAM_CONTEXT_WINDOW_TOKENS=1000,
+        VIKRAM_CONTEXT_WARNING_RATIO=0.1,
+    )
+
+    await run_interactive(
+        FakeAgent(),
+        prog_name="DemoAgent",
+        quiet=False,
+        keep_servers_warm=False,
+        settings=settings,
+    )
+
+    assert len(prompts_requested) == 2
+    assert prompts_requested[0] == "DemoAgent (0%) ➤ "
+    assert prompts_requested[1] == "DemoAgent (20%) ➤ "
