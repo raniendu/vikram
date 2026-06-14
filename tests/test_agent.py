@@ -45,6 +45,31 @@ def test_build_agent_uses_requested_settings(monkeypatch, tmp_path):
     assert local_agent.model.model_name == "test-model"
 
 
+def test_coder_spec_defaults_to_qwen_mlx(monkeypatch, tmp_path):
+    settings = clean_settings(monkeypatch, tmp_path)
+    spec = load_spec("coder", settings.spec_root)
+
+    agent = build_agent(spec=spec, settings=settings)
+
+    assert isinstance(agent.model, OllamaModel)
+    assert agent.model.model_name == "qwen3.6:35b-mlx"
+
+
+def test_environment_overrides_coder_spec_model(monkeypatch, tmp_path):
+    settings = clean_settings(
+        monkeypatch,
+        tmp_path,
+        VIKRAM_MODEL_PROVIDER="ollama",
+        VIKRAM_MODEL="env-model",
+    )
+    spec = load_spec("coder", settings.spec_root)
+
+    agent = build_agent(spec=spec, settings=settings)
+
+    assert isinstance(agent.model, OllamaModel)
+    assert agent.model.model_name == "env-model"
+
+
 def test_build_agent_reports_unknown_tools(monkeypatch, tmp_path):
     (tmp_path / "system_prompt.md").write_text("PROMPT", encoding="utf-8")
     spec = AgentSpec(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -11,6 +11,7 @@ from vikram.hooks import HookSpec
 from vikram.mcp import MCPServerSpec
 
 SHARED_DIR_NAME = "shared"
+ModelProvider = Literal["ollama", "openai-compatible"]
 
 
 class AgentSurfaceError(RuntimeError):
@@ -29,6 +30,8 @@ class AgentSpec(BaseModel):
     tools: list[str] = []
     mcp_servers: list[MCPServerSpec] = []
     hooks: list[HookSpec] = []
+    model_provider: ModelProvider | None = None
+    model: str | None = None
     model_settings: dict[str, Any] = {}
     command_policy: Path = Path(POLICY_FILENAME)
     command_policy_override: dict[str, Any] = {}
