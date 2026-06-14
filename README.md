@@ -78,6 +78,10 @@ The `coder` agent is CLI-only. It can read/search files, request approval for
 edits, and run commands through `spec/shared/command_policy.toml`. CLI-only
 specs are rejected by HTTP, threaded, and Telegram surfaces.
 
+The checked-in `coder` spec defaults to local Ollama with `qwen3.6:35b-mlx`,
+which is an MLX text-only model suited to Apple silicon. Set
+`VIKRAM_MODEL_PROVIDER` and `VIKRAM_MODEL` to override it for one run.
+
 ## MCP servers and skills
 
 Agents can be extended in two declarative ways, both configured in

@@ -36,6 +36,7 @@ def build_agent(
 ) -> Agent[None, str]:
     settings = settings or VikramSettings()
     spec = spec or load_spec(settings.default_agent, settings.spec_root)
+    settings = _settings_with_spec_model(settings, spec)
     tools = _resolve_tools(spec)
     set_command_policy(spec.load_command_policy())
 
@@ -100,6 +101,17 @@ def _build_agent_object(
     if hooks.has_run_hooks:
         return HookedAgent(model, run_hooks=hooks, **common)
     return Agent(model, **common)
+
+
+def _settings_with_spec_model(
+    settings: VikramSettings, spec: AgentSpec
+) -> VikramSettings:
+    updates: dict[str, Any] = {}
+    if spec.model_provider and settings.model_provider is None:
+        updates["model_provider"] = spec.model_provider
+    if spec.model and settings.model is None:
+        updates["model"] = spec.model
+    return settings.model_copy(update=updates) if updates else settings
 
 
 def __getattr__(name: str) -> Agent[None, str]:
