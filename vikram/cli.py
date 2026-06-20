@@ -85,6 +85,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit one-shot output as JSON.",
     )
     parser.add_argument(
+        "-y",
+        "--yes",
+        "--approve-all",
+        dest="approve_all",
+        action="store_true",
+        help=(
+            "Auto-approve every tool call without prompting. Useful for "
+            "unattended --once runs."
+        ),
+    )
+    parser.add_argument(
         "-q",
         "--quiet",
         action="store_true",
@@ -155,7 +166,11 @@ def main(argv: Sequence[str] | None = None) -> None:
 
         async def approval_handler(ctx: Any, requests: Any) -> Any:
             return await _resolve_deferred_tool_requests(
-                ctx, requests, session=session, console=console
+                ctx,
+                requests,
+                session=session,
+                console=console,
+                approve_all=args.approve_all,
             )
 
         capabilities = [HandleDeferredToolCalls(handler=approval_handler)]
@@ -315,6 +330,7 @@ async def _resolve_deferred_tool_requests(
     *,
     session: Any,
     console: "Console",
+    approve_all: bool = False,
 ) -> Any:
     from pydantic_ai.exceptions import ModelRetry
     from pydantic_ai.tools import ToolApproved, ToolDenied
@@ -325,6 +341,10 @@ async def _resolve_deferred_tool_requests(
     for call in requests.approvals:
         args_repr = _format_call_args(call)
         rendered_call = f"{call.tool_name}({args_repr})"
+        if approve_all:
+            console.print(f"[dim]✓ auto-approved {rendered_call}[/dim]")
+            approvals[call.tool_call_id] = ToolApproved()
+            continue
         console.print(f"[yellow]? approve {rendered_call}[/yellow]")
         answer = (
             (await session.prompt_async("Approve tool call? [y/N] ")).strip().lower()
