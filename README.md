@@ -8,14 +8,15 @@ coding tools for the CLI-only `coder` agent.
 ## Features
 
 - Spec-driven agents: `spec/<agent>/agent.toml` plus Markdown prompts.
-- Built-in agents: `vikram` for general assistance and `coder` for local coding.
+- Built-in agents: `vikram` for orchestration/general assistance and `coder`
+  for local coding.
 - CLI: interactive chat, one-shot prompts, JSON output, and self-update.
 - ACP: editor integration for the local `coder` agent.
 - HTTP: stateless `/chat`, durable `/threads/...`, `/events/...`, and health.
 - Telegram: env-driven bot config, allowlist, group mention/reply routing, and
   `/reset` plus `/agent` commands.
-- Tools: Parallel web search, safe file/search/edit tools, and argv-only command
-  execution guarded by a declarative command policy.
+- Tools: Parallel web search, subagent delegation, safe file/search/edit tools,
+  and argv-only command execution guarded by a declarative command policy.
 - MCP: attach external Model Context Protocol tool servers per agent via
   `[[mcp_servers]]`, with `${ENV_VAR}` secret references and automatic lifecycle.
 - Skills: progressive-disclosure instruction packs under `spec/.../skills/`,
@@ -77,6 +78,11 @@ vikram update --check
 The `coder` agent is CLI-only. It can read/search files, request approval for
 edits, and run commands through `spec/shared/command_policy.toml`. CLI-only
 specs are rejected by HTTP, threaded, and Telegram surfaces.
+
+The default `vikram` agent can act as an orchestrator: it sees available
+subagents and can call `delegate_to_agent` with a self-contained prompt when a
+specialized agent should do the work. In the interactive CLI, that delegation is
+shown as a normal tool call before the subagent runs.
 
 The checked-in `coder` spec defaults to local Ollama with `qwen3.6:35b-mlx`,
 which is an MLX text-only model suited to Apple silicon. Set

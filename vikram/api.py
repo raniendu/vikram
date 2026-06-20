@@ -67,7 +67,7 @@ def _get_agent(name: str) -> Agent[None, str]:
     if name not in _agents:
         settings = _get_settings()
         spec = _load_http_spec(name)
-        _agents[name] = build_agent(spec=spec, settings=settings)
+        _agents[name] = build_agent(spec=spec, settings=settings, surface="http")
     return _agents[name]
 
 

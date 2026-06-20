@@ -6,6 +6,11 @@ from pydantic_ai import Agent
 from pydantic_ai.toolsets import CombinedToolset, FunctionToolset
 
 from vikram.context import agent_identity, current_datetime
+from vikram.delegation import (
+    DELEGATE_TOOL_NAME,
+    make_delegate_to_agent_tool,
+    subagent_instructions,
+)
 from vikram.hooks import HookedAgent, HookSet, HookToolset, build_hooks
 from vikram.mcp import build_mcp_servers
 from vikram.settings import VikramSettings, build_model
@@ -18,8 +23,18 @@ class AgentToolError(RuntimeError):
     """Raised when an agent spec references tools unavailable to this package."""
 
 
-def _resolve_tools(spec: AgentSpec) -> list[ToolEntry]:
-    missing = [name for name in spec.tools if name not in TOOL_REGISTRY]
+def _resolve_tools(
+    spec: AgentSpec,
+    *,
+    settings: VikramSettings,
+    surface: str,
+    enable_delegation: bool,
+) -> list[ToolEntry]:
+    missing = [
+        name
+        for name in spec.tools
+        if name != DELEGATE_TOOL_NAME and name not in TOOL_REGISTRY
+    ]
     if missing:
         missing_list = ", ".join(missing)
         raise AgentToolError(
@@ -27,17 +42,40 @@ def _resolve_tools(spec: AgentSpec) -> list[ToolEntry]:
             "The installed Vikram package may be stale relative to the agent "
             "specs; run `vikram update` or reinstall the vikram uv tool."
         )
-    return [TOOL_REGISTRY[name] for name in spec.tools]
+
+    tools: list[ToolEntry] = []
+    for name in spec.tools:
+        if name == DELEGATE_TOOL_NAME:
+            if enable_delegation:
+                tools.append(
+                    make_delegate_to_agent_tool(
+                        settings=settings,
+                        orchestrator_name=spec.agent_dir.name,
+                        surface=surface,
+                        requires_approval=surface == "cli",
+                    )
+                )
+            continue
+        tools.append(TOOL_REGISTRY[name])
+    return tools
 
 
 def build_agent(
     spec: AgentSpec | None = None,
     settings: VikramSettings | None = None,
+    *,
+    surface: str = "cli",
+    enable_delegation: bool = True,
 ) -> Agent[None, str]:
     settings = settings or VikramSettings()
     spec = spec or load_spec(settings.default_agent, settings.spec_root)
     settings = _settings_with_spec_model(settings, spec)
-    tools = _resolve_tools(spec)
+    tools = _resolve_tools(
+        spec,
+        settings=settings,
+        surface=surface,
+        enable_delegation=enable_delegation,
+    )
     set_command_policy(spec.load_command_policy())
 
     # Skills are progressively disclosed: only names + descriptions go in the
@@ -48,6 +86,14 @@ def build_agent(
     if skills_block:
         instructions.append(skills_block)
         tools = [*tools, make_load_skill_tool(skills)]
+    if enable_delegation and DELEGATE_TOOL_NAME in spec.tools:
+        subagents_block = subagent_instructions(
+            settings,
+            orchestrator_name=spec.agent_dir.name,
+            surface=surface,
+        )
+        if subagents_block:
+            instructions.append(subagents_block)
     instructions.append(current_datetime)
 
     # MCP servers are toolsets; Pydantic AI starts and stops them automatically

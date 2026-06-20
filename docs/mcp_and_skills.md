@@ -14,6 +14,11 @@ queues, Telegram), because every surface builds the agent through the same
 `build_agent`. An agent marked `cli_only = true` (like `coder`) still uses its
 MCP servers and skills — just only on the CLI/ACP surfaces it is allowed on.
 
+`vikram` also acts as an orchestrator. Its `delegate_to_agent` tool can run
+another checked-in agent with a self-contained prompt and return that subagent's
+report. Surface restrictions still apply, so `coder` can be delegated to from
+local CLI/ACP sessions but not through HTTP, threaded, or Telegram runs.
+
 ## Inspect what an agent has
 
 You don't need a configured model to see what a spec will attach. Run this from
@@ -38,8 +43,9 @@ servers. Swap `'vikram'` for `'coder'` to inspect that agent.
 
 When you run the agent interactively (`uv run vikram` or
 `uv run vikram --agent coder`), the CLI prints each tool call as it happens —
-`→ load_skill(name="web-research")` followed by `✓ load_skill` — so you can
-watch skills and MCP tools being used in real time.
+`→ load_skill(name="web-research")` followed by `✓ load_skill`, or
+`→ delegate_to_agent(agent_name="coder", ...)` for orchestration — so you can
+watch skills, subagents, and MCP tools being used in real time.
 
 ---
 
@@ -137,8 +143,7 @@ Step-by-step instructions the agent follows once the skill is loaded...
 
 Any other files in a skill directory are reported to the model as bundled
 resources when the skill is loaded. The agent can then read them with its file
-tools (the `coder` agent has `read_file`; the public `vikram` agent does not, so
-keep its skills self-contained).
+tools. If a target agent lacks direct file tools, keep its skills self-contained.
 
 ```
 spec/coder/skills/conventional-commits/

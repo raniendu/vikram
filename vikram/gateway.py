@@ -79,8 +79,7 @@ class ThreadStore:
 
     def _init_schema(self) -> None:
         with self._connect() as conn:
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS threads (
                     interface TEXT NOT NULL,
                     external_thread_id TEXT NOT NULL,
@@ -90,18 +89,15 @@ class ThreadStore:
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (interface, external_thread_id)
                 )
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS telegram_updates (
                     bot_name TEXT NOT NULL,
                     update_id INTEGER NOT NULL,
                     created_at TEXT NOT NULL,
                     PRIMARY KEY (bot_name, update_id)
                 )
-                """
-            )
+                """)
             columns = {
                 row["name"]
                 for row in conn.execute("PRAGMA table_info(telegram_updates)")
@@ -110,18 +106,15 @@ class ThreadStore:
                 conn.execute(
                     "ALTER TABLE telegram_updates RENAME TO telegram_updates_legacy"
                 )
-                conn.execute(
-                    """
+                conn.execute("""
                     CREATE TABLE telegram_updates (
                         bot_name TEXT NOT NULL,
                         update_id INTEGER NOT NULL,
                         created_at TEXT NOT NULL,
                         PRIMARY KEY (bot_name, update_id)
                     )
-                    """
-                )
-                conn.execute(
-                    """
+                    """)
+                conn.execute("""
                     INSERT OR IGNORE INTO telegram_updates (
                         bot_name,
                         update_id,
@@ -129,8 +122,7 @@ class ThreadStore:
                     )
                     SELECT 'telegram', update_id, created_at
                     FROM telegram_updates_legacy
-                    """
-                )
+                    """)
                 conn.execute("DROP TABLE telegram_updates_legacy")
 
     def get_thread(
@@ -335,7 +327,9 @@ class ConversationService:
         if name not in self._agent_cache:
             spec = load_spec(name, self.settings.spec_root)
             ensure_surface_allowed(spec, "threaded")
-            self._agent_cache[name] = build_agent(spec=spec, settings=self.settings)
+            self._agent_cache[name] = build_agent(
+                spec=spec, settings=self.settings, surface="threaded"
+            )
         return self._agent_cache[name]
 
 

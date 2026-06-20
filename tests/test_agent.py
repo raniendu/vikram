@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPServer
@@ -5,6 +7,7 @@ from pydantic_ai.models.ollama import OllamaModel
 from pydantic_ai.models.openai import OpenAIChatModel
 
 from vikram.agent import build_agent
+from vikram.delegation import make_delegate_to_agent_tool
 from vikram.mcp import MCPServerSpec
 from vikram.settings import VikramSettings, build_model
 from vikram.spec import AgentSpec, load_spec
@@ -218,6 +221,171 @@ def test_build_agent_registers_load_skill_when_spec_has_skills(monkeypatch, tmp_
     assert "web_search" in agent._function_toolset.tools
 
 
+def test_vikram_agent_registers_subagent_delegation_tool(monkeypatch, tmp_path):
+    settings = _local_model_settings(monkeypatch, tmp_path)
+    spec = load_spec("vikram", settings.spec_root)
+
+    agent = build_agent(spec=spec, settings=settings, surface="cli")
+
+    assert "delegate_to_agent" in agent._function_toolset.tools
+    assert agent._function_toolset.tools["delegate_to_agent"].requires_approval is True
+    instruction_text = "\n\n".join(str(item) for item in agent._instructions)
+    assert "## Available subagents" in instruction_text
+    assert "`coder`" in instruction_text
+    assert "CLI-only coding agent" in instruction_text
+
+
+def test_coder_agent_does_not_register_subagent_delegation_tool(monkeypatch, tmp_path):
+    settings = _local_model_settings(monkeypatch, tmp_path)
+    spec = load_spec("coder", settings.spec_root)
+
+    agent = build_agent(spec=spec, settings=settings, surface="cli")
+
+    assert "delegate_to_agent" not in agent._function_toolset.tools
+
+
+async def test_delegate_to_agent_runs_target_agent(monkeypatch, tmp_path):
+    settings = _local_model_settings(monkeypatch, tmp_path)
+    calls = []
+
+    class FakeAgent:
+        async def run(self, prompt, *, conversation_id, capabilities=None):
+            calls.append((prompt, conversation_id, capabilities))
+            return SimpleNamespace(output="implemented")
+
+    def fake_build_agent(**kwargs):
+        calls.append(kwargs)
+        return FakeAgent()
+
+    monkeypatch.setattr("vikram.agent.build_agent", fake_build_agent)
+    tool = make_delegate_to_agent_tool(
+        settings=settings,
+        orchestrator_name="vikram",
+        surface="cli",
+        requires_approval=False,
+    )
+
+    result = await tool.function("coder", "Implement the requested code change.")
+
+    assert result == "Subagent Coder completed.\n\nimplemented"
+    assert calls[0]["spec"].name == "Coder"
+    assert calls[0]["settings"] is settings
+    assert calls[0]["surface"] == "cli"
+    assert calls[0]["enable_delegation"] is False
+    assert calls[1][0] == "Implement the requested code change."
+    assert calls[1][1] == "delegate:vikram:coder"
+    assert calls[1][2], "delegated subagent runs should receive capabilities"
+
+
+async def test_delegate_to_agent_rejects_path_like_agent_names(monkeypatch, tmp_path):
+    spec_root = tmp_path / "spec"
+    _write_minimal_agent_spec(
+        spec_root,
+        "coder",
+        display_name="Coder",
+        description="CLI-only coding agent for local repository work.",
+    )
+    _write_minimal_agent_spec(
+        tmp_path,
+        "evil",
+        display_name="Evil",
+        description="Outside spec root.",
+    )
+    settings = _local_model_settings(monkeypatch, tmp_path).model_copy(
+        update={"spec_root": spec_root}
+    )
+    build_calls = []
+
+    def fake_build_agent(**kwargs):
+        build_calls.append(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr("vikram.agent.build_agent", fake_build_agent)
+    tool = make_delegate_to_agent_tool(
+        settings=settings,
+        orchestrator_name="vikram",
+        surface="cli",
+        requires_approval=False,
+    )
+
+    for agent_name in (
+        "../evil",
+        "coder/../evil",
+        "..",
+        str((tmp_path / "evil").resolve()),
+    ):
+        result = await tool.function(agent_name, "Do not load this spec.")
+        assert "Unknown agent" in result
+        assert "coder" in result
+
+    assert build_calls == []
+
+
+async def test_delegate_to_agent_fails_when_subagent_requests_approval(
+    monkeypatch, tmp_path
+):
+    settings = _local_model_settings(monkeypatch, tmp_path)
+
+    class FakeRequests:
+        approvals = [
+            SimpleNamespace(tool_call_id="c1", tool_name="write_file"),
+        ]
+        calls = []
+
+        def build_results(self, *, approvals, calls):
+            return SimpleNamespace(approvals=approvals, calls=calls)
+
+    class FakeAgent:
+        async def run(self, prompt, *, conversation_id, capabilities=None):
+            await capabilities[0].handler(None, FakeRequests())
+            return SimpleNamespace(output="approval was allowed")
+
+    monkeypatch.setattr("vikram.agent.build_agent", lambda **kwargs: FakeAgent())
+    tool = make_delegate_to_agent_tool(
+        settings=settings,
+        orchestrator_name="vikram",
+        surface="cli",
+        requires_approval=False,
+    )
+
+    result = await tool.function("coder", "Edit a file.")
+
+    assert "requested approval-gated tool calls" in result
+    assert "write_file" in result
+    assert "Run that agent directly" in result
+
+
+async def test_delegate_to_agent_rejects_cli_only_agent_on_http_surface(
+    monkeypatch, tmp_path
+):
+    settings = _local_model_settings(monkeypatch, tmp_path)
+    tool = make_delegate_to_agent_tool(
+        settings=settings,
+        orchestrator_name="vikram",
+        surface="http",
+        requires_approval=False,
+    )
+
+    result = await tool.function("coder", "Implement a code change.")
+
+    assert "Cannot delegate to 'coder'" in result
+    assert "CLI-only" in result
+
+
+async def test_delegate_to_agent_refuses_self_delegation(monkeypatch, tmp_path):
+    settings = _local_model_settings(monkeypatch, tmp_path)
+    tool = make_delegate_to_agent_tool(
+        settings=settings,
+        orchestrator_name="vikram",
+        surface="cli",
+        requires_approval=False,
+    )
+
+    result = await tool.function("vikram", "Do this yourself.")
+
+    assert "cannot delegate to itself" in result
+
+
 def test_build_agent_without_skills_has_no_load_skill(monkeypatch, tmp_path):
     settings = _local_model_settings(monkeypatch, tmp_path)
     (tmp_path / "system_prompt.md").write_text("PROMPT", encoding="utf-8")
@@ -233,6 +401,29 @@ def test_build_agent_without_skills_has_no_load_skill(monkeypatch, tmp_path):
     agent = build_agent(spec=spec, settings=settings)
 
     assert "load_skill" not in agent._function_toolset.tools
+
+
+def _write_minimal_agent_spec(
+    spec_root,
+    name: str,
+    *,
+    display_name: str,
+    description: str,
+):
+    agent_dir = spec_root / name
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "agent.toml").write_text(
+        "\n".join(
+            [
+                f'name = "{display_name}"',
+                f'description = "{description}"',
+                'system_prompt = "system_prompt.md"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (agent_dir / "system_prompt.md").write_text("PROMPT", encoding="utf-8")
 
 
 def test_build_agent_attaches_mcp_servers_as_toolsets(monkeypatch, tmp_path):
