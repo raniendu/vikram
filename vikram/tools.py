@@ -105,7 +105,12 @@ async def web_search(query: str) -> str:
     Args:
         query: A concise natural-language search query, ideally 3-10 words.
     """
-    response = await _parallel_client().search(
+    try:
+        client = _parallel_client()
+    except RuntimeError as e:
+        return str(e)
+
+    response = await client.search(
         search_queries=[query],
         objective=query,
         mode="basic",

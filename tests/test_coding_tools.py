@@ -250,3 +250,13 @@ def test_run_command_uses_dynamic_approval(monkeypatch, tmp_path):
 def test_read_only_tools_do_not_require_approval():
     for name in ("read_file", "glob", "grep", "inspect_command"):
         assert not isinstance(tools.TOOL_REGISTRY[name], Tool)
+
+
+@pytest.mark.asyncio
+async def test_web_search_no_api_key(monkeypatch):
+    monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
+    # Clear the lru_cache for _parallel_client to ensure it checks settings again
+    tools._parallel_client.cache_clear()
+
+    result = await tools.web_search("test query")
+    assert "PARALLEL_API_KEY is not set" in result
