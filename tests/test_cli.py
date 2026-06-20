@@ -46,7 +46,7 @@ class FakeAgent:
     def __init__(self, calls):
         self.calls = calls
 
-    def run_sync(self, prompt):
+    def run_sync(self, prompt, **kwargs):
         self.calls.append(prompt)
         return SimpleNamespace(output=f"reply: {prompt}")
 
@@ -217,6 +217,51 @@ async def test_cli_deferred_tool_handler_prompts_for_approval():
     assert isinstance(results.approvals["call-1"], ToolApproved)
     assert isinstance(results.approvals["call-2"], ToolDenied)
     assert len(session.prompts) == 2
+
+
+@pytest.mark.asyncio
+async def test_cli_deferred_tool_handler_approve_all_skips_prompts():
+    from vikram.cli import _resolve_deferred_tool_requests
+
+    class FakeSession:
+        def __init__(self):
+            self.prompts = []
+
+        async def prompt_async(self, prompt, **kwargs):
+            self.prompts.append((prompt, kwargs))
+            raise AssertionError("should not prompt when approve_all is set")
+
+    class FakeConsole:
+        def __init__(self):
+            self.messages = []
+
+        def print(self, *args, **kwargs):
+            self.messages.append((args, kwargs))
+
+    session = FakeSession()
+    console = FakeConsole()
+    requests = DeferredToolRequests(
+        approvals=[
+            ToolCallPart(
+                "write_file",
+                {"path": "notes.txt", "content": "hello"},
+                tool_call_id="call-1",
+            ),
+            ToolCallPart(
+                "run_command",
+                {"command": "git status --short"},
+                tool_call_id="call-2",
+            ),
+        ]
+    )
+
+    results = await _resolve_deferred_tool_requests(
+        None, requests, session=session, console=console, approve_all=True
+    )
+
+    assert isinstance(results.approvals["call-1"], ToolApproved)
+    assert isinstance(results.approvals["call-2"], ToolApproved)
+    assert session.prompts == []
 
 
 def _patch_interactive_io(monkeypatch, tmp_path):
