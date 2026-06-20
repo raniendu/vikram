@@ -13,7 +13,7 @@ shared_context_files = ["context/production.md"]
 shared_skills = ["skills/web-research"]
 
 # Tools - names resolved from vikram.tools.TOOL_REGISTRY
-tools = ["web_search"]
+tools = ["web_search", "delegate_to_agent"]
 
 # MCP servers - external Model Context Protocol tool servers exposed to this
 # agent. Each [[mcp_servers]] entry becomes a Pydantic AI toolset that Vikram

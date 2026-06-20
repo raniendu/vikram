@@ -14,6 +14,7 @@ def test_load_real_vikram_spec():
     assert spec.description.startswith("General-purpose assistant")
     assert spec.shared_context_files == [Path("context/production.md")]
     assert spec.shared_skills == [Path("skills/web-research")]
+    assert spec.tools == ["web_search", "delegate_to_agent"]
     assert spec.mcp_servers == []
     assert "You are Vikram, a general-purpose assistant." in spec.instructions
     assert "planning, research, drafting, analysis" in spec.instructions
