@@ -46,7 +46,7 @@ class FakeAgent:
     def __init__(self, calls):
         self.calls = calls
 
-    def run_sync(self, prompt):
+    def run_sync(self, prompt, **kwargs):
         self.calls.append(prompt)
         return SimpleNamespace(output=f"reply: {prompt}")
 

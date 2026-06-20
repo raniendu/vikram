@@ -146,7 +146,23 @@ def main(argv: Sequence[str] | None = None) -> None:
     agent = build_agent(spec=spec, settings=settings)
 
     if args.once:
-        result = agent.run_sync(read_prompt(args.prompt))
+        from prompt_toolkit import PromptSession
+        from rich.console import Console
+        from pydantic_ai.capabilities import HandleDeferredToolCalls
+
+        session = PromptSession()
+        console = Console()
+
+        async def approval_handler(ctx: Any, requests: Any) -> Any:
+            return await _resolve_deferred_tool_requests(
+                ctx, requests, session=session, console=console
+            )
+
+        capabilities = [HandleDeferredToolCalls(handler=approval_handler)]
+        result = agent.run_sync(
+            read_prompt(args.prompt),
+            capabilities=capabilities,
+        )
         output = str(result.output)
         if args.json:
             print(json.dumps({"agent": spec.name, "output": output}))
