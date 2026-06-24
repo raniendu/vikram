@@ -1,9 +1,10 @@
 import pytest
-from pydantic_ai.mcp import MCPServerSSE, MCPServerStdio, MCPServerStreamableHTTP
+from strands.tools.mcp import MCPClient
 
 from vikram.mcp import (
     MCPConfigError,
     MCPServerSpec,
+    VikramMCPClient,
     build_mcp_server,
     build_mcp_servers,
 )
@@ -28,12 +29,14 @@ def test_build_stdio_server_with_env_expansion():
 
     server = build_mcp_server(spec, environ)
 
-    assert isinstance(server, MCPServerStdio)
-    assert server.command == "npx"
-    assert server.args == ["-y", "@modelcontextprotocol/server-github"]
-    assert server.env == {"TOKEN": "s3cr3t"}
-    assert server.cwd == "/srv/app"
-    assert server.tool_prefix == "gh"
+    assert isinstance(server, VikramMCPClient)
+    assert isinstance(server.raw, MCPClient)
+    assert server.config["transport"] == "stdio"
+    assert server.config["command"] == "npx"
+    assert server.config["args"] == ["-y", "@modelcontextprotocol/server-github"]
+    assert server.config["env"] == {"TOKEN": "s3cr3t"}
+    assert server.config["cwd"] == "/srv/app"
+    assert server.config["tool_prefix"] == "gh"
     assert server.id == "github"
 
 
@@ -43,9 +46,9 @@ def test_stdio_without_env_inherits_parent_environment():
         environ={},
     )
 
-    assert isinstance(server, MCPServerStdio)
+    assert isinstance(server, VikramMCPClient)
     # No env configured -> None so the subprocess inherits the parent's env.
-    assert server.env is None
+    assert server.config["env"] is None
 
 
 def test_build_http_server_with_header_expansion():
@@ -59,9 +62,10 @@ def test_build_http_server_with_header_expansion():
 
     server = build_mcp_server(spec, {"HOST": "mcp.example.com", "TOKEN": "abc"})
 
-    assert isinstance(server, MCPServerStreamableHTTP)
-    assert server.url == "https://mcp.example.com/mcp"
-    assert server.headers == {"Authorization": "Bearer abc"}
+    assert isinstance(server, VikramMCPClient)
+    assert server.config["transport"] == "http"
+    assert server.config["url"] == "https://mcp.example.com/mcp"
+    assert server.config["headers"] == {"Authorization": "Bearer abc"}
     assert server.id == "docs"
 
 
@@ -70,8 +74,9 @@ def test_build_sse_server():
         MCPServerSpec(name="events", transport="sse", url="https://x/sse"), {}
     )
 
-    assert isinstance(server, MCPServerSSE)
-    assert server.url == "https://x/sse"
+    assert isinstance(server, VikramMCPClient)
+    assert server.config["transport"] == "sse"
+    assert server.config["url"] == "https://x/sse"
     assert server.id == "events"
 
 
@@ -80,7 +85,7 @@ def test_environ_defaults_to_os_environ(monkeypatch):
     server = build_mcp_server(
         MCPServerSpec(name="x", command="run", env={"T": "${VIKRAM_TEST_MCP_TOKEN}"})
     )
-    assert server.env == {"T": "from-os-environ"}
+    assert server.config["env"] == {"T": "from-os-environ"}
 
 
 @pytest.mark.parametrize(

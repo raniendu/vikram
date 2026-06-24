@@ -32,10 +32,9 @@ values of ``env``) may reference environment variables with ``${VAR}`` syntax,
 expanded when the agent is built; a missing variable is a hard error. This keeps
 specs safe to commit while real secrets stay in ``.env`` or the environment.
 
-The tool events are realized by :class:`HookToolset`, a wrapper toolset that
-intercepts every tool call (built-in tools and MCP tools alike). The run events
-are realized by :class:`HookedAgent`, which fires them around ``Agent.iter``
-(and therefore ``run`` and ``run_sync``, which delegate to ``iter``).
+Tool and run events are wired by ``vikram.agent`` into Strands hooks. The hook
+transport and decision model stay Vikram-owned so existing ``[[hooks]]`` TOML
+continues to work across runtime migrations.
 """
 
 from __future__ import annotations
@@ -48,15 +47,10 @@ import json
 import os
 import re
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent
-from pydantic_ai.exceptions import ModelRetry
-from pydantic_ai.toolsets import WrapperToolset
-from pydantic_ai.toolsets.abstract import ToolsetTool
 
 from vikram.logging import get_logger
 
@@ -375,124 +369,3 @@ async def run_hooks(
 
 def _stringify(result: Any) -> str:
     return result if isinstance(result, str) else str(result)
-
-
-@dataclass
-class HookToolset(WrapperToolset[Any]):
-    """Wrap a toolset so ``PreToolUse``/``PostToolUse`` hooks fire on each call.
-
-    Because it wraps the combined toolset, it covers both built-in tools and any
-    MCP server tools. A blocking pre-hook raises :class:`ModelRetry` so the model
-    sees why the call was refused; a blocking post-hook does the same for the
-    result. Non-blocking ``additional_context`` from a post-hook is appended to
-    the (string) tool result.
-
-    Note: for tools that statically require human approval (``write_file``,
-    ``edit_file``), the call only reaches here after approval, so their
-    ``PreToolUse`` hooks run post-approval. ``run_command`` approves dynamically
-    inside its body, so its pre-hook still runs first.
-    """
-
-    pre: tuple[Hook, ...] = ()
-    post: tuple[Hook, ...] = ()
-    agent_name: str = ""
-
-    async def call_tool(
-        self,
-        name: str,
-        tool_args: dict[str, Any],
-        ctx: Any,
-        tool: ToolsetTool[Any],
-    ) -> Any:
-        if self.pre:
-            decision = await run_hooks(
-                self.pre,
-                {
-                    "event": "PreToolUse",
-                    "agent": self.agent_name,
-                    "tool_name": name,
-                    "tool_input": tool_args,
-                    "cwd": os.getcwd(),
-                },
-                tool_name=name,
-            )
-            if decision.blocked:
-                raise ModelRetry(decision.reason or f"A hook blocked {name}.")
-
-        result = await self.wrapped.call_tool(name, tool_args, ctx, tool)
-
-        if self.post:
-            decision = await run_hooks(
-                self.post,
-                {
-                    "event": "PostToolUse",
-                    "agent": self.agent_name,
-                    "tool_name": name,
-                    "tool_input": tool_args,
-                    "tool_output": _stringify(result),
-                    "cwd": os.getcwd(),
-                },
-                tool_name=name,
-            )
-            if decision.blocked:
-                raise ModelRetry(decision.reason or f"A hook rejected {name}'s result.")
-            if decision.context and isinstance(result, str):
-                return f"{result}\n\n{decision.context}"
-        return result
-
-
-class HookedAgent(Agent[None, str]):
-    """An ``Agent`` that fires ``UserPromptSubmit`` and ``Stop`` hooks.
-
-    Overriding ``iter`` is sufficient: ``run`` and ``run_sync`` both delegate to
-    it, and the interactive CLI calls ``iter`` directly. A blocking
-    ``UserPromptSubmit`` hook raises :class:`HookBlockedError`; non-blocking
-    context is prepended to the prompt. ``Stop`` hooks are advisory.
-    """
-
-    def __init__(self, *args: Any, run_hooks: HookSet, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self._hookset = run_hooks
-
-    @asynccontextmanager
-    async def iter(  # type: ignore[override]
-        self, user_prompt: Any = None, **kwargs: Any
-    ) -> AsyncIterator[Any]:
-        hooks = self._hookset
-        if hooks.user_prompt_submit and isinstance(user_prompt, str):
-            decision = await run_hooks(
-                hooks.user_prompt_submit,
-                {
-                    "event": "UserPromptSubmit",
-                    "agent": self.name,
-                    "prompt": user_prompt,
-                    "cwd": os.getcwd(),
-                },
-            )
-            if decision.blocked:
-                raise HookBlockedError(decision.reason or "A hook blocked this prompt.")
-            if decision.context:
-                user_prompt = f"{decision.context}\n\n{user_prompt}"
-
-        async with super().iter(user_prompt=user_prompt, **kwargs) as agent_run:
-            try:
-                yield agent_run
-            finally:
-                if hooks.stop:
-                    await run_hooks(
-                        hooks.stop,
-                        {
-                            "event": "Stop",
-                            "agent": self.name,
-                            "output": _stop_output(agent_run),
-                            "cwd": os.getcwd(),
-                        },
-                    )
-
-
-def _stop_output(agent_run: Any) -> str | None:
-    try:
-        result = agent_run.result
-        return str(result.output) if result is not None else None
-    except Exception:
-        return None

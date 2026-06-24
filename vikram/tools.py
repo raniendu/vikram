@@ -5,13 +5,12 @@ import fnmatch
 import os
 import re
 import shlex
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Awaitable, Callable
 
 from parallel import AsyncParallel
-from pydantic_ai import RunContext, Tool
-from pydantic_ai.exceptions import ApprovalRequired
 
 from vikram.command_policy import POLICY_FILENAME, CommandPolicy, load_command_policy
 from vikram.settings import VikramSettings
@@ -61,6 +60,13 @@ SENSITIVE_SUFFIXES = {
     ".tfstate.backup",
 }
 _ACTIVE_POLICY: CommandPolicy | None = None
+
+
+@dataclass(frozen=True)
+class VikramTool:
+    name: str
+    function: Callable[..., Awaitable[str]]
+    requires_approval: bool = False
 
 
 def set_command_policy(policy: CommandPolicy) -> None:
@@ -363,7 +369,7 @@ async def write_file(path: str, content: str) -> str:
     """Write a UTF-8 text file in the current working directory.
 
     Use this only when the user has asked for a file creation or replacement.
-    This tool requires explicit human approval before Pydantic AI executes it.
+    This tool requires explicit Strands human-in-the-loop approval before use.
 
     Args:
         path: File path to write, relative to cwd unless absolute.
@@ -394,7 +400,7 @@ async def edit_file(
 
     Use this for small, targeted edits after reading the file. By default the
     old text must match exactly once, which prevents accidental broad changes.
-    This tool requires explicit human approval before Pydantic AI executes it.
+    This tool requires explicit Strands human-in-the-loop approval before use.
 
     Args:
         path: File path to edit, relative to cwd unless absolute.
@@ -450,7 +456,6 @@ def _truncate_output(text: str, limit: int) -> str:
 
 
 async def inspect_command(
-    ctx: RunContext[None],
     command: str,
     timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
     max_output_chars: int = MAX_COMMAND_OUTPUT_CHARS,
@@ -487,7 +492,6 @@ async def inspect_command(
 
 
 async def run_command(
-    ctx: RunContext[None],
     command: str,
     timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
     max_output_chars: int = MAX_COMMAND_OUTPUT_CHARS,
@@ -516,8 +520,6 @@ async def run_command(
     decision, reason = _policy().classify(argv, command)
     if decision == "deny":
         return _refusal(reason or "this command is not allowed.")
-    if decision == "approve" and not ctx.tool_call_approved:
-        raise ApprovalRequired()
     return await _execute_command(command, argv, timeout_seconds, max_output_chars)
 
 
@@ -569,19 +571,16 @@ async def _execute_command(
     return _truncate_output("\n".join(sections), max_output_chars)
 
 
-ToolEntry = Callable[..., Awaitable[str]] | Tool[None]
+ToolEntry = VikramTool
 
 
 TOOL_REGISTRY: dict[str, ToolEntry] = {
-    "web_search": web_search,
-    "read_file": read_file,
-    "glob": glob,
-    "grep": grep,
-    "inspect_command": inspect_command,
-    "write_file": Tool(write_file, requires_approval=True, sequential=True),
-    "edit_file": Tool(edit_file, requires_approval=True, sequential=True),
-    # run_command decides approval dynamically (raises ApprovalRequired for
-    # Tier-2 commands), so it is not statically requires_approval. sequential
-    # keeps state-changing commands from running concurrently.
-    "run_command": Tool(run_command, sequential=True),
+    "web_search": VikramTool("web_search", web_search),
+    "read_file": VikramTool("read_file", read_file),
+    "glob": VikramTool("glob", glob),
+    "grep": VikramTool("grep", grep),
+    "inspect_command": VikramTool("inspect_command", inspect_command),
+    "write_file": VikramTool("write_file", write_file, requires_approval=True),
+    "edit_file": VikramTool("edit_file", edit_file, requires_approval=True),
+    "run_command": VikramTool("run_command", run_command, requires_approval=True),
 }

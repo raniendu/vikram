@@ -7,8 +7,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from pydantic_ai.messages import ToolCallPart
-from pydantic_ai.tools import DeferredToolRequests, ToolApproved, ToolDenied
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 
@@ -70,7 +68,7 @@ def patch_cli_dependencies(monkeypatch):
     monkeypatch.setattr(
         agent_module,
         "build_agent",
-        lambda *, spec, settings: FakeAgent(calls),
+        lambda *, spec, settings, **kwargs: FakeAgent(calls),
     )
     return calls
 
@@ -173,102 +171,37 @@ def test_quiet_rejects_once(capsys):
     assert "--quiet cannot be combined with --once" in capsys.readouterr().err
 
 
-@pytest.mark.asyncio
-async def test_cli_deferred_tool_handler_prompts_for_approval():
-    from vikram.cli import _resolve_deferred_tool_requests
+def test_tool_result_extracts_strands_message_event():
+    from vikram.cli import _tool_result_from_event
 
-    class FakeSession:
-        def __init__(self):
-            self.answers = ["y", "no"]
-            self.prompts = []
-
-        async def prompt_async(self, prompt, **kwargs):
-            self.prompts.append((prompt, kwargs))
-            return self.answers.pop(0)
-
-    class FakeConsole:
-        def __init__(self):
-            self.messages = []
-
-        def print(self, *args, **kwargs):
-            self.messages.append((args, kwargs))
-
-    session = FakeSession()
-    console = FakeConsole()
-    requests = DeferredToolRequests(
-        approvals=[
-            ToolCallPart(
-                "write_file",
-                {"path": "notes.txt", "content": "hello"},
-                tool_call_id="call-1",
-            ),
-            ToolCallPart(
-                "run_command",
-                {"command": "git status --short"},
-                tool_call_id="call-2",
-            ),
-        ]
+    result = _tool_result_from_event(
+        {
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "toolResult": {
+                            "toolUseId": "call-1",
+                            "status": "success",
+                            "content": [{"text": "done"}],
+                        }
+                    }
+                ],
+            }
+        }
     )
 
-    results = await _resolve_deferred_tool_requests(
-        None, requests, session=session, console=console
-    )
-
-    assert isinstance(results.approvals["call-1"], ToolApproved)
-    assert isinstance(results.approvals["call-2"], ToolDenied)
-    assert len(session.prompts) == 2
-
-
-@pytest.mark.asyncio
-async def test_cli_deferred_tool_handler_approve_all_skips_prompts():
-    from vikram.cli import _resolve_deferred_tool_requests
-
-    class FakeSession:
-        def __init__(self):
-            self.prompts = []
-
-        async def prompt_async(self, prompt, **kwargs):
-            self.prompts.append((prompt, kwargs))
-            raise AssertionError("should not prompt when approve_all is set")
-
-    class FakeConsole:
-        def __init__(self):
-            self.messages = []
-
-        def print(self, *args, **kwargs):
-            self.messages.append((args, kwargs))
-
-    session = FakeSession()
-    console = FakeConsole()
-    requests = DeferredToolRequests(
-        approvals=[
-            ToolCallPart(
-                "write_file",
-                {"path": "notes.txt", "content": "hello"},
-                tool_call_id="call-1",
-            ),
-            ToolCallPart(
-                "run_command",
-                {"command": "git status --short"},
-                tool_call_id="call-2",
-            ),
-        ]
-    )
-
-    results = await _resolve_deferred_tool_requests(
-        None, requests, session=session, console=console, approve_all=True
-    )
-
-    assert isinstance(results.approvals["call-1"], ToolApproved)
-    assert isinstance(results.approvals["call-2"], ToolApproved)
-    assert session.prompts == []
+    assert result == {
+        "toolUseId": "call-1",
+        "status": "success",
+        "content": [{"text": "done"}],
+    }
 
 
 def _patch_interactive_io(monkeypatch, tmp_path):
     """Stub the prompt/rich plumbing so run_interactive exits after one turn."""
     import prompt_toolkit
     import prompt_toolkit.history
-    import pydantic_ai._cli
     import rich.console
 
     from vikram import cli
@@ -286,10 +219,6 @@ def _patch_interactive_io(monkeypatch, tmp_path):
 
     monkeypatch.setattr(prompt_toolkit, "PromptSession", _EOFSession)
     monkeypatch.setattr(prompt_toolkit.history, "FileHistory", lambda *a, **k: None)
-    monkeypatch.setattr(pydantic_ai._cli, "CustomAutoSuggest", lambda *a, **k: None)
-    monkeypatch.setattr(
-        pydantic_ai._cli, "handle_slash_command", lambda *a, **k: (None, False)
-    )
     monkeypatch.setattr(rich.console, "Console", _SilentConsole)
     monkeypatch.setattr(cli, "HISTORY_PATH", tmp_path / "hist")
 
@@ -324,8 +253,6 @@ async def test_run_interactive_keeps_servers_warm(monkeypatch, tmp_path, keep_wa
 
 @pytest.mark.asyncio
 async def test_cli_render_turn_returns_context_percentage():
-    import contextlib
-
     from vikram.cli import _render_turn
     from vikram.settings import VikramSettings
 
@@ -342,17 +269,8 @@ async def test_cli_render_turn_returns_context_percentage():
             return FakeUsage()
 
     class FakeAgent:
-        @contextlib.asynccontextmanager
-        async def iter(self, prompt, message_history, capabilities):
-            class FakeRun:
-                ctx = None
-                result = FakeResult()
-
-                async def __aiter__(self):
-                    if False:
-                        yield None
-
-            yield FakeRun()
+        async def run(self, prompt, *, message_history):
+            return FakeResult()
 
     class FakeConsole:
         def print(self, *args, **kwargs):
@@ -379,11 +297,8 @@ async def test_cli_render_turn_returns_context_percentage():
 
 @pytest.mark.asyncio
 async def test_run_interactive_prompts_with_context_usage(monkeypatch, tmp_path):
-    import contextlib
-
     import prompt_toolkit
     import prompt_toolkit.history
-    import pydantic_ai._cli
     import rich.console
 
     from vikram.cli import run_interactive
@@ -407,10 +322,6 @@ async def test_run_interactive_prompts_with_context_usage(monkeypatch, tmp_path)
 
     monkeypatch.setattr(prompt_toolkit, "PromptSession", FakeSession)
     monkeypatch.setattr(prompt_toolkit.history, "FileHistory", lambda *a, **k: None)
-    monkeypatch.setattr(pydantic_ai._cli, "CustomAutoSuggest", lambda *a, **k: None)
-    monkeypatch.setattr(
-        pydantic_ai._cli, "handle_slash_command", lambda *a, **k: (None, False)
-    )
     from vikram import cli
 
     monkeypatch.setattr(rich.console, "Console", SilentConsole)
@@ -429,17 +340,8 @@ async def test_run_interactive_prompts_with_context_usage(monkeypatch, tmp_path)
             return FakeUsage()
 
     class FakeAgent:
-        @contextlib.asynccontextmanager
-        async def iter(self, prompt, message_history, capabilities):
-            class FakeRun:
-                ctx = None
-                result = FakeResult()
-
-                async def __aiter__(self):
-                    if False:
-                        yield None
-
-            yield FakeRun()
+        async def run(self, prompt, *, message_history):
+            return FakeResult()
 
     settings = VikramSettings(
         _env_file=None,
@@ -471,13 +373,12 @@ class _CapturingConsole:
 def test_format_call_args_truncates_long_values():
     from vikram.cli import _format_call_args
 
-    part = ToolCallPart(
-        "write_file",
-        {"path": "notes.txt", "content": "x" * 500},
-        tool_call_id="call-1",
-    )
+    tool_use = {
+        "name": "write_file",
+        "input": {"path": "notes.txt", "content": "x" * 500},
+    }
 
-    rendered = _format_call_args(part)
+    rendered = _format_call_args(tool_use)
 
     assert rendered.startswith('path="notes.txt", content=')
     assert "…" in rendered
@@ -537,7 +438,7 @@ def test_print_help_lists_all_commands():
     _print_help(Console(file=buffer, width=100, force_terminal=False))
     output = buffer.getvalue()
 
-    for command in ("/help", "/clear", "/markdown", "/multiline", "/cp", "/exit"):
+    for command in ("/help", "/clear", "/markdown", "/multiline", "/exit"):
         assert command in output
 
 

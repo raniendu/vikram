@@ -11,7 +11,7 @@ import structlog
 
 try:
     from opentelemetry import trace
-except ImportError:  # pragma: no cover - openlit depends on opentelemetry.
+except ImportError:  # pragma: no cover - Strands depends on opentelemetry.
     trace = None  # type: ignore[assignment]
 
 
