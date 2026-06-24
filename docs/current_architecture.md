@@ -1,6 +1,6 @@
 # Current Architecture
 
-Vikram is a standalone Python app built around spec-defined Pydantic AI agents.
+Vikram is a standalone Python app built around spec-defined Strands agents.
 
 ```mermaid
 flowchart LR
@@ -25,10 +25,10 @@ flowchart LR
 | --- | --- |
 | `vikram/settings.py` | Env configuration and model provider setup |
 | `vikram/spec.py` | Loads TOML agent specs and assembles instructions |
-| `vikram/agent.py` | Builds Pydantic AI agents from specs, settings, tools, MCP servers, skills, and hooks |
+| `vikram/agent.py` | Builds Strands agents from specs, settings, tools, MCP servers, skills, and hooks |
 | `vikram/mcp.py` | Declarative MCP server specs and toolset construction |
 | `vikram/skills.py` | Agent Skills discovery, instructions, and the `load_skill` tool |
-| `vikram/hooks.py` | Declarative lifecycle hooks, tool wrapping, and run-event dispatch |
+| `vikram/hooks.py` | Declarative lifecycle hooks compiled into Strands prompt/tool/stop callbacks |
 | `vikram/cli.py` | Interactive and one-shot CLI |
 | `vikram/acp.py` | ACP adapter for local editor integration |
 | `vikram/api.py` | FastAPI routes and app lifespan |
@@ -66,3 +66,15 @@ Agents may also declare `[[mcp_servers]]` to attach external MCP tool servers,
 and `[[hooks]]` to observe, augment, or block lifecycle events. See
 [mcp_and_skills.md](mcp_and_skills.md) and [hooks.md](hooks.md) for the
 references.
+
+## Strands Runtime Notes
+
+- Existing Pydantic AI thread histories are cleared once on first Strands
+  startup and the SQLite DB is marked `strands-v1`.
+- Strands default concurrent tool execution is used; Vikram does not recreate
+  Pydantic AI's previous per-tool sequential behavior.
+- Approval-gated tools use Strands `HumanInTheLoop` semantics. CLI prompts use
+  Strands stdio approval, and ACP maps HITL prompts to editor permissions.
+- MCP lifecycle is Strands-managed through `MCPClient` providers.
+- Observability uses Strands/OpenTelemetry traces and metrics plus Vikram's
+  structured application logs.

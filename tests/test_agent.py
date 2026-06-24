@@ -1,15 +1,11 @@
 from types import SimpleNamespace
 
 import pytest
-from pydantic_ai import Agent
-from pydantic_ai.mcp import MCPServer
-from pydantic_ai.models.ollama import OllamaModel
-from pydantic_ai.models.openai import OpenAIChatModel
 
 from vikram.agent import build_agent
 from vikram.delegation import make_delegate_to_agent_tool
 from vikram.mcp import MCPServerSpec
-from vikram.settings import VikramSettings, build_model
+from vikram.settings import VikramSettings, build_model, map_model_settings
 from vikram.spec import AgentSpec, load_spec
 
 VIKRAM_ENV_VARS = (
@@ -42,10 +38,23 @@ def test_build_agent_uses_requested_settings(monkeypatch, tmp_path):
         )
     )
 
-    assert isinstance(local_agent, Agent)
     assert local_agent.name == "Vikram"
-    assert isinstance(local_agent.model, OllamaModel)
-    assert local_agent.model.model_name == "test-model"
+    assert local_agent.runtime == "strands"
+    assert local_agent.model_config["provider"] == "ollama"
+    assert local_agent.model_config["model"] == "test-model"
+
+
+def test_agent_creates_fresh_strands_runtime_for_each_run(monkeypatch, tmp_path):
+    settings = _local_model_settings(monkeypatch, tmp_path)
+    spec = load_spec("vikram", settings.spec_root)
+    agent = build_agent(spec=spec, settings=settings)
+
+    first = agent._agent_for_run()
+    second = agent._agent_for_run()
+
+    assert first is not second
+    assert first is not agent.raw_agent
+    assert second is not agent.raw_agent
 
 
 def test_coder_spec_defaults_to_qwen_mlx(monkeypatch, tmp_path):
@@ -54,8 +63,9 @@ def test_coder_spec_defaults_to_qwen_mlx(monkeypatch, tmp_path):
 
     agent = build_agent(spec=spec, settings=settings)
 
-    assert isinstance(agent.model, OllamaModel)
-    assert agent.model.model_name == "qwen3.6:35b-mlx"
+    assert agent.runtime == "strands"
+    assert agent.model_config["provider"] == "ollama"
+    assert agent.model_config["model"] == "qwen3.6:35b-mlx"
 
 
 def test_environment_overrides_coder_spec_model(monkeypatch, tmp_path):
@@ -69,8 +79,8 @@ def test_environment_overrides_coder_spec_model(monkeypatch, tmp_path):
 
     agent = build_agent(spec=spec, settings=settings)
 
-    assert isinstance(agent.model, OllamaModel)
-    assert agent.model.model_name == "env-model"
+    assert agent.model_config["provider"] == "ollama"
+    assert agent.model_config["model"] == "env-model"
 
 
 def test_build_agent_reports_unknown_tools(monkeypatch, tmp_path):
@@ -140,10 +150,10 @@ def test_settings_load_model_from_local_config(monkeypatch, tmp_path):
     settings = VikramSettings(_env_file=None)
     model = build_model(settings)
 
-    assert isinstance(model, OllamaModel)
-    assert model.model_name == "llama3.2"
+    assert model.config["provider"] == "ollama"
+    assert model.config["model"] == "llama3.2"
     assert settings.normalized_ollama_base_url == "http://localhost:11434/v1"
-    assert model.provider.base_url.rstrip("/") == "http://localhost:11434/v1"
+    assert model.config["base_url"].rstrip("/") == "http://localhost:11434"
     assert settings.vikram_db_path.name == "vikram.sqlite3"
     assert settings.vikram_db_path.parent.name == ".vikram"
 
@@ -183,9 +193,27 @@ def test_build_model_uses_openai_compatible_when_provider_is_set(monkeypatch, tm
     )
     model = build_model(settings)
 
-    assert isinstance(model, OpenAIChatModel)
-    assert model.model_name == "example-model"
-    assert model.provider.base_url.rstrip("/") == "https://llm.example.test/v1"
+    assert model.config["provider"] == "openai-compatible"
+    assert model.config["model"] == "example-model"
+    assert model.config["base_url"].rstrip("/") == "https://llm.example.test/v1"
+
+
+def test_map_model_settings_warns_and_drops_unsupported_keys(caplog):
+    mapped = map_model_settings(
+        {
+            "temperature": 0.2,
+            "max_tokens": 128,
+            "parallel_tool_calls": False,
+            "thinking": "low",
+            "timeout": 60,
+            "extra_headers": {"X-Test": "1"},
+        },
+        agent_name="Coder",
+    )
+
+    assert mapped == {"temperature": 0.2, "max_tokens": 128}
+    assert "unsupported_model_setting_ignored" in caplog.text
+    assert "parallel_tool_calls" in caplog.text
 
 
 def test_build_model_openai_compatible_requires_api_key(monkeypatch, tmp_path):
@@ -217,8 +245,8 @@ def test_build_agent_registers_load_skill_when_spec_has_skills(monkeypatch, tmp_
 
     # The real vikram spec ships the web-research skill, so build_agent attaches
     # the load_skill tool alongside the spec's own tools.
-    assert "load_skill" in agent._function_toolset.tools
-    assert "web_search" in agent._function_toolset.tools
+    assert "load_skill" in agent.tool_names
+    assert "web_search" in agent.tool_names
 
 
 def test_vikram_agent_registers_subagent_delegation_tool(monkeypatch, tmp_path):
@@ -227,9 +255,9 @@ def test_vikram_agent_registers_subagent_delegation_tool(monkeypatch, tmp_path):
 
     agent = build_agent(spec=spec, settings=settings, surface="cli")
 
-    assert "delegate_to_agent" in agent._function_toolset.tools
-    assert agent._function_toolset.tools["delegate_to_agent"].requires_approval is True
-    instruction_text = "\n\n".join(str(item) for item in agent._instructions)
+    assert "delegate_to_agent" in agent.tool_names
+    assert "delegate_to_agent" in agent.approval_tool_names
+    instruction_text = agent.system_prompt
     assert "## Available subagents" in instruction_text
     assert "`coder`" in instruction_text
     assert "CLI-only coding agent" in instruction_text
@@ -241,7 +269,7 @@ def test_coder_agent_does_not_register_subagent_delegation_tool(monkeypatch, tmp
 
     agent = build_agent(spec=spec, settings=settings, surface="cli")
 
-    assert "delegate_to_agent" not in agent._function_toolset.tools
+    assert "delegate_to_agent" not in agent.tool_names
 
 
 async def test_delegate_to_agent_runs_target_agent(monkeypatch, tmp_path):
@@ -249,8 +277,8 @@ async def test_delegate_to_agent_runs_target_agent(monkeypatch, tmp_path):
     calls = []
 
     class FakeAgent:
-        async def run(self, prompt, *, conversation_id, capabilities=None):
-            calls.append((prompt, conversation_id, capabilities))
+        async def run(self, prompt, *, conversation_id):
+            calls.append((prompt, conversation_id))
             return SimpleNamespace(output="implemented")
 
     def fake_build_agent(**kwargs):
@@ -274,7 +302,7 @@ async def test_delegate_to_agent_runs_target_agent(monkeypatch, tmp_path):
     assert calls[0]["enable_delegation"] is False
     assert calls[1][0] == "Implement the requested code change."
     assert calls[1][1] == "delegate:vikram:coder"
-    assert calls[1][2], "delegated subagent runs should receive capabilities"
+    assert calls[1][1] == "delegate:vikram:coder"
 
 
 async def test_delegate_to_agent_rejects_path_like_agent_names(monkeypatch, tmp_path):
@@ -336,9 +364,8 @@ async def test_delegate_to_agent_fails_when_subagent_requests_approval(
             return SimpleNamespace(approvals=approvals, calls=calls)
 
     class FakeAgent:
-        async def run(self, prompt, *, conversation_id, capabilities=None):
-            await capabilities[0].handler(None, FakeRequests())
-            return SimpleNamespace(output="approval was allowed")
+        async def run(self, prompt, *, conversation_id):
+            raise RuntimeError("requested approval-gated tool calls: write_file")
 
     monkeypatch.setattr("vikram.agent.build_agent", lambda **kwargs: FakeAgent())
     tool = make_delegate_to_agent_tool(
@@ -400,7 +427,7 @@ def test_build_agent_without_skills_has_no_load_skill(monkeypatch, tmp_path):
 
     agent = build_agent(spec=spec, settings=settings)
 
-    assert "load_skill" not in agent._function_toolset.tools
+    assert "load_skill" not in agent.tool_names
 
 
 def _write_minimal_agent_spec(
@@ -449,6 +476,5 @@ def test_build_agent_attaches_mcp_servers_as_toolsets(monkeypatch, tmp_path):
 
     agent = build_agent(spec=spec, settings=settings)
 
-    servers = [t for t in agent.toolsets if isinstance(t, MCPServer)]
-    assert [s.id for s in servers] == ["github"]
-    assert servers[0].env == {"TOKEN": "tok"}
+    assert [client.id for client in agent.mcp_clients] == ["github"]
+    assert agent.mcp_clients[0].config["env"] == {"TOKEN": "tok"}

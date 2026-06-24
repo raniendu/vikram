@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from collections.abc import Awaitable, Callable
@@ -9,8 +10,6 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from cloudevents.v1.http.event import CloudEvent
-from pydantic_ai import ModelMessagesTypeAdapter
-from pydantic_ai.messages import ModelMessage
 
 from vikram.agent import build_agent
 from vikram.logging import get_logger, safe_metadata, thread_hash
@@ -18,6 +17,7 @@ from vikram.settings import VikramSettings
 from vikram.spec import ensure_surface_allowed, load_spec
 
 logger = get_logger(__name__)
+RUNTIME_HISTORY_VERSION = "strands-v1"
 
 
 @dataclass(frozen=True)
@@ -57,7 +57,7 @@ class RunnableAgent(Protocol):
         self,
         user_prompt: str,
         *,
-        message_history: list[ModelMessage],
+        message_history: list[Any],
         conversation_id: str,
     ) -> Any: ...
 
@@ -102,6 +102,15 @@ class ThreadStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS runtime_metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
             columns = {
                 row["name"]
                 for row in conn.execute("PRAGMA table_info(telegram_updates)")
@@ -132,6 +141,29 @@ class ThreadStore:
                     """
                 )
                 conn.execute("DROP TABLE telegram_updates_legacy")
+            self._ensure_runtime_history_version(conn)
+
+    def _ensure_runtime_history_version(self, conn: sqlite3.Connection) -> None:
+        row = conn.execute(
+            """
+            SELECT value
+            FROM runtime_metadata
+            WHERE key = 'history_runtime'
+            """
+        ).fetchone()
+        if row is not None and row["value"] == RUNTIME_HISTORY_VERSION:
+            return
+        conn.execute("UPDATE threads SET message_history_json = NULL")
+        conn.execute(
+            """
+            INSERT INTO runtime_metadata (key, value, updated_at)
+            VALUES ('history_runtime', ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """,
+            (RUNTIME_HISTORY_VERSION, _utc_now()),
+        )
 
     def get_thread(
         self,
@@ -314,7 +346,7 @@ class ConversationService:
             message.interface,
             message.external_thread_id,
             agent_name=agent_name,
-            message_history_json=result.all_messages_json(),
+            message_history_json=_messages_json(result),
         )
         log.info("thread_history_persisted")
         output = str(result.output)
@@ -405,10 +437,27 @@ def inbound_message_from_event(event: CloudEvent) -> InboundMessage:
     )
 
 
-def _load_history(message_history_json: bytes | None) -> list[ModelMessage]:
+def _load_history(message_history_json: bytes | None) -> list[Any]:
     if not message_history_json:
         return []
-    return ModelMessagesTypeAdapter.validate_json(message_history_json)
+    try:
+        value = json.loads(message_history_json.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        logger.warning("thread_history_unreadable_after_strands_cutover")
+        return []
+    return value if isinstance(value, list) else []
+
+
+def _messages_json(result: Any) -> bytes:
+    all_messages_json = getattr(result, "all_messages_json", None)
+    if callable(all_messages_json):
+        return all_messages_json()
+    all_messages = getattr(result, "all_messages", None)
+    if callable(all_messages):
+        messages = all_messages()
+    else:
+        messages = getattr(result, "messages", [])
+    return json.dumps(messages, default=str).encode("utf-8")
 
 
 def _context_usage_warning(result: Any, settings: VikramSettings) -> str | None:

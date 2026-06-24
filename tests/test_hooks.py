@@ -2,17 +2,12 @@ import sys
 import types
 
 import pytest
-from pydantic_ai import Agent
-from pydantic_ai.exceptions import ModelRetry
-from pydantic_ai.models.test import TestModel
 
-from vikram.agent import build_agent
+from vikram.agent import _strands_hook_callbacks, build_agent
 from vikram.hooks import (
     HookBlockedError,
     HookConfigError,
-    HookedAgent,
     HookSpec,
-    HookToolset,
     build_hooks,
     run_hooks,
 )
@@ -54,18 +49,6 @@ def hook_module():
         yield mod
     finally:
         sys.modules.pop("vikram_test_hooks", None)
-
-
-class _StubToolset:
-    """Minimal stand-in for the wrapped toolset HookToolset delegates to."""
-
-    def __init__(self, return_value="ok"):
-        self.return_value = return_value
-        self.calls: list[tuple] = []
-
-    async def call_tool(self, name, tool_args, ctx, tool):
-        self.calls.append((name, tool_args))
-        return self.return_value
 
 
 # --- build_hooks / compilation -----------------------------------------------
@@ -242,10 +225,10 @@ async def test_run_hooks_command_missing_binary_is_non_blocking():
     assert not decision.blocked
 
 
-# --- HookToolset (Pre/PostToolUse) -------------------------------------------
+# --- Strands tool hook callbacks (Pre/PostToolUse) ----------------------------
 
 
-async def test_hook_toolset_pre_block_raises_model_retry(hook_module):
+async def test_strands_pre_tool_hook_cancels_call(hook_module):
     hook_module.deny = lambda payload: {
         "decision": "deny",
         "reason": "blocked by policy",
@@ -259,15 +242,22 @@ async def test_hook_toolset_pre_block_raises_model_retry(hook_module):
             )
         ]
     )
-    stub = _StubToolset()
-    ts = HookToolset(stub, pre=hooks.pre, agent_name="t")
+    (callback,) = _strands_hook_callbacks(hooks, "t")
+    event = types.SimpleNamespace(
+        tool_use={
+            "toolUseId": "u1",
+            "name": "run_command",
+            "input": {"command": "rm -rf /"},
+        },
+        cancel_tool=None,
+    )
 
-    with pytest.raises(ModelRetry, match="blocked by policy"):
-        await ts.call_tool("run_command", {"command": "rm -rf /"}, None, None)
-    assert stub.calls == []  # tool never ran
+    await callback(event)
+
+    assert event.cancel_tool == "blocked by policy"
 
 
-async def test_hook_toolset_post_appends_context(hook_module):
+async def test_strands_post_tool_hook_appends_context(hook_module):
     hook_module.note = lambda payload: {"additional_context": "audited"}
     hooks = build_hooks(
         [
@@ -278,14 +268,26 @@ async def test_hook_toolset_post_appends_context(hook_module):
             )
         ]
     )
-    stub = _StubToolset(return_value="tool output")
-    ts = HookToolset(stub, post=hooks.post, agent_name="t")
+    (callback,) = _strands_hook_callbacks(hooks, "t")
+    event = types.SimpleNamespace(
+        tool_use={"toolUseId": "u1", "name": "read_file", "input": {"path": "x"}},
+        result={
+            "toolUseId": "u1",
+            "status": "success",
+            "content": [{"text": "tool output"}],
+        },
+    )
 
-    result = await ts.call_tool("read_file", {"path": "x"}, None, None)
-    assert result == "tool output\n\naudited"
+    await callback(event)
+
+    assert event.result == {
+        "toolUseId": "u1",
+        "status": "success",
+        "content": [{"text": "tool output"}, {"text": "audited"}],
+    }
 
 
-async def test_hook_toolset_post_block_raises(hook_module):
+async def test_strands_post_tool_hook_returns_error_result(hook_module):
     hook_module.reject = lambda payload: {"decision": "block", "reason": "bad result"}
     hooks = build_hooks(
         [
@@ -296,12 +298,26 @@ async def test_hook_toolset_post_block_raises(hook_module):
             )
         ]
     )
-    ts = HookToolset(_StubToolset(), post=hooks.post, agent_name="t")
-    with pytest.raises(ModelRetry, match="bad result"):
-        await ts.call_tool("read_file", {"path": "x"}, None, None)
+    (callback,) = _strands_hook_callbacks(hooks, "t")
+    event = types.SimpleNamespace(
+        tool_use={"toolUseId": "u1", "name": "read_file", "input": {"path": "x"}},
+        result={
+            "toolUseId": "u1",
+            "status": "success",
+            "content": [{"text": "tool output"}],
+        },
+    )
+
+    await callback(event)
+
+    assert event.result == {
+        "toolUseId": "u1",
+        "status": "error",
+        "content": [{"text": "bad result"}],
+    }
 
 
-async def test_hook_toolset_pre_passthrough_runs_tool(hook_module):
+async def test_strands_pre_tool_hook_passthrough_leaves_call_uncancelled(hook_module):
     hook_module.allow = lambda payload: None
     hooks = build_hooks(
         [
@@ -312,32 +328,41 @@ async def test_hook_toolset_pre_passthrough_runs_tool(hook_module):
             )
         ]
     )
-    stub = _StubToolset(return_value="ran")
-    ts = HookToolset(stub, pre=hooks.pre, agent_name="t")
-    assert await ts.call_tool("read_file", {"path": "x"}, None, None) == "ran"
-    assert stub.calls == [("read_file", {"path": "x"})]
+    (callback,) = _strands_hook_callbacks(hooks, "t")
+    event = types.SimpleNamespace(
+        tool_use={"toolUseId": "u1", "name": "read_file", "input": {"path": "x"}},
+        cancel_tool=None,
+    )
+
+    await callback(event)
+
+    assert event.cancel_tool is None
 
 
-# --- HookedAgent (UserPromptSubmit / Stop) -----------------------------------
+# --- VikramAgent run hooks (UserPromptSubmit / Stop) --------------------------
 
 
-async def test_user_prompt_submit_block_aborts_run(hook_module):
+async def test_user_prompt_submit_block_aborts_run(hook_module, monkeypatch, tmp_path):
     hook_module.deny = lambda payload: {"decision": "deny", "reason": "prompt rejected"}
-    hooks = build_hooks(
+    settings = _local_model_settings(monkeypatch, tmp_path)
+    spec = _spec_with_hooks(
+        tmp_path,
+        settings.spec_root / "shared",
         [
             HookSpec(
                 event="UserPromptSubmit",
                 transport="python",
                 entrypoint="vikram_test_hooks:deny",
             )
-        ]
+        ],
     )
-    agent = HookedAgent(TestModel(), run_hooks=hooks)
+    agent = build_agent(spec=spec, settings=settings)
+
     with pytest.raises(HookBlockedError, match="prompt rejected"):
-        await agent.run("hello")
+        await agent._apply_user_prompt_hooks("hello")
 
 
-async def test_user_prompt_submit_injects_context(hook_module):
+async def test_user_prompt_submit_injects_context(hook_module, monkeypatch, tmp_path):
     seen = {}
 
     def capture(payload):
@@ -345,32 +370,28 @@ async def test_user_prompt_submit_injects_context(hook_module):
         return {"additional_context": "REMEMBER: be terse"}
 
     hook_module.capture = capture
-    hooks = build_hooks(
+    settings = _local_model_settings(monkeypatch, tmp_path)
+    spec = _spec_with_hooks(
+        tmp_path,
+        settings.spec_root / "shared",
         [
             HookSpec(
                 event="UserPromptSubmit",
                 transport="python",
                 entrypoint="vikram_test_hooks:capture",
             )
-        ]
+        ],
     )
-    agent = HookedAgent(TestModel(), run_hooks=hooks)
-    result = await agent.run("original question")
+    agent = build_agent(spec=spec, settings=settings)
+    prompt = await agent._apply_user_prompt_hooks("original question")
 
     # The hook sees the original prompt...
     assert seen["prompt"] == "original question"
     # ...and the injected context reached the model as part of the user message.
-    user_texts = [
-        part.content
-        for msg in result.all_messages()
-        for part in getattr(msg, "parts", [])
-        if getattr(part, "part_kind", None) == "user-prompt"
-    ]
-    assert any("REMEMBER: be terse" in text for text in user_texts)
-    assert any("original question" in text for text in user_texts)
+    assert prompt == "REMEMBER: be terse\n\noriginal question"
 
 
-async def test_stop_hook_fires_with_output(hook_module):
+async def test_stop_hook_fires_with_output(hook_module, monkeypatch, tmp_path):
     captured = {}
 
     def on_stop(payload):
@@ -378,15 +399,33 @@ async def test_stop_hook_fires_with_output(hook_module):
         captured["output"] = payload["output"]
 
     hook_module.on_stop = on_stop
-    hooks = build_hooks(
-        [
-            HookSpec(
-                event="Stop", transport="python", entrypoint="vikram_test_hooks:on_stop"
-            )
-        ]
-    )
-    agent = HookedAgent(TestModel(custom_output_text="done"), run_hooks=hooks)
-    await agent.run("go")
+    hook_specs = [
+        HookSpec(
+            event="Stop", transport="python", entrypoint="vikram_test_hooks:on_stop"
+        )
+    ]
+    settings = _local_model_settings(monkeypatch, tmp_path)
+    spec = _spec_with_hooks(tmp_path, settings.spec_root / "shared", hook_specs)
+    agent = build_agent(spec=spec, settings=settings)
+
+    class Result:
+        context_size = 0
+
+        def __str__(self):
+            return "done"
+
+    class FakeRawAgent:
+        messages = [{"role": "assistant", "content": "done"}]
+
+        async def invoke_async(self, prompt, *, invocation_state):
+            return Result()
+
+    fake_raw_agent = FakeRawAgent()
+    monkeypatch.setattr(agent, "_agent_for_run", lambda: fake_raw_agent)
+
+    result = await agent.run("go")
+
+    assert result.output == "done"
     assert captured["event"] == "Stop"
     assert captured["output"] == "done"
 
@@ -407,7 +446,7 @@ def _spec_with_hooks(tmp_path, shared_dir, hooks):
     )
 
 
-def test_build_agent_wraps_tools_when_tool_hooks_present(monkeypatch, tmp_path):
+def test_build_agent_registers_strands_tool_hooks(monkeypatch, tmp_path):
     settings = _local_model_settings(monkeypatch, tmp_path)
     spec = _spec_with_hooks(
         tmp_path,
@@ -415,10 +454,12 @@ def test_build_agent_wraps_tools_when_tool_hooks_present(monkeypatch, tmp_path):
         [HookSpec(event="PreToolUse", command="true")],
     )
     agent = build_agent(spec=spec, settings=settings)
-    assert any(isinstance(t, HookToolset) for t in agent.toolsets)
+
+    assert agent._hookset.has_tool_hooks
+    assert len(agent._agent_kwargs["hooks"]) == 1
 
 
-def test_build_agent_returns_hooked_agent_for_run_hooks(monkeypatch, tmp_path):
+def test_build_agent_records_run_hooks(monkeypatch, tmp_path):
     settings = _local_model_settings(monkeypatch, tmp_path)
     spec = _spec_with_hooks(
         tmp_path,
@@ -426,15 +467,20 @@ def test_build_agent_returns_hooked_agent_for_run_hooks(monkeypatch, tmp_path):
         [HookSpec(event="Stop", command="true")],
     )
     agent = build_agent(spec=spec, settings=settings)
-    assert isinstance(agent, HookedAgent)
+
+    assert agent.runtime == "strands"
+    assert agent._hookset.has_run_hooks
 
 
 def test_build_agent_plain_agent_without_hooks(monkeypatch, tmp_path):
     settings = _local_model_settings(monkeypatch, tmp_path)
     spec = _spec_with_hooks(tmp_path, settings.spec_root / "shared", [])
     agent = build_agent(spec=spec, settings=settings)
-    assert type(agent) is Agent
-    assert not any(isinstance(t, HookToolset) for t in agent.toolsets)
+
+    assert agent.runtime == "strands"
+    assert agent._agent_kwargs["hooks"] == []
+    assert not agent._hookset.has_tool_hooks
+    assert not agent._hookset.has_run_hooks
 
 
 def test_shipped_specs_have_no_hooks_by_default(monkeypatch, tmp_path):

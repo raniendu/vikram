@@ -1,6 +1,6 @@
 # Vikram
 
-Vikram is a public, standalone agent runtime built on Pydantic AI. It keeps
+Vikram is a public, standalone agent runtime built on AWS Strands. It keeps
 agent behavior in versioned specs under `spec/`, exposes the same agents through
 CLI, HTTP, threaded queues, Telegram webhooks, and ACP, and ships safe local
 coding tools for the CLI-only `coder` agent.
@@ -25,7 +25,7 @@ coding tools for the CLI-only `coder` agent.
   (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`) to observe, augment,
   or block what the agent does, via `[[hooks]]`.
 - Runtime state: local SQLite for thread history and DBOS workflow state.
-- Observability: structured JSON logs and optional OpenLIT/OpenTelemetry traces.
+- Observability: structured JSON logs and optional Strands/OpenTelemetry traces.
 
 ## Quick Start
 
@@ -95,7 +95,7 @@ Agents can be extended in two declarative ways, both configured in
 for the full reference.
 
 - **MCP servers** add external tools. Each `[[mcp_servers]]` entry becomes a
-  Pydantic AI toolset that Vikram starts and stops automatically per run.
+  Strands MCP client provider that Vikram attaches to the agent runtime.
   Secrets are referenced as `${ENV_VAR}` so specs stay safe to commit:
 
   ```toml

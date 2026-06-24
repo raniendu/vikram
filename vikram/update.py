@@ -4,7 +4,7 @@ Mirrors what ``install.sh`` does at install time: locates the
 on-disk source checkout, fast-forwards it, and reinstalls the ``vikram`` uv
 tool from that checkout.
 
-This module is import-light on purpose — no agent, pydantic-ai, or settings
+This module is import-light on purpose — no agent runtime or settings
 imports — so ``vikram update`` runs even on a machine whose model provider
 config is broken.
 """

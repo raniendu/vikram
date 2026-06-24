@@ -1,7 +1,7 @@
 [project]
 name = "vikram"
 version = "0.1.0"
-description = "Public spec-driven Pydantic AI agent runtime."
+description = "Public spec-driven Strands agent runtime."
 requires-python = ">=3.13"
 dependencies = [
     "agent-client-protocol>=0.10.1",
@@ -9,13 +9,15 @@ dependencies = [
     "dbos>=2.21.0",
     "fastapi>=0.136.1",
     "httpx>=0.28.1",
-    "openlit>=1.42.0",
+    "ollama>=0.6.2",
+    "opentelemetry-exporter-otlp-proto-http>=1.42.1",
     "parallel-web>=0.6.0",
     "prompt-toolkit>=3.0.52",
-    "pydantic-ai>=1.93.0",
     "pydantic-settings>=2.14.1",
     "python-dateutil>=2.9.0.post0",
     "rich>=14.2.0",
+    "strands-agents-tools>=0.8.1",
+    "strands-agents[openai]>=1.44.0",
     "structlog>=25.5.0",
     "telegramify-markdown>=1.1.5",
     "uvicorn[standard]>=0.46.0",

@@ -1,20 +1,26 @@
 from __future__ import annotations
 
+import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import AliasChoices, Field
-from pydantic_ai.models import Model
-from pydantic_ai.models.ollama import OllamaModel
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.ollama import OllamaProvider
-from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings.sources import PydanticBaseSettingsSource
 
 from vikram.config import load_config
 
 ModelProvider = Literal["ollama", "openai-compatible"]
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class VikramModel:
+    """A Strands model plus stable metadata used by tests and adapters."""
+
+    raw: Any
+    config: dict[str, Any]
 
 
 def _resolve_spec_root(package_relative: Path) -> Path:
@@ -175,6 +181,13 @@ class VikramSettings(BaseSettings):
         return f"{base_url}/v1"
 
     @property
+    def normalized_ollama_host(self) -> str:
+        base_url = self.ollama_base_url.strip().rstrip("/")
+        if base_url.endswith("/v1"):
+            return base_url[: -len("/v1")]
+        return base_url
+
+    @property
     def telegram_allowed_chat_id_set(self) -> set[int]:
         chat_ids: set[int] = set()
         for raw in self.telegram_allowed_chat_ids.split(","):
@@ -199,7 +212,39 @@ class VikramSettings(BaseSettings):
         return values or None
 
 
-def build_model(settings: VikramSettings | None = None) -> Model:
+SUPPORTED_MODEL_SETTINGS = {
+    "temperature",
+    "top_p",
+    "max_tokens",
+    "stop_sequences",
+    "frequency_penalty",
+    "presence_penalty",
+}
+
+
+def map_model_settings(
+    values: dict[str, Any] | None, *, agent_name: str
+) -> dict[str, Any]:
+    """Best-effort map of Vikram spec settings to Strands provider params."""
+    mapped: dict[str, Any] = {}
+    for key, value in (values or {}).items():
+        if key in SUPPORTED_MODEL_SETTINGS:
+            mapped[key] = value
+        else:
+            logger.warning(
+                "unsupported_model_setting_ignored: %s",
+                key,
+                extra={"agent": agent_name, "setting": key},
+            )
+    return mapped
+
+
+def build_model(
+    settings: VikramSettings | None = None,
+    *,
+    model_settings: dict[str, Any] | None = None,
+    agent_name: str = "agent",
+) -> VikramModel:
     settings = settings or VikramSettings()
     if not settings.model_provider:
         raise RuntimeError(
@@ -211,10 +256,23 @@ def build_model(settings: VikramSettings | None = None) -> Model:
             "Vikram model is not configured. Run `vikram configure` or set "
             "VIKRAM_MODEL."
         )
+    params = map_model_settings(model_settings, agent_name=agent_name)
     if settings.model_provider == "ollama":
-        return OllamaModel(
-            settings.model,
-            provider=OllamaProvider(base_url=settings.normalized_ollama_base_url),
+        from strands.models.ollama import OllamaModel
+
+        raw = OllamaModel(
+            host=settings.normalized_ollama_host,
+            model_id=settings.model,
+            **params,
+        )
+        return VikramModel(
+            raw=raw,
+            config={
+                "provider": "ollama",
+                "model": settings.model,
+                "base_url": settings.normalized_ollama_host,
+                "params": params,
+            },
         )
     if settings.model_provider == "openai-compatible":
         if not settings.openai_compat_api_key:
@@ -223,11 +281,23 @@ def build_model(settings: VikramSettings | None = None) -> Model:
                 "configure`, add it to .env, or set it in the runtime "
                 "environment to use the openai-compatible model provider."
             )
-        return OpenAIChatModel(
-            settings.model,
-            provider=OpenAIProvider(
-                base_url=settings.openai_compat_base_url,
-                api_key=settings.openai_compat_api_key,
-            ),
+        from strands.models.openai import OpenAIModel
+
+        raw = OpenAIModel(
+            client_args={
+                "base_url": settings.openai_compat_base_url,
+                "api_key": settings.openai_compat_api_key,
+            },
+            model_id=settings.model,
+            params=params,
+        )
+        return VikramModel(
+            raw=raw,
+            config={
+                "provider": "openai-compatible",
+                "model": settings.model,
+                "base_url": settings.openai_compat_base_url,
+                "params": params,
+            },
         )
     raise RuntimeError(f"Unknown VIKRAM_MODEL_PROVIDER: {settings.model_provider!r}")

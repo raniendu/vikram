@@ -6,16 +6,8 @@ from typing import Any
 
 import acp
 import pytest
-from pydantic_ai import Agent
-from pydantic_ai.models.test import TestModel
-from pydantic_ai.tools import (
-    DeferredToolRequests,
-    ToolApproved,
-    ToolCallPart,
-    ToolDenied,
-)
 
-from vikram.acp import VikramAcpAgent, _Session
+from vikram.acp import VikramAcpAgent, _Session, _tool_result_from_event
 
 
 class FakeClient:
@@ -67,23 +59,46 @@ async def test_new_session_chdirs_and_registers(monkeypatch, tmp_path):
 
 
 async def test_prompt_streams_text_and_tool_calls():
-    captured: list[str] = []
+    class FakeResult:
+        def all_messages(self):
+            return [{"role": "assistant", "content": "done"}]
 
-    async def echo(value: str) -> str:
-        """Echo the value back."""
-        captured.append(value)
-        return f"echoed: {value}"
+    class FakeStrandsAgent:
+        async def stream_events(self, prompt, *, message_history, conversation_id):
+            assert prompt == "hello"
+            assert message_history == []
+            assert conversation_id == "acp:s1"
+            yield {"data": "thinking text"}
+            yield {
+                "event": {
+                    "contentBlockStart": {
+                        "start": {
+                            "toolUse": {
+                                "toolUseId": "call-1",
+                                "name": "run_command",
+                                "input": {"command": "git status --short"},
+                            }
+                        }
+                    }
+                }
+            }
+            yield {
+                "tool_result": {
+                    "toolUseId": "call-1",
+                    "status": "success",
+                    "content": [{"text": "clean"}],
+                }
+            }
+            yield {"vikram_result": FakeResult()}
 
-    test_agent = Agent(TestModel(), tools=[echo])
     agent = _make_agent()
     client = FakeClient()
     agent._client = client
-    session = _Session(agent=test_agent, cwd=os.getcwd())
+    session = _Session(agent=FakeStrandsAgent(), cwd=os.getcwd())
 
     stop_reason = await agent._run_turn("s1", session, "hello")
 
     assert stop_reason == "end_turn"
-    assert captured, "tool should have been invoked by the model"
 
     update_types = {type(update).__name__ for _, update in client.updates}
     assert "ToolCallStart" in update_types
@@ -93,29 +108,97 @@ async def test_prompt_streams_text_and_tool_calls():
     assert session.messages
 
 
-async def test_resolve_permissions_maps_allow_and_deny():
-    agent = _make_agent()
-    agent._client = FakeClient(permission_outcomes={"c1": "allow", "c2": "reject"})
-
-    requests = DeferredToolRequests(
-        approvals=[
-            ToolCallPart(
-                tool_name="write_file",
-                args={"path": "a.py", "content": "x"},
-                tool_call_id="c1",
-            ),
-            ToolCallPart(
-                tool_name="run_command",
-                args={"argv": ["ls"]},
-                tool_call_id="c2",
-            ),
-        ]
+def test_tool_result_extracts_strands_message_event():
+    result = _tool_result_from_event(
+        {
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "toolResult": {
+                            "toolUseId": "call-1",
+                            "status": "success",
+                            "content": [{"text": "done"}],
+                        }
+                    }
+                ],
+            }
+        }
     )
 
-    results = await agent._resolve_permissions("s1", requests)
+    assert result == {
+        "toolUseId": "call-1",
+        "status": "success",
+        "content": [{"text": "done"}],
+    }
 
-    assert isinstance(results.approvals["c1"], ToolApproved)
-    assert isinstance(results.approvals["c2"], ToolDenied)
+
+async def test_stream_event_reports_all_concurrent_tool_results():
+    agent = _make_agent()
+    client = FakeClient()
+    agent._client = client
+
+    await agent._stream_event(
+        "s1",
+        {
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "toolResult": {
+                            "toolUseId": "call-1",
+                            "status": "success",
+                            "content": [{"text": "first"}],
+                        }
+                    },
+                    {
+                        "toolResult": {
+                            "toolUseId": "call-2",
+                            "status": "error",
+                            "content": [{"text": "second"}],
+                        }
+                    },
+                ],
+            }
+        },
+    )
+
+    progress = [
+        update
+        for _, update in client.updates
+        if type(update).__name__ == "ToolCallProgress"
+    ]
+    assert [(update.tool_call_id, update.status) for update in progress] == [
+        ("call-1", "completed"),
+        ("call-2", "failed"),
+    ]
+
+
+async def test_hitl_prompt_permission_maps_allow_and_deny():
+    agent = _make_agent()
+    agent._client = FakeClient(permission_outcomes={"c1": "allow", "c2": "reject"})
+    ids = iter(["c1", "c2"])
+
+    import vikram.acp as acp_module
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        acp_module.uuid, "uuid4", lambda: SimpleNamespace(hex=next(ids))
+    )
+    try:
+        allowed = await agent._request_permission_from_hitl_prompt(
+            "s1",
+            'Tool "write_file" requires human approval. Input: {"path": "a.py", "content": "x"}',
+        )
+        denied = await agent._request_permission_from_hitl_prompt(
+            "s1",
+            'Tool "run_command" requires human approval. Input: {"command": "ls"}',
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert allowed == "yes"
+    assert denied == "no"
     # Both approval prompts were forwarded to the editor with the edit/execute kind.
     forwarded = {tc.tool_call_id: tc.kind for tc in agent._client.permission_requests}
     assert forwarded == {"c1": "edit", "c2": "execute"}
