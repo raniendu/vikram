@@ -179,12 +179,10 @@ A path may point at a skill directory (containing `SKILL.md`) or directly at a
 
 ## MCP servers
 
-Each `[[mcp_servers]]` entry becomes a Pydantic AI MCP toolset attached to the
-agent. The server's tools appear to the model alongside the agent's built-in
-tools. Pydantic AI starts and stops the server automatically for each agent
-run, so there is nothing to manage manually. In interactive CLI mode, Vikram
-keeps the servers connected for the whole session (instead of restarting them
-each turn) whenever the spec declares any MCP servers.
+Each `[[mcp_servers]]` entry becomes a Strands MCP client provider attached to
+the agent. The server's tools appear to the model alongside the agent's
+built-in tools. Strands manages MCP server lifecycle for each run, so there is
+nothing to manage manually.
 
 ### Prerequisites
 

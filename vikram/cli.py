@@ -8,11 +8,14 @@ from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from vikram.streaming import tool_result_from_event as _tool_result_from_event
+from vikram.streaming import tool_results_from_event as _tool_results_from_event
+from vikram.streaming import tool_use_from_event as _tool_use_from_event
+
 if TYPE_CHECKING:
-    from pydantic_ai import Agent
-    from pydantic_ai.messages import ModelMessage
     from rich.console import Console
 
+    from vikram.agent import VikramAgent
     from vikram.settings import VikramSettings
 
 CODE_THEME = "monokai"
@@ -154,30 +157,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.agent:
         settings = settings.model_copy(update={"default_agent": args.agent})
     spec = load_spec(settings.default_agent, settings.spec_root)
-    agent = build_agent(spec=spec, settings=settings)
+    agent = build_agent(spec=spec, settings=settings, approve_all=args.approve_all)
 
     if args.once:
-        from prompt_toolkit import PromptSession
-        from rich.console import Console
-        from pydantic_ai.capabilities import HandleDeferredToolCalls
-
-        session = PromptSession()
-        console = Console()
-
-        async def approval_handler(ctx: Any, requests: Any) -> Any:
-            return await _resolve_deferred_tool_requests(
-                ctx,
-                requests,
-                session=session,
-                console=console,
-                approve_all=args.approve_all,
-            )
-
-        capabilities = [HandleDeferredToolCalls(handler=approval_handler)]
-        result = agent.run_sync(
-            read_prompt(args.prompt),
-            capabilities=capabilities,
-        )
+        result = agent.run_sync(read_prompt(args.prompt))
         output = str(result.output)
         if args.json:
             print(json.dumps({"agent": spec.name, "output": output}))
@@ -199,7 +182,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 
 async def run_interactive(
-    agent: "Agent",
+    agent: "VikramAgent",
     *,
     prog_name: str,
     quiet: bool,
@@ -208,7 +191,6 @@ async def run_interactive(
 ) -> None:
     from prompt_toolkit import PromptSession
     from prompt_toolkit.history import FileHistory
-    from pydantic_ai._cli import CustomAutoSuggest, handle_slash_command
     from rich.console import Console
 
     HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -216,15 +198,15 @@ async def run_interactive(
 
     session: PromptSession[Any] = PromptSession(history=FileHistory(str(HISTORY_PATH)))
     console = Console()
-    messages: list[ModelMessage] = []
+    messages: list[Any] = []
     multiline = False
-    auto_suggest = CustomAutoSuggest(["/markdown", "/multiline", "/exit", "/cp"])
+    auto_suggest = None
     context_percent = 0
 
     async with contextlib.AsyncExitStack() as stack:
         # Enter the agent once when MCP servers are configured so they stay
         # connected for the whole session instead of restarting every turn.
-        if keep_servers_warm:
+        if keep_servers_warm and hasattr(agent, "__aenter__"):
             await stack.enter_async_context(agent)
 
         while True:
@@ -245,10 +227,10 @@ async def run_interactive(
 
             ident_prompt = text.lower().strip().replace(" ", "-")
             if ident_prompt.startswith("/"):
-                exit_value, multiline = handle_slash_command(
-                    ident_prompt, messages, multiline, console, CODE_THEME
+                should_exit, multiline = _handle_slash_command(
+                    ident_prompt, messages, multiline, console
                 )
-                if exit_value is not None:
+                if should_exit:
                     return
                 continue
 
@@ -259,7 +241,6 @@ async def run_interactive(
                     messages,
                     console,
                     quiet=quiet,
-                    approval_session=session,
                     settings=settings,
                 )
                 if percent is not None:
@@ -271,190 +252,55 @@ async def run_interactive(
 
 
 async def _render_turn(
-    agent: "Agent",
+    agent: "VikramAgent",
     prompt: str,
-    messages: list["ModelMessage"],
+    messages: list[Any],
     console: "Console",
     *,
     quiet: bool,
-    approval_session: Any | None = None,
     settings: "VikramSettings" | None = None,
-) -> tuple[list["ModelMessage"], int | None]:
-    from pydantic_ai import Agent as _Agent
-    from pydantic_ai.capabilities import HandleDeferredToolCalls
-
+) -> tuple[list[Any], int | None]:
     tool_timers: dict[str, float] = {}
-    capabilities = None
-    if approval_session is not None:
-
-        async def approval_handler(ctx: Any, requests: Any) -> Any:
-            return await _resolve_deferred_tool_requests(
-                ctx, requests, session=approval_session, console=console
-            )
-
-        capabilities = [HandleDeferredToolCalls(handler=approval_handler)]
-
-    async with agent.iter(
-        prompt, message_history=messages, capabilities=capabilities
-    ) as agent_run:
-        async for node in agent_run:
-            if _Agent.is_model_request_node(node):
-                async with node.stream(agent_run.ctx) as stream:
-                    await _render_model_request(stream, console, quiet=quiet)
-            elif _Agent.is_call_tools_node(node):
-                async with node.stream(agent_run.ctx) as stream:
-                    await _render_call_tools(
-                        stream, console, quiet=quiet, tool_timers=tool_timers
-                    )
-        assert agent_run.result is not None
-
-        percent = None
-        if settings is not None:
-            context_window = settings.context_window_tokens
-            usage_fn = getattr(agent_run.result, "usage", None)
-            if context_window > 0 and callable(usage_fn):
-                try:
-                    usage = usage_fn()
-                    input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
-                    if input_tokens > 0:
-                        percent = round((input_tokens / context_window) * 100)
-                except Exception:
-                    pass
-
-        return list(agent_run.result.all_messages()), percent
-
-
-async def _resolve_deferred_tool_requests(
-    ctx: Any,
-    requests: Any,
-    *,
-    session: Any,
-    console: "Console",
-    approve_all: bool = False,
-) -> Any:
-    from pydantic_ai.exceptions import ModelRetry
-    from pydantic_ai.tools import ToolApproved, ToolDenied
-
-    approvals: dict[str, ToolApproved | ToolDenied] = {}
-    calls: dict[str, ModelRetry] = {}
-
-    for call in requests.approvals:
-        args_repr = _format_call_args(call)
-        rendered_call = f"{call.tool_name}({args_repr})"
-        if approve_all:
-            console.print(f"[dim]✓ auto-approved {rendered_call}[/dim]")
-            approvals[call.tool_call_id] = ToolApproved()
+    result = None
+    stream = _stream_agent(agent, prompt, messages)
+    async for event in stream:
+        if isinstance(event, dict) and "vikram_result" in event:
+            result = event["vikram_result"]
             continue
-        console.print(f"[yellow]? approve {rendered_call}[/yellow]")
-        answer = (
-            (await session.prompt_async("Approve tool call? [y/N] ")).strip().lower()
-        )
-        if answer in {"y", "yes"}:
-            approvals[call.tool_call_id] = ToolApproved()
-        else:
-            approvals[call.tool_call_id] = ToolDenied("User denied this tool call.")
-
-    for call in requests.calls:
-        calls[call.tool_call_id] = ModelRetry(
-            "External deferred tool calls are not supported by the Vikram CLI."
+        await _render_stream_event(
+            event,
+            console,
+            quiet=quiet,
+            tool_timers=tool_timers,
         )
 
-    return requests.build_results(approvals=approvals, calls=calls)
+    if result is None:
+        result = await agent.run(prompt, message_history=messages)
+
+    percent = _context_percent(result, settings)
+    all_messages = getattr(result, "all_messages", None)
+    if callable(all_messages):
+        return list(all_messages()), percent
+    return list(getattr(result, "messages", []) or []), percent
 
 
-async def _render_model_request(
-    stream: AsyncIterator[Any], console: "Console", *, quiet: bool
-) -> None:
-    from pydantic_ai.messages import (
-        PartDeltaEvent,
-        PartEndEvent,
-        PartStartEvent,
-        TextPartDelta,
-        ThinkingPartDelta,
-    )
-    from rich.live import Live
-    from rich.markdown import Markdown
-    from rich.text import Text
-
-    buffers: dict[int, str] = {}
-    kinds: dict[int, str] = {}
-    text_live: Live | None = None
-    text_live_index: int | None = None
-
-    def _stop_text_live() -> None:
-        nonlocal text_live, text_live_index
-        if text_live is not None:
-            text_live.stop()
-            text_live = None
-            text_live_index = None
-
-    def _flush_thinking(idx: int) -> None:
-        body = buffers.get(idx, "").strip()
-        if not body:
-            return
-        console.print("[dim]· thinking:[/dim]")
-        for line in body.splitlines():
-            console.print(f"  [dim]{line}[/dim]")
-        console.print()
-
-    try:
-        async for event in stream:
-            if isinstance(event, PartStartEvent):
-                idx = event.index
-                kind = event.part.part_kind
-                kinds[idx] = kind
-                initial = getattr(event.part, "content", "") or ""
-                buffers[idx] = initial if isinstance(initial, str) else ""
-
-                if kind == "text":
-                    _stop_text_live()
-                    renderable = (
-                        Markdown(buffers[idx], code_theme=CODE_THEME)
-                        if buffers[idx]
-                        else Text("")
-                    )
-                    text_live = Live(
-                        renderable,
-                        refresh_per_second=15,
-                        console=console,
-                        vertical_overflow="visible",
-                    )
-                    text_live.start()
-                    text_live_index = idx
-
-            elif isinstance(event, PartDeltaEvent):
-                idx = event.index
-                if isinstance(event.delta, TextPartDelta):
-                    buffers[idx] = buffers.get(idx, "") + (
-                        event.delta.content_delta or ""
-                    )
-                    if text_live is not None and text_live_index == idx:
-                        text_live.update(Markdown(buffers[idx], code_theme=CODE_THEME))
-                elif isinstance(event.delta, ThinkingPartDelta):
-                    buffers[idx] = buffers.get(idx, "") + (
-                        event.delta.content_delta or ""
-                    )
-
-            elif isinstance(event, PartEndEvent):
-                idx = event.index
-                kind = kinds.get(idx)
-                if kind == "thinking" and not quiet:
-                    _flush_thinking(idx)
-                    buffers[idx] = ""
-                elif kind == "text" and text_live_index == idx:
-                    _stop_text_live()
-    finally:
-        _stop_text_live()
-        # Some streams may not emit PartEndEvent for thinking parts; flush remaining.
-        if not quiet:
-            for idx, kind in kinds.items():
-                if kind == "thinking" and buffers.get(idx):
-                    _flush_thinking(idx)
-                    buffers[idx] = ""
+async def _stream_agent(
+    agent: Any, prompt: str, messages: list[Any]
+) -> AsyncIterator[Any]:
+    stream_events = getattr(agent, "stream_events", None)
+    if callable(stream_events):
+        async for event in stream_events(prompt, message_history=messages):
+            yield event
+        return
+    stream_async = getattr(agent, "stream_async", None)
+    if callable(stream_async):
+        async for event in stream_async(prompt):
+            yield event
+        return
 
 
-async def _render_call_tools(
-    stream: AsyncIterator[Any],
+async def _render_stream_event(
+    event: Any,
     console: "Console",
     *,
     quiet: bool,
@@ -462,38 +308,95 @@ async def _render_call_tools(
 ) -> None:
     import time
 
-    from pydantic_ai.messages import FunctionToolCallEvent, FunctionToolResultEvent
+    if not isinstance(event, dict):
+        return
 
-    async for event in stream:
-        if isinstance(event, FunctionToolCallEvent):
-            tool_timers[event.tool_call_id] = time.monotonic()
-            if quiet:
-                continue
-            part = event.part
-            args_repr = _format_call_args(part)
-            console.print(f"[cyan]→ {part.tool_name}({args_repr})[/cyan]")
-        elif isinstance(event, FunctionToolResultEvent):
-            start = tool_timers.pop(event.tool_call_id, None)
-            duration = time.monotonic() - start if start is not None else None
-            if quiet:
-                continue
-            part = event.part
-            duration_str = (
-                f" [dim]{duration:.1f}s[/dim]" if duration is not None else ""
-            )
-            if part.part_kind == "retry-prompt":
-                console.print(f"[red]✗ {part.tool_name or '?'}[/red]{duration_str}")
-                body = _stringify_retry_content(part.content)
-            else:
-                console.print(f"[green]✓ {part.tool_name}[/green]{duration_str}")
-                body = _stringify_tool_return(part)
-            if body:
-                for line in body.splitlines():
-                    console.print(f"  [dim]{line}[/dim]")
-            console.print()
+    reasoning = event.get("reasoningText")
+    if reasoning and not quiet:
+        console.print("[dim]· thinking:[/dim]")
+        for line in str(reasoning).splitlines():
+            console.print(f"  [dim]{line}[/dim]")
+
+    data = event.get("data")
+    if data:
+        console.print(str(data), end="")
+
+    tool_use = _tool_use_from_event(event)
+    if tool_use is not None:
+        tool_id = str(tool_use.get("toolUseId") or tool_use.get("id") or "")
+        if tool_id:
+            tool_timers[tool_id] = time.monotonic()
+        if not quiet:
+            name = str(tool_use.get("name") or "?")
+            args_repr = _format_call_args(tool_use)
+            console.print(f"\n[cyan]→ {name}({args_repr})[/cyan]")
+
+    for tool_result in _tool_results_from_event(event):
+        if quiet:
+            continue
+        tool_id = str(tool_result.get("toolUseId") or tool_result.get("id") or "")
+        start = tool_timers.pop(tool_id, None)
+        duration = time.monotonic() - start if start is not None else None
+        duration_str = f" [dim]{duration:.1f}s[/dim]" if duration is not None else ""
+        status = str(tool_result.get("status") or "success")
+        marker = "[red]✗[/red]" if status == "error" else "[green]✓[/green]"
+        console.print(f"{marker} tool result{duration_str}")
+        body = _stringify_tool_result(tool_result)
+        if body:
+            for line in body.splitlines():
+                console.print(f"  [dim]{line}[/dim]")
+        console.print()
+
+
+def _handle_slash_command(
+    command: str,
+    messages: list[Any],
+    multiline: bool,
+    console: "Console",
+) -> tuple[bool, bool]:
+    from rich.markdown import Markdown
+
+    if command in {"/exit", "/quit", "/q"}:
+        return True, multiline
+    if command == "/multiline":
+        multiline = not multiline
+        console.print(f"[dim]multiline {'on' if multiline else 'off'}[/dim]")
+        return False, multiline
+    if command == "/markdown":
+        console.print(Markdown(json.dumps(messages, default=str, indent=2)))
+        return False, multiline
+    if command == "/cp":
+        console.print("[dim]copy is not available in this CLI runtime[/dim]")
+        return False, multiline
+    console.print(f"[dim]Unknown command: {command}[/dim]")
+    return False, multiline
+
+
+def _context_percent(result: Any, settings: "VikramSettings" | None) -> int | None:
+    if settings is None:
+        return None
+    context_window = settings.context_window_tokens
+    usage_fn = getattr(result, "usage", None)
+    if context_window <= 0 or not callable(usage_fn):
+        return None
+    try:
+        usage = usage_fn()
+        input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+    except Exception:
+        return None
+    if input_tokens <= 0:
+        return None
+    return round((input_tokens / context_window) * 100)
 
 
 def _format_call_args(part: Any) -> str:
+    if isinstance(part, dict):
+        args = part.get("input") or part.get("args") or {}
+        if not isinstance(args, dict):
+            return _truncate(str(args))
+        if not args:
+            return ""
+        return ", ".join(f"{k}={_repr_value(v)}" for k, v in args.items())
     try:
         args = part.args_as_dict()
     except Exception:
@@ -523,6 +426,19 @@ def _stringify_tool_return(part: Any) -> str:
             rendered.append(item)
         else:
             rendered.append(f"<{type(item).__name__}>")
+    return "\n".join(rendered)
+
+
+def _stringify_tool_result(result: dict[str, Any]) -> str:
+    rendered: list[str] = []
+    for item in result.get("content") or []:
+        if isinstance(item, dict):
+            if "text" in item:
+                rendered.append(str(item["text"]))
+            elif "json" in item:
+                rendered.append(json.dumps(item["json"], default=str))
+        else:
+            rendered.append(str(item))
     return "\n".join(rendered)
 
 

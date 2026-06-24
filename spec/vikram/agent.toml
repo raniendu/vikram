@@ -16,9 +16,8 @@ shared_skills = ["skills/web-research"]
 tools = ["web_search", "delegate_to_agent"]
 
 # MCP servers - external Model Context Protocol tool servers exposed to this
-# agent. Each [[mcp_servers]] entry becomes a Pydantic AI toolset that Vikram
-# starts and stops automatically per run. Reference secrets as ${ENV_VAR};
-# never inline them. Uncomment and adapt:
+# agent. Each [[mcp_servers]] entry becomes a Strands MCP client provider.
+# Reference secrets as ${ENV_VAR}; never inline them. Uncomment and adapt:
 #
 # [[mcp_servers]]
 # name = "fetch"                # stable id, used for errors and as the toolset id
@@ -55,7 +54,7 @@ tools = ["web_search", "delegate_to_agent"]
 # transport = "python"
 # entrypoint = "myhooks.notify:on_stop"   # "module:function"
 
-# Model knobs - passed verbatim to pydantic_ai ModelSettings.
+# Model knobs - mapped best-effort into Strands provider parameters.
 [model_settings]
 temperature = 0.3                  # Sampling randomness. 0.0 = deterministic, ~1.0 = creative. Lower for assistants, higher for brainstorming.
 # top_p = 0.95                     # Nucleus sampling cutoff (0–1). Alternative to temperature; usually leave at default.

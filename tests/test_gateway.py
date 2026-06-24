@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,60 @@ def test_thread_store_persists_thread_agent_and_history(tmp_path):
 
     assert reset.agent_name == "alfred"
     assert reset.message_history_json is None
+
+
+def test_thread_store_clears_legacy_histories_once(tmp_path):
+    db_path = tmp_path / "vikram.sqlite3"
+    now = "2026-01-01T00:00:00+00:00"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE threads (
+                interface TEXT NOT NULL,
+                external_thread_id TEXT NOT NULL,
+                agent_name TEXT NOT NULL,
+                message_history_json BLOB,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (interface, external_thread_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO threads (
+                interface,
+                external_thread_id,
+                agent_name,
+                message_history_json,
+                created_at,
+                updated_at
+            )
+            VALUES ('telegram', '123', 'vikram', ?, ?, ?)
+            """,
+            (b'["pydantic-history"]', now, now),
+        )
+
+    store = ThreadStore(db_path)
+    assert (
+        store.get_thread("telegram", "123", default_agent="vikram").message_history_json
+        is None
+    )
+
+    store.set_history(
+        "telegram",
+        "123",
+        agent_name="vikram",
+        message_history_json=b'["strands-history"]',
+    )
+
+    reopened = ThreadStore(db_path)
+    assert (
+        reopened.get_thread(
+            "telegram", "123", default_agent="vikram"
+        ).message_history_json
+        == b'["strands-history"]'
+    )
 
 
 def test_thread_store_claims_telegram_updates_once(tmp_path):

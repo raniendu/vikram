@@ -5,7 +5,6 @@ from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent
 
 from vikram.agent import build_agent
 from vikram.dbos_gateway import EventDispatcher, launch_dbos, shutdown_dbos
@@ -42,7 +41,7 @@ class EnqueueResponse(BaseModel):
 
 
 _settings: VikramSettings | None = None
-_agents: dict[str, Agent[None, str]] = {}
+_agents: dict[str, Any] = {}
 _store: ThreadStore | None = None
 _dispatcher: EventDispatcher | None = None
 _telegram_config: TelegramConfig | None = None
@@ -63,7 +62,7 @@ def _load_http_spec(name: str):
     return spec
 
 
-def _get_agent(name: str) -> Agent[None, str]:
+def _get_agent(name: str) -> Any:
     if name not in _agents:
         settings = _get_settings()
         spec = _load_http_spec(name)

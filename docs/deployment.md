@@ -59,7 +59,7 @@ VIKRAM_TELEGRAM_BOT_USERNAME=VikramBot
 Logs are structured JSON on stdout. Chat and thread IDs are hashed and prompt
 content is not logged by default.
 
-OpenLIT tracing is opt-in:
+Strands/OpenTelemetry tracing is opt-in:
 
 ```env
 VIKRAM_OBSERVABILITY_ENABLED=true

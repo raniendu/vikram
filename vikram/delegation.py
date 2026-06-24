@@ -2,11 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pydantic_ai import Tool
-
 from vikram.settings import VikramSettings
 from vikram.spec import AgentSpec, AgentSurfaceError, ensure_surface_allowed, load_spec
-from vikram.tools import ToolEntry
+from vikram.tools import ToolEntry, VikramTool
 
 DELEGATE_TOOL_NAME = "delegate_to_agent"
 
@@ -145,9 +143,8 @@ def make_delegate_to_agent_tool(
             result = await subagent.run(
                 prompt,
                 conversation_id=f"delegate:{orchestrator_name}:{requested_name}",
-                capabilities=_delegated_capabilities(),
             )
-        except DelegatedApprovalRequired as exc:
+        except (DelegatedApprovalRequired, RuntimeError) as exc:
             return (
                 f"Subagent {target_spec.name} stopped because it {exc}. "
                 "Run that agent directly when the task needs approval-gated "
@@ -155,33 +152,8 @@ def make_delegate_to_agent_tool(
             )
         return f"Subagent {target_spec.name} completed.\n\n{result.output}"
 
-    return Tool(
+    return VikramTool(
+        DELEGATE_TOOL_NAME,
         delegate_to_agent,
-        name=DELEGATE_TOOL_NAME,
         requires_approval=requires_approval,
-        sequential=True,
     )
-
-
-async def _fail_delegated_tool_requests(ctx, requests):
-    approval_tools = [_tool_call_name(call) for call in requests.approvals]
-    deferred_tools = [_tool_call_name(call) for call in requests.calls]
-    requested_tools = [*approval_tools, *deferred_tools]
-    if requested_tools:
-        names = ", ".join(requested_tools)
-        raise DelegatedApprovalRequired(f"requested approval-gated tool calls: {names}")
-    return requests.build_results(approvals={}, calls={})
-
-
-def _tool_call_name(call) -> str:
-    return (
-        getattr(call, "tool_name", None)
-        or getattr(call, "tool_call_id", None)
-        or "unknown"
-    )
-
-
-def _delegated_capabilities():
-    from pydantic_ai.capabilities import HandleDeferredToolCalls
-
-    return [HandleDeferredToolCalls(handler=_fail_delegated_tool_requests)]
