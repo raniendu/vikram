@@ -158,8 +158,8 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     if args.once:
         from prompt_toolkit import PromptSession
-        from rich.console import Console
         from pydantic_ai.capabilities import HandleDeferredToolCalls
+        from rich.console import Console
 
         session = PromptSession()
         console = Console()
@@ -218,14 +218,19 @@ async def run_interactive(
     console = Console()
     messages: list[ModelMessage] = []
     multiline = False
-    auto_suggest = CustomAutoSuggest(["/markdown", "/multiline", "/exit", "/cp"])
+    auto_suggest = CustomAutoSuggest(
+        ["/help", "/clear", "/markdown", "/multiline", "/cp", "/exit"]
+    )
     context_percent = 0
+    context_warned = False
 
     async with contextlib.AsyncExitStack() as stack:
         # Enter the agent once when MCP servers are configured so they stay
         # connected for the whole session instead of restarting every turn.
         if keep_servers_warm:
             await stack.enter_async_context(agent)
+
+        _print_banner(console, prog_name, settings)
 
         while True:
             try:
@@ -245,6 +250,15 @@ async def run_interactive(
 
             ident_prompt = text.lower().strip().replace(" ", "-")
             if ident_prompt.startswith("/"):
+                if ident_prompt in {"/help", "/?", "/h"}:
+                    _print_help(console)
+                    continue
+                if ident_prompt in {"/clear", "/reset"}:
+                    messages = []
+                    context_percent = 0
+                    context_warned = False
+                    console.print("[dim]Conversation history cleared.[/dim]\n")
+                    continue
                 exit_value, multiline = handle_slash_command(
                     ident_prompt, messages, multiline, console, CODE_THEME
                 )
@@ -264,10 +278,84 @@ async def run_interactive(
                 )
                 if percent is not None:
                     context_percent = percent
+                    context_warned = _maybe_warn_context(
+                        console, context_percent, context_warned, settings
+                    )
             except KeyboardInterrupt:
                 console.print("[dim]Interrupted[/dim]")
             except Exception as exc:  # pragma: no cover - surface anything to user
                 console.print(f"\n[red]{type(exc).__name__}[/red]: {exc}")
+
+
+def _print_banner(
+    console: "Console", prog_name: str, settings: "VikramSettings" | None
+) -> None:
+    model = getattr(settings, "model", None) if settings is not None else None
+    provider = (
+        getattr(settings, "model_provider", None) if settings is not None else None
+    )
+    if model and provider:
+        console.print(
+            f"[bold cyan]{prog_name}[/bold cyan] [dim]·[/dim] "
+            f"{model} [dim]({provider})[/dim]",
+            highlight=False,
+        )
+    else:
+        console.print(f"[bold cyan]{prog_name}[/bold cyan]", highlight=False)
+    console.print(
+        "[dim]Type [/dim][cyan]/help[/cyan][dim] for commands · "
+        "[/dim][cyan]/exit[/cyan][dim] or Ctrl-D to quit[/dim]\n",
+        highlight=False,
+    )
+
+
+def _print_help(console: "Console") -> None:
+    from rich.table import Table
+
+    table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
+    table.add_column(style="cyan", no_wrap=True)
+    table.add_column(style="dim")
+    commands = [
+        ("/help", "Show this help (also /? or /h)"),
+        ("/clear", "Clear conversation history (also /reset)"),
+        ("/markdown", "Show the last response as raw Markdown"),
+        ("/multiline", "Toggle multiline input (Esc then Enter to send)"),
+        ("/cp", "Copy the last response to the clipboard"),
+        ("/exit", "Quit the session (also Ctrl-D)"),
+    ]
+    for name, description in commands:
+        table.add_row(name, description)
+    console.print(table)
+    console.print()
+
+
+def _maybe_warn_context(
+    console: "Console",
+    percent: int,
+    already_warned: bool,
+    settings: "VikramSettings" | None,
+) -> bool:
+    """Warn once when context usage crosses ``context_warning_ratio``.
+
+    Returns the new warned state: ``True`` while usage stays above the
+    threshold, ``False`` once it drops back below so a later crossing warns
+    again (e.g. after ``/clear``).
+    """
+    if settings is None or settings.context_window_tokens <= 0:
+        return already_warned
+    warning_ratio = settings.context_warning_ratio
+    if warning_ratio <= 0:
+        return already_warned
+    threshold = round(warning_ratio * 100)
+    if percent < threshold:
+        return False
+    if not already_warned:
+        console.print(
+            f"[yellow]⚠ Context window {percent}% full — use /clear or /reset "
+            "to start fresh.[/yellow]\n",
+            highlight=False,
+        )
+    return True
 
 
 async def _render_turn(
@@ -381,6 +469,16 @@ async def _render_model_request(
     text_live: Live | None = None
     text_live_index: int | None = None
 
+    status = console.status("[dim]Thinking…[/dim]", spinner="dots")
+    status.start()
+    status_active = True
+
+    def _stop_status() -> None:
+        nonlocal status_active
+        if status_active:
+            status.stop()
+            status_active = False
+
     def _stop_text_live() -> None:
         nonlocal text_live, text_live_index
         if text_live is not None:
@@ -399,6 +497,7 @@ async def _render_model_request(
 
     try:
         async for event in stream:
+            _stop_status()
             if isinstance(event, PartStartEvent):
                 idx = event.index
                 kind = event.part.part_kind
@@ -444,6 +543,7 @@ async def _render_model_request(
                 elif kind == "text" and text_live_index == idx:
                     _stop_text_live()
     finally:
+        _stop_status()
         _stop_text_live()
         # Some streams may not emit PartEndEvent for thinking parts; flush remaining.
         if not quiet:
@@ -500,7 +600,7 @@ def _format_call_args(part: Any) -> str:
         return _truncate(str(getattr(part, "args", "")) or "")
     if not args:
         return ""
-    return ", ".join(f"{k}={_repr_value(v)}" for k, v in args.items())
+    return ", ".join(f"{k}={_truncate(_repr_value(v), 120)}" for k, v in args.items())
 
 
 def _repr_value(value: Any) -> str:
