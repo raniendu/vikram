@@ -396,18 +396,24 @@ async def _render_turn(
             status_active = False
 
     try:
+        response_needs_newline = False
         stream = _stream_agent(agent, prompt, messages)
         async for event in stream:
             if isinstance(event, dict) and "vikram_result" in event:
                 result = event["vikram_result"]
                 continue
             _stop_status()
-            await _render_stream_event(
+            needs_newline = await _render_stream_event(
                 event,
                 console,
                 quiet=quiet,
                 tool_timers=tool_timers,
             )
+            if needs_newline is not None:
+                response_needs_newline = needs_newline
+
+        if response_needs_newline:
+            console.print()
 
         if result is None:
             result = await agent.run(prompt, message_history=messages)
@@ -442,21 +448,26 @@ async def _render_stream_event(
     *,
     quiet: bool,
     tool_timers: dict[str, float],
-) -> None:
+) -> bool | None:
     import time
 
     if not isinstance(event, dict):
-        return
+        return None
+
+    response_needs_newline: bool | None = None
 
     reasoning = event.get("reasoningText")
     if reasoning and not quiet:
         console.print("[dim]· thinking:[/dim]")
         for line in str(reasoning).splitlines():
             console.print(f"  [dim]{line}[/dim]")
+        response_needs_newline = False
 
     data = event.get("data")
     if data:
-        console.print(str(data), end="")
+        text = str(data)
+        console.print(text, end="")
+        response_needs_newline = not text.endswith("\n")
 
     tool_use = _tool_use_from_event(event)
     if tool_use is not None:
@@ -467,6 +478,7 @@ async def _render_stream_event(
             name = str(tool_use.get("name") or "?")
             args_repr = _format_call_args(tool_use)
             console.print(f"\n[cyan]→ {name}({args_repr})[/cyan]")
+            response_needs_newline = False
 
     for tool_result in _tool_results_from_event(event):
         if quiet:
@@ -483,6 +495,9 @@ async def _render_stream_event(
             for line in body.splitlines():
                 console.print(f"  [dim]{line}[/dim]")
         console.print()
+        response_needs_newline = False
+
+    return response_needs_newline
 
 
 def _handle_slash_command(
