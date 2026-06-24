@@ -22,6 +22,30 @@ CODE_THEME = "monokai"
 HISTORY_PATH = Path.home() / ".vikram" / "cli_history"
 
 
+class _CommandAutoSuggest:
+    """Auto-suggest slash commands, falling back to history.
+
+    Replaces the dependency on ``pydantic_ai._cli.CustomAutoSuggest`` so the
+    interactive prompt can still complete ``/help``, ``/clear`` and friends.
+    """
+
+    def __init__(self, commands: list[str]) -> None:
+        from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+
+        self._commands = commands
+        self._history = AutoSuggestFromHistory()
+
+    def get_suggestion(self, buffer: Any, document: Any) -> Any:
+        from prompt_toolkit.auto_suggest import Suggestion
+
+        text = document.text_before_cursor.strip()
+        if text:
+            for command in self._commands:
+                if command.startswith(text) and command != text:
+                    return Suggestion(command[len(text) :])
+        return self._history.get_suggestion(buffer, document)
+
+
 def _version_string() -> str:
     from vikram import __version__
     from vikram.update import load_metadata
@@ -200,14 +224,19 @@ async def run_interactive(
     console = Console()
     messages: list[Any] = []
     multiline = False
-    auto_suggest = None
+    auto_suggest = _CommandAutoSuggest(
+        ["/help", "/clear", "/markdown", "/multiline", "/exit"]
+    )
     context_percent = 0
+    context_warned = False
 
     async with contextlib.AsyncExitStack() as stack:
         # Enter the agent once when MCP servers are configured so they stay
         # connected for the whole session instead of restarting every turn.
         if keep_servers_warm and hasattr(agent, "__aenter__"):
             await stack.enter_async_context(agent)
+
+        _print_banner(console, prog_name, settings)
 
         while True:
             try:
@@ -227,6 +256,15 @@ async def run_interactive(
 
             ident_prompt = text.lower().strip().replace(" ", "-")
             if ident_prompt.startswith("/"):
+                if ident_prompt in {"/help", "/?", "/h"}:
+                    _print_help(console)
+                    continue
+                if ident_prompt in {"/clear", "/reset"}:
+                    messages = []
+                    context_percent = 0
+                    context_warned = False
+                    console.print("[dim]Conversation history cleared.[/dim]\n")
+                    continue
                 should_exit, multiline = _handle_slash_command(
                     ident_prompt, messages, multiline, console
                 )
@@ -245,10 +283,83 @@ async def run_interactive(
                 )
                 if percent is not None:
                     context_percent = percent
+                    context_warned = _maybe_warn_context(
+                        console, context_percent, context_warned, settings
+                    )
             except KeyboardInterrupt:
                 console.print("[dim]Interrupted[/dim]")
             except Exception as exc:  # pragma: no cover - surface anything to user
                 console.print(f"\n[red]{type(exc).__name__}[/red]: {exc}")
+
+
+def _print_banner(
+    console: "Console", prog_name: str, settings: "VikramSettings" | None
+) -> None:
+    model = getattr(settings, "model", None) if settings is not None else None
+    provider = (
+        getattr(settings, "model_provider", None) if settings is not None else None
+    )
+    if model and provider:
+        console.print(
+            f"[bold cyan]{prog_name}[/bold cyan] [dim]·[/dim] "
+            f"{model} [dim]({provider})[/dim]",
+            highlight=False,
+        )
+    else:
+        console.print(f"[bold cyan]{prog_name}[/bold cyan]", highlight=False)
+    console.print(
+        "[dim]Type [/dim][cyan]/help[/cyan][dim] for commands · "
+        "[/dim][cyan]/exit[/cyan][dim] or Ctrl-D to quit[/dim]\n",
+        highlight=False,
+    )
+
+
+def _print_help(console: "Console") -> None:
+    from rich.table import Table
+
+    table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
+    table.add_column(style="cyan", no_wrap=True)
+    table.add_column(style="dim")
+    commands = [
+        ("/help", "Show this help (also /? or /h)"),
+        ("/clear", "Clear conversation history (also /reset)"),
+        ("/multiline", "Toggle multiline input (Esc then Enter to send)"),
+        ("/markdown", "Show the raw message history as Markdown"),
+        ("/exit", "Quit the session (also /quit, /q, Ctrl-D)"),
+    ]
+    for name, description in commands:
+        table.add_row(name, description)
+    console.print(table)
+    console.print()
+
+
+def _maybe_warn_context(
+    console: "Console",
+    percent: int,
+    already_warned: bool,
+    settings: "VikramSettings" | None,
+) -> bool:
+    """Warn once when context usage crosses ``context_warning_ratio``.
+
+    Returns the new warned state: ``True`` while usage stays above the
+    threshold, ``False`` once it drops back below so a later crossing warns
+    again (e.g. after ``/clear``).
+    """
+    if settings is None or settings.context_window_tokens <= 0:
+        return already_warned
+    warning_ratio = settings.context_warning_ratio
+    if warning_ratio <= 0:
+        return already_warned
+    threshold = round(warning_ratio * 100)
+    if percent < threshold:
+        return False
+    if not already_warned:
+        console.print(
+            f"[yellow]⚠ Context window {percent}% full — use /clear or /reset "
+            "to start fresh.[/yellow]\n",
+            highlight=False,
+        )
+    return True
 
 
 async def _render_turn(
@@ -262,20 +373,43 @@ async def _render_turn(
 ) -> tuple[list[Any], int | None]:
     tool_timers: dict[str, float] = {}
     result = None
-    stream = _stream_agent(agent, prompt, messages)
-    async for event in stream:
-        if isinstance(event, dict) and "vikram_result" in event:
-            result = event["vikram_result"]
-            continue
-        await _render_stream_event(
-            event,
-            console,
-            quiet=quiet,
-            tool_timers=tool_timers,
-        )
 
-    if result is None:
-        result = await agent.run(prompt, message_history=messages)
+    # Show a spinner while waiting for the model so the screen is not blank
+    # during first-token latency. console.status is only available on a real
+    # rich Console, so guard for the lightweight consoles used in tests.
+    status = (
+        console.status("[dim]Thinking…[/dim]", spinner="dots")
+        if hasattr(console, "status")
+        else None
+    )
+    if status is not None:
+        status.start()
+    status_active = status is not None
+
+    def _stop_status() -> None:
+        nonlocal status_active
+        if status_active and status is not None:
+            status.stop()
+            status_active = False
+
+    try:
+        stream = _stream_agent(agent, prompt, messages)
+        async for event in stream:
+            if isinstance(event, dict) and "vikram_result" in event:
+                result = event["vikram_result"]
+                continue
+            _stop_status()
+            await _render_stream_event(
+                event,
+                console,
+                quiet=quiet,
+                tool_timers=tool_timers,
+            )
+
+        if result is None:
+            result = await agent.run(prompt, message_history=messages)
+    finally:
+        _stop_status()
 
     percent = _context_percent(result, settings)
     all_messages = getattr(result, "all_messages", None)
@@ -396,7 +530,9 @@ def _format_call_args(part: Any) -> str:
             return _truncate(str(args))
         if not args:
             return ""
-        return ", ".join(f"{k}={_repr_value(v)}" for k, v in args.items())
+        return ", ".join(
+            f"{k}={_truncate(_repr_value(v), 120)}" for k, v in args.items()
+        )
     try:
         args = part.args_as_dict()
     except Exception:

@@ -360,3 +360,103 @@ async def test_run_interactive_prompts_with_context_usage(monkeypatch, tmp_path)
     assert len(prompts_requested) == 2
     assert prompts_requested[0] == "DemoAgent (0%) ➤ "
     assert prompts_requested[1] == "DemoAgent (20%) ➤ "
+
+
+class _CapturingConsole:
+    def __init__(self):
+        self.messages = []
+
+    def print(self, *args, **kwargs):
+        self.messages.append(args[0] if args else "")
+
+
+def test_format_call_args_truncates_long_values():
+    from vikram.cli import _format_call_args
+
+    tool_use = {
+        "name": "write_file",
+        "input": {"path": "notes.txt", "content": "x" * 500},
+    }
+
+    rendered = _format_call_args(tool_use)
+
+    assert rendered.startswith('path="notes.txt", content=')
+    assert "…" in rendered
+    # The 500-char content must not be dumped in full onto the tool-call line.
+    assert len(rendered) < 200
+
+
+def test_maybe_warn_context_warns_once_then_resets():
+    from vikram.cli import _maybe_warn_context
+    from vikram.settings import VikramSettings
+
+    settings = VikramSettings(
+        _env_file=None,
+        VIKRAM_CONTEXT_WINDOW_TOKENS=1000,
+        VIKRAM_CONTEXT_WARNING_RATIO=0.8,
+    )
+    console = _CapturingConsole()
+
+    # First crossing warns.
+    warned = _maybe_warn_context(console, 85, False, settings)
+    assert warned is True
+    assert len(console.messages) == 1
+
+    # Staying above the threshold does not repeat the warning.
+    warned = _maybe_warn_context(console, 90, warned, settings)
+    assert warned is True
+    assert len(console.messages) == 1
+
+    # Dropping below resets the warned state (e.g. after /clear).
+    warned = _maybe_warn_context(console, 50, warned, settings)
+    assert warned is False
+    assert len(console.messages) == 1
+
+    # A later crossing warns again.
+    warned = _maybe_warn_context(console, 88, warned, settings)
+    assert warned is True
+    assert len(console.messages) == 2
+
+
+def test_maybe_warn_context_noop_without_settings():
+    from vikram.cli import _maybe_warn_context
+
+    console = _CapturingConsole()
+
+    assert _maybe_warn_context(console, 99, False, None) is False
+    assert console.messages == []
+
+
+def test_print_help_lists_all_commands():
+    import io
+
+    from rich.console import Console
+
+    from vikram.cli import _print_help
+
+    buffer = io.StringIO()
+    _print_help(Console(file=buffer, width=100, force_terminal=False))
+    output = buffer.getvalue()
+
+    for command in ("/help", "/clear", "/markdown", "/multiline", "/exit"):
+        assert command in output
+
+
+def test_print_banner_includes_model_and_provider():
+    import io
+
+    from rich.console import Console
+
+    from vikram.cli import _print_banner
+
+    settings = SimpleNamespace(model="llama3.2", model_provider="ollama")
+    buffer = io.StringIO()
+    _print_banner(
+        Console(file=buffer, width=100, force_terminal=False), "Vikram", settings
+    )
+    output = buffer.getvalue()
+
+    assert "Vikram" in output
+    assert "llama3.2" in output
+    assert "ollama" in output
+    assert "/help" in output
