@@ -29,6 +29,20 @@ def test_cli_file_execution_shows_help():
     assert "vikram configure" in result.stdout
 
 
+@pytest.mark.asyncio
+async def test_command_auto_suggest_supports_prompt_toolkit_async_protocol():
+    from prompt_toolkit.document import Document
+
+    from vikram.cli import _CommandAutoSuggest
+
+    suggestion = await _CommandAutoSuggest(["/help"]).get_suggestion_async(
+        None, Document("/he")
+    )
+
+    assert suggestion is not None
+    assert suggestion.text == "lp"
+
+
 class FakeSettings:
     default_agent = "vikram"
     spec_root = APP_ROOT / "spec"
