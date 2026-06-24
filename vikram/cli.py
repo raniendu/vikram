@@ -45,6 +45,9 @@ class _CommandAutoSuggest:
                     return Suggestion(command[len(text) :])
         return self._history.get_suggestion(buffer, document)
 
+    async def get_suggestion_async(self, buffer: Any, document: Any) -> Any:
+        return self.get_suggestion(buffer, document)
+
 
 def _version_string() -> str:
     from vikram import __version__
