@@ -310,6 +310,43 @@ async def test_cli_render_turn_returns_context_percentage():
 
 
 @pytest.mark.asyncio
+async def test_cli_render_turn_newlines_after_streamed_response():
+    from vikram.cli import _render_turn
+
+    class FakeResult:
+        def all_messages(self):
+            return []
+
+        def usage(self):
+            return None
+
+    class FakeAgent:
+        async def stream_events(self, prompt, *, message_history):
+            yield {"data": "final answer"}
+            yield {"vikram_result": FakeResult()}
+
+    class BufferConsole:
+        def __init__(self):
+            self.output = ""
+
+        def print(self, *args, **kwargs):
+            text = str(args[0]) if args else ""
+            self.output += text + kwargs.get("end", "\n")
+
+    console = BufferConsole()
+
+    await _render_turn(
+        FakeAgent(),
+        "test prompt",
+        [],
+        console,
+        quiet=False,
+    )
+
+    assert console.output == "final answer\n"
+
+
+@pytest.mark.asyncio
 async def test_run_interactive_prompts_with_context_usage(monkeypatch, tmp_path):
     import prompt_toolkit
     import prompt_toolkit.history
