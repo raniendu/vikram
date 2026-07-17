@@ -1,6 +1,6 @@
 # Vikram
 
-Vikram is a public, standalone agent runtime built on AWS Strands. It keeps
+Vikram is a public, standalone agent runtime built on Pydantic AI. It keeps
 agent behavior in versioned specs under `spec/`, exposes the same agents through
 CLI, HTTP, threaded queues, Telegram webhooks, and ACP, and ships safe local
 coding tools for the CLI-only `coder` agent.
@@ -25,7 +25,7 @@ coding tools for the CLI-only `coder` agent.
   (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`) to observe, augment,
   or block what the agent does, via `[[hooks]]`.
 - Runtime state: local SQLite for thread history and DBOS workflow state.
-- Observability: structured JSON logs and optional Strands/OpenTelemetry traces.
+- Observability: structured JSON logs and optional OpenLIT/OpenTelemetry traces.
 
 ## Quick Start
 
@@ -70,10 +70,32 @@ VIKRAM_MODEL=gpt-4.1-mini
 uv run vikram configure
 uv run vikram
 uv run vikram --agent coder
+uv run vikram exec --agent coder "summarize this repo"
+git diff | uv run vikram exec "review this patch"
+uv run vikram exec -C ../another-repo -m <model-tag> "run the tests"
+uv run vikram exec "write release notes" -o release-notes.md
+uv run vikram doctor --agent coder
 uv run vikram --once --prompt "summarize this repo"
 uv run vikram --once --prompt @prompt.txt --json
 vikram update --check
 ```
+
+`vikram exec [PROMPT]` is the preferred non-interactive interface. When the
+positional prompt is omitted it reads stdin. When both are present, stdin is
+added as context for the positional instruction. `-C/--cd` selects the working
+directory before configuration and specs are loaded, `-m/--model` overrides the
+model for that run, and `-o/--output-last-message` also saves the final reply to
+a file. The older `--once --prompt` form remains supported for existing scripts.
+
+Interactive sessions support `/status` for the active agent, model, directory,
+and context usage, `/diff` to inspect the working tree, `/copy` to copy the last
+reply, and `/new` to start a fresh conversation without exiting. Run
+`vikram doctor` when setup or agent loading is not behaving as expected; it
+checks configuration, specs, model selection, credentials without printing
+their values, command policy, Python, and the current Git workspace.
+
+The CLI UX research and implementation rationale are documented in
+[docs/cli_ux_research.md](docs/cli_ux_research.md).
 
 The `coder` agent is CLI-only. It can read/search files, request approval for
 edits, and run commands through `spec/shared/command_policy.toml`. CLI-only
@@ -95,7 +117,7 @@ Agents can be extended in two declarative ways, both configured in
 for the full reference.
 
 - **MCP servers** add external tools. Each `[[mcp_servers]]` entry becomes a
-  Strands MCP client provider that Vikram attaches to the agent runtime.
+  Pydantic AI MCP toolset that Vikram attaches to the agent runtime.
   Secrets are referenced as `${ENV_VAR}` so specs stay safe to commit:
 
   ```toml

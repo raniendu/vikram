@@ -1,6 +1,6 @@
 # Current Architecture
 
-Vikram is a standalone Python app built around spec-defined Strands agents.
+Vikram is a standalone Python app built around spec-defined Pydantic AI agents.
 
 ```mermaid
 flowchart LR
@@ -25,11 +25,12 @@ flowchart LR
 | --- | --- |
 | `vikram/settings.py` | Env configuration and model provider setup |
 | `vikram/spec.py` | Loads TOML agent specs and assembles instructions |
-| `vikram/agent.py` | Builds Strands agents from specs, settings, tools, MCP servers, skills, and hooks |
+| `vikram/agent.py` | Builds Pydantic AI agents from specs, settings, tools, MCP servers, skills, and hooks |
 | `vikram/mcp.py` | Declarative MCP server specs and toolset construction |
 | `vikram/skills.py` | Agent Skills discovery, instructions, and the `load_skill` tool |
-| `vikram/hooks.py` | Declarative lifecycle hooks compiled into Strands prompt/tool/stop callbacks |
+| `vikram/hooks.py` | Declarative lifecycle hooks compiled into Pydantic AI toolset and run wrappers |
 | `vikram/cli.py` | Interactive and one-shot CLI |
+| `vikram/doctor.py` | Read-only CLI setup and workspace diagnostics |
 | `vikram/acp.py` | ACP adapter for local editor integration |
 | `vikram/api.py` | FastAPI routes and app lifespan |
 | `vikram/gateway.py` | SQLite thread store and conversation service |
@@ -67,14 +68,15 @@ and `[[hooks]]` to observe, augment, or block lifecycle events. See
 [mcp_and_skills.md](mcp_and_skills.md) and [hooks.md](hooks.md) for the
 references.
 
-## Strands Runtime Notes
+## Pydantic AI Runtime Notes
 
-- Existing Pydantic AI thread histories are cleared once on first Strands
-  startup and the SQLite DB is marked `strands-v1`.
-- Strands default concurrent tool execution is used; Vikram does not recreate
-  Pydantic AI's previous per-tool sequential behavior.
-- Approval-gated tools use Strands `HumanInTheLoop` semantics. CLI prompts use
-  Strands stdio approval, and ACP maps HITL prompts to editor permissions.
-- MCP lifecycle is Strands-managed through `MCPClient` providers.
-- Observability uses Strands/OpenTelemetry traces and metrics plus Vikram's
-  structured application logs.
+- Incompatible Strands thread histories are cleared once on first Pydantic AI
+  startup and the SQLite DB is marked `pydantic-ai-v2`.
+- File writes, edits, command execution, and CLI delegation are sequential;
+  the coder spec also disables parallel tool calls at the model level.
+- Approval-gated tools use Pydantic AI deferred-tool handlers. CLI prompts ask
+  on stdio, `--approve-all` approves all calls, and ACP maps requests to editor
+  permissions. Command policy can require approval dynamically per command.
+- Pydantic AI manages MCP toolset lifecycle per run; the interactive CLI keeps
+  configured servers warm for the session.
+- Observability uses OpenLIT/OpenTelemetry plus Vikram's structured logs.

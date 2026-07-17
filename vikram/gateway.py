@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 import time
 from collections.abc import Awaitable, Callable
@@ -10,6 +9,9 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from cloudevents.v1.http.event import CloudEvent
+from pydantic import ValidationError
+from pydantic_ai import ModelMessagesTypeAdapter
+from pydantic_ai.messages import ModelMessage
 
 from vikram.agent import build_agent
 from vikram.logging import get_logger, safe_metadata, thread_hash
@@ -17,7 +19,7 @@ from vikram.settings import VikramSettings
 from vikram.spec import ensure_surface_allowed, load_spec
 
 logger = get_logger(__name__)
-RUNTIME_HISTORY_VERSION = "strands-v1"
+RUNTIME_HISTORY_VERSION = "pydantic-ai-v2"
 
 
 @dataclass(frozen=True)
@@ -437,15 +439,14 @@ def inbound_message_from_event(event: CloudEvent) -> InboundMessage:
     )
 
 
-def _load_history(message_history_json: bytes | None) -> list[Any]:
+def _load_history(message_history_json: bytes | None) -> list[ModelMessage]:
     if not message_history_json:
         return []
     try:
-        value = json.loads(message_history_json.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        logger.warning("thread_history_unreadable_after_strands_cutover")
+        return ModelMessagesTypeAdapter.validate_json(message_history_json)
+    except (ValidationError, UnicodeDecodeError, ValueError):
+        logger.warning("thread_history_unreadable_after_runtime_cutover")
         return []
-    return value if isinstance(value, list) else []
 
 
 def _messages_json(result: Any) -> bytes:
@@ -457,7 +458,7 @@ def _messages_json(result: Any) -> bytes:
         messages = all_messages()
     else:
         messages = getattr(result, "messages", [])
-    return json.dumps(messages, default=str).encode("utf-8")
+    return ModelMessagesTypeAdapter.dump_json(messages)
 
 
 def _context_usage_warning(result: Any, settings: VikramSettings) -> str | None:

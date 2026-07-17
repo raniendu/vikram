@@ -1,15 +1,33 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
-from collections.abc import AsyncIterator
-from dataclasses import dataclass
-from types import SimpleNamespace
+import os
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
-from strands import Agent, tool
-from strands.hooks import AfterToolCallEvent, BeforeToolCallEvent
-from strands.vended_interventions.hitl import HumanInTheLoop
+from pydantic_ai import (
+    Agent,
+    AgentRunResultEvent,
+    DeferredToolRequests,
+    DeferredToolResults,
+    RunContext,
+    Tool,
+    ToolDenied,
+)
+from pydantic_ai.capabilities import HandleDeferredToolCalls
+from pydantic_ai.messages import (
+    FunctionToolCallEvent,
+    FunctionToolResultEvent,
+    PartDeltaEvent,
+    PartStartEvent,
+    TextPart,
+    TextPartDelta,
+    ThinkingPart,
+    ThinkingPartDelta,
+)
+from pydantic_ai.toolsets import CombinedToolset, FunctionToolset
 
 from vikram.context import agent_identity, current_datetime
 from vikram.delegation import (
@@ -17,66 +35,58 @@ from vikram.delegation import (
     make_delegate_to_agent_tool,
     subagent_instructions,
 )
-from vikram.hooks import HookBlockedError, HookSet, build_hooks, run_hooks
+from vikram.hooks import HookBlockedError, HookSet, HookToolset, build_hooks, run_hooks
 from vikram.mcp import VikramMCPClient, build_mcp_servers
 from vikram.settings import VikramModel, VikramSettings, build_model
 from vikram.skills import discover_skills, make_load_skill_tool, skills_instructions
 from vikram.spec import AgentSpec, load_spec
-from vikram.tools import TOOL_REGISTRY, ToolEntry, VikramTool, set_command_policy
+from vikram.tools import TOOL_REGISTRY, ToolEntry, set_command_policy
 
 
 class AgentToolError(RuntimeError):
     """Raised when an agent spec references tools unavailable to this package."""
 
 
-@dataclass
-class VikramRunResult:
-    output: str
-    messages: list[Any]
-    input_tokens: int = 0
-
-    def all_messages(self) -> list[Any]:
-        return self.messages
-
-    def all_messages_json(self) -> bytes:
-        return json.dumps(self.messages, default=str).encode("utf-8")
-
-    def usage(self) -> Any:
-        return SimpleNamespace(input_tokens=self.input_tokens)
+ApprovalAsk = Callable[[str], str | Awaitable[str]]
 
 
 class VikramAgent:
-    """Small compatibility wrapper around a Strands agent."""
+    """Stable Vikram interface backed by a Pydantic AI agent."""
 
-    runtime = "strands"
+    runtime = "pydantic-ai"
 
     def __init__(
         self,
         *,
-        raw_agent: Agent,
-        agent_kwargs: dict[str, Any],
+        raw_agent: Agent[None, str],
         name: str,
         description: str,
         model: VikramModel,
         system_prompt: str,
-        tools: list[VikramTool],
+        tools: list[ToolEntry],
         mcp_clients: list[VikramMCPClient],
         hooks: HookSet,
     ) -> None:
         self.raw_agent = raw_agent
-        self._agent_kwargs = agent_kwargs
         self.name = name
         self.description = description
         self.model = model.raw
         self.model_config = model.config
         self.system_prompt = system_prompt
         self.tools = tools
-        self.tool_names = [entry.name for entry in tools]
+        self.tool_names = [_tool_name(entry) for entry in tools]
         self.approval_tool_names = [
-            entry.name for entry in tools if entry.requires_approval
+            _tool_name(entry) for entry in tools if _requires_approval(entry)
         ]
         self.mcp_clients = mcp_clients
         self._hookset = hooks
+
+    async def __aenter__(self) -> VikramAgent:
+        await self.raw_agent.__aenter__()
+        return self
+
+    async def __aexit__(self, *args: Any) -> Any:
+        return await self.raw_agent.__aexit__(*args)
 
     async def run(
         self,
@@ -85,35 +95,18 @@ class VikramAgent:
         message_history: list[Any] | None = None,
         conversation_id: str | None = None,
         **kwargs: Any,
-    ) -> VikramRunResult:
+    ) -> Any:
         prompt = await self._apply_user_prompt_hooks(user_prompt)
-        agent = self._agent_for_run()
-        if message_history is not None:
-            agent.messages = list(message_history)
-        else:
-            agent.messages = []
-        result = await agent.invoke_async(
+        result = await self.raw_agent.run(
             prompt,
-            invocation_state={"conversation_id": conversation_id, **kwargs},
+            message_history=message_history,
+            conversation_id=conversation_id,
+            **kwargs,
         )
-        output = str(result)
-        if self._hookset.stop:
-            await run_hooks(
-                self._hookset.stop,
-                {
-                    "event": "Stop",
-                    "agent": self.name,
-                    "output": output,
-                    "cwd": _cwd(),
-                },
-            )
-        messages = list(getattr(agent, "messages", []) or [])
-        input_tokens = int(getattr(result, "context_size", None) or 0)
-        return VikramRunResult(
-            output=output, messages=messages, input_tokens=input_tokens
-        )
+        await self._run_stop_hooks(result)
+        return result
 
-    def run_sync(self, user_prompt: str, **kwargs: Any) -> VikramRunResult:
+    def run_sync(self, user_prompt: str, **kwargs: Any) -> Any:
         return asyncio.run(self.run(user_prompt, **kwargs))
 
     async def stream_events(
@@ -125,38 +118,24 @@ class VikramAgent:
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
         prompt = await self._apply_user_prompt_hooks(user_prompt)
-        agent = self._agent_for_run()
-        if message_history is not None:
-            agent.messages = list(message_history)
-        else:
-            agent.messages = []
-        chunks: list[str] = []
-        raw_result: Any | None = None
-        async for event in agent.stream_async(
+        result: Any | None = None
+        async with self.raw_agent.run_stream_events(
             prompt,
-            invocation_state={"conversation_id": conversation_id, **kwargs},
-        ):
-            if isinstance(event, dict) and "data" in event:
-                chunks.append(str(event["data"]))
-            if isinstance(event, dict) and "result" in event:
-                raw_result = event["result"]
-            yield event
-        output = str(raw_result) if raw_result is not None else "".join(chunks)
-        result = VikramRunResult(
-            output=output,
-            messages=list(getattr(agent, "messages", []) or []),
-            input_tokens=int(getattr(raw_result, "context_size", None) or 0),
-        )
-        if self._hookset.stop:
-            await run_hooks(
-                self._hookset.stop,
-                {
-                    "event": "Stop",
-                    "agent": self.name,
-                    "output": output,
-                    "cwd": _cwd(),
-                },
-            )
+            message_history=message_history,
+            conversation_id=conversation_id,
+            **kwargs,
+        ) as events:
+            async for event in events:
+                if isinstance(event, AgentRunResultEvent):
+                    result = event.result
+                    continue
+                mapped = _stream_event(event)
+                if mapped is not None:
+                    yield mapped
+
+        if result is None:  # Defensive: Pydantic AI documents a final result event.
+            raise RuntimeError("Pydantic AI stream ended without a final result.")
+        await self._run_stop_hooks(result)
         yield {"vikram_result": result}
 
     async def _apply_user_prompt_hooks(self, user_prompt: str) -> str:
@@ -168,7 +147,7 @@ class VikramAgent:
                 "event": "UserPromptSubmit",
                 "agent": self.name,
                 "prompt": user_prompt,
-                "cwd": _cwd(),
+                "cwd": os.getcwd(),
             },
         )
         if decision.blocked:
@@ -177,22 +156,18 @@ class VikramAgent:
             return f"{decision.context}\n\n{user_prompt}"
         return user_prompt
 
-    def _agent_for_run(self) -> Agent:
-        return Agent(
-            **{
-                **self._agent_kwargs,
-                "tools": [
-                    *self._agent_kwargs["tools"],
-                    *(client.raw for client in self.mcp_clients),
-                ],
-            }
+    async def _run_stop_hooks(self, result: Any) -> None:
+        if not self._hookset.stop:
+            return
+        await run_hooks(
+            self._hookset.stop,
+            {
+                "event": "Stop",
+                "agent": self.name,
+                "output": str(result.output),
+                "cwd": os.getcwd(),
+            },
         )
-
-
-def _cwd() -> str:
-    import os
-
-    return os.getcwd()
 
 
 def _resolve_tools(
@@ -239,7 +214,7 @@ def build_agent(
     surface: str = "cli",
     enable_delegation: bool = True,
     approve_all: bool = False,
-    approval_ask: Any | None = None,
+    approval_ask: ApprovalAsk | None = None,
 ) -> VikramAgent:
     settings = settings or VikramSettings()
     spec = spec or load_spec(settings.default_agent, settings.spec_root)
@@ -253,7 +228,7 @@ def build_agent(
     set_command_policy(spec.load_command_policy())
 
     skills = discover_skills(spec)
-    instructions: list[Any] = [spec.instructions, agent_identity(spec.name)]
+    instructions: list[str] = [spec.instructions, agent_identity(spec.name)]
     skills_block = skills_instructions(skills)
     if skills_block:
         instructions.append(skills_block)
@@ -267,7 +242,7 @@ def build_agent(
         if subagents_block:
             instructions.append(subagents_block)
     instructions.append(current_datetime())
-    system_prompt = "\n\n".join(str(item) for item in instructions if item)
+    system_prompt = "\n\n".join(item for item in instructions if item)
 
     model = build_model(
         settings,
@@ -276,27 +251,37 @@ def build_agent(
     )
     mcp_clients = build_mcp_servers(spec.mcp_servers)
     hooks = build_hooks(spec.hooks)
-    decorated_tools = [_to_strands_tool(entry) for entry in tools]
-    approval_tool_names = {entry.name for entry in tools if entry.requires_approval}
-    agent_kwargs = {
-        "model": model.raw,
-        "name": spec.name,
-        "description": spec.description,
-        "system_prompt": system_prompt,
-        "tools": decorated_tools,
-        "callback_handler": None,
-        "interventions": _approval_interventions(
-            approval_tool_names,
-            surface,
-            approve_all=approve_all,
-            approval_ask=approval_ask,
-        ),
-        "hooks": _strands_hook_callbacks(hooks, spec.name),
-    }
-    raw_agent = Agent(**agent_kwargs)
+
+    base_toolset = FunctionToolset(tools)
+    all_toolsets = [base_toolset, *(client.raw for client in mcp_clients)]
+    combined = CombinedToolset(all_toolsets)
+    toolset = (
+        HookToolset(combined, pre=hooks.pre, post=hooks.post, agent_name=spec.name)
+        if hooks.has_tool_hooks
+        else combined
+    )
+
+    capabilities = [
+        HandleDeferredToolCalls(
+            handler=_approval_handler(
+                surface=surface,
+                approve_all=approve_all,
+                approval_ask=approval_ask,
+            ),
+            id="vikram-human-approval",
+        )
+    ]
+    raw_agent = Agent(
+        model.raw,
+        name=spec.name,
+        description=spec.description,
+        instructions=system_prompt,
+        model_settings=spec.model_settings or None,
+        toolsets=[toolset],
+        capabilities=capabilities,
+    )
     return VikramAgent(
         raw_agent=raw_agent,
-        agent_kwargs=agent_kwargs,
         name=spec.name,
         description=spec.description,
         model=model,
@@ -307,102 +292,98 @@ def build_agent(
     )
 
 
-def _to_strands_tool(entry: VikramTool) -> Any:
-    return tool(entry.function, name=entry.name)
-
-
-def _approval_interventions(
-    approval_tool_names: set[str],
-    surface: str,
+def _approval_handler(
     *,
-    approve_all: bool = False,
-    approval_ask: Any | None = None,
-) -> list[HumanInTheLoop]:
-    if not approval_tool_names or approve_all:
-        return []
-    allowed_tools = ["*", *(f"!{name}" for name in sorted(approval_tool_names))]
-    ask = (
-        approval_ask
-        if approval_ask is not None
-        else "stdio" if surface == "cli" else None
-    )
-    return [HumanInTheLoop(allowed_tools=allowed_tools, ask=ask)]
+    surface: str,
+    approve_all: bool,
+    approval_ask: ApprovalAsk | None,
+) -> Callable[[RunContext[None], DeferredToolRequests], Awaitable[DeferredToolResults]]:
+    async def handle(
+        _: RunContext[None], requests: DeferredToolRequests
+    ) -> DeferredToolResults:
+        if approve_all:
+            return requests.build_results(approve_all=True)
 
-
-def _strands_hook_callbacks(hooks: HookSet, agent_name: str) -> list[Any]:
-    callbacks: list[Any] = []
-    if hooks.pre:
-
-        async def before_tool(event: BeforeToolCallEvent) -> None:
-            tool_name, tool_input = _tool_payload(event.tool_use)
-            decision = await run_hooks(
-                hooks.pre,
-                {
-                    "event": "PreToolUse",
-                    "agent": agent_name,
-                    "tool_name": tool_name,
-                    "tool_input": tool_input,
-                    "cwd": _cwd(),
-                },
-                tool_name=tool_name,
+        approvals: dict[str, bool | ToolDenied] = {}
+        for call in requests.approvals:
+            prompt = (
+                f'Tool "{call.tool_name}" requires human approval. Input: '
+                f"{json.dumps(call.args_as_dict(), default=str)}"
             )
-            if decision.blocked:
-                event.cancel_tool = decision.reason or f"A hook blocked {tool_name}."
+            if approval_ask is not None:
+                answer = approval_ask(prompt)
+                if inspect.isawaitable(answer):
+                    answer = await answer
+            elif surface == "cli":
+                answer = await asyncio.to_thread(input, f"{prompt} [y/N] ")
+            else:
+                approvals[call.tool_call_id] = ToolDenied(
+                    "Approval is unavailable on this interface."
+                )
+                continue
+            approvals[call.tool_call_id] = str(answer).strip().lower() in {
+                "y",
+                "yes",
+                "allow",
+                "approve",
+            }
+        return requests.build_results(approvals=approvals, calls={})
 
-        callbacks.append(before_tool)
-    if hooks.post:
-
-        async def after_tool(event: AfterToolCallEvent) -> None:
-            tool_name, tool_input = _tool_payload(event.tool_use)
-            output = _tool_result_text(event.result)
-            decision = await run_hooks(
-                hooks.post,
-                {
-                    "event": "PostToolUse",
-                    "agent": agent_name,
-                    "tool_name": tool_name,
-                    "tool_input": tool_input,
-                    "tool_output": output,
-                    "cwd": _cwd(),
-                },
-                tool_name=tool_name,
-            )
-            if decision.blocked:
-                event.result = {
-                    "toolUseId": event.tool_use.get("toolUseId", ""),
-                    "status": "error",
-                    "content": [{"text": decision.reason or "A hook rejected result."}],
-                }
-                return
-            if decision.context:
-                content = list(event.result.get("content") or [])
-                content.append({"text": decision.context})
-                event.result = {**event.result, "content": content}
-
-        callbacks.append(after_tool)
-    return callbacks
+    return handle
 
 
-def _tool_payload(tool_use: Any) -> tuple[str, dict[str, Any]]:
-    if isinstance(tool_use, dict):
-        return str(tool_use.get("name") or ""), dict(tool_use.get("input") or {})
-    return (
-        str(getattr(tool_use, "name", "") or ""),
-        dict(getattr(tool_use, "input", {}) or {}),
-    )
+def _stream_event(event: Any) -> dict[str, Any] | None:
+    if isinstance(event, PartStartEvent):
+        if isinstance(event.part, TextPart) and event.part.content:
+            return {"data": event.part.content}
+        if isinstance(event.part, ThinkingPart) and event.part.content:
+            return {"reasoningText": event.part.content}
+        return None
+    if isinstance(event, PartDeltaEvent):
+        if isinstance(event.delta, TextPartDelta) and event.delta.content_delta:
+            return {"data": event.delta.content_delta}
+        if isinstance(event.delta, ThinkingPartDelta) and event.delta.content_delta:
+            return {"reasoningText": event.delta.content_delta}
+        return None
+    if isinstance(event, FunctionToolCallEvent):
+        part = event.part
+        return {
+            "current_tool_use": {
+                "toolUseId": part.tool_call_id,
+                "name": part.tool_name,
+                "input": part.args_as_dict(),
+            }
+        }
+    if isinstance(event, FunctionToolResultEvent):
+        part = event.part
+        outcome = getattr(part, "outcome", "success")
+        content = event.content if event.content is not None else part.content
+        return {
+            "tool_result": {
+                "toolUseId": part.tool_call_id,
+                "status": "error" if outcome in {"failed", "denied"} else "success",
+                "content": [{"text": _stringify_content(content)}],
+            }
+        }
+    return None
 
 
-def _tool_result_text(result: Any) -> str:
-    if not isinstance(result, dict):
-        return str(result)
-    rendered: list[str] = []
-    for item in result.get("content") or []:
-        if isinstance(item, dict):
-            if "text" in item:
-                rendered.append(str(item["text"]))
-            elif "json" in item:
-                rendered.append(json.dumps(item["json"], default=str))
-    return "\n".join(rendered)
+def _stringify_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(_stringify_content(item) for item in content)
+    return str(content)
+
+
+def _tool_name(entry: ToolEntry) -> str:
+    if isinstance(entry, Tool):
+        return entry.name
+    return entry.__name__
+
+
+def _requires_approval(entry: ToolEntry) -> bool:
+    return isinstance(entry, Tool) and entry.requires_approval
 
 
 def _settings_with_spec_model(
@@ -417,7 +398,7 @@ def _settings_with_spec_model(
 
 
 def __getattr__(name: str) -> VikramAgent:
-    """Lazy module-level ``agent`` so importing this module is side-effect-free."""
+    """Build the module-level default agent only when it is requested."""
     if name == "agent":
         return build_agent()
     raise AttributeError(f"module 'vikram.agent' has no attribute {name!r}")

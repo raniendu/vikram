@@ -23,8 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
-
-from vikram.tools import VikramTool
+from pydantic_ai import Tool
 
 if TYPE_CHECKING:
     from vikram.spec import AgentSpec
@@ -204,7 +203,7 @@ def render_skill(skill: Skill) -> str:
     return "\n".join(parts).strip()
 
 
-def make_load_skill_tool(skills: list[Skill]) -> VikramTool:
+def make_load_skill_tool(skills: list[Skill]) -> Tool[None]:
     """Build the ``load_skill`` tool bound to ``skills`` for one agent.
 
     The returned tool is added to the agent only when it has at least one
@@ -228,4 +227,4 @@ def make_load_skill_tool(skills: list[Skill]) -> VikramTool:
             return f"Unknown skill {name!r}. Available skills: {available}."
         return render_skill(skill)
 
-    return VikramTool("load_skill", load_skill_tool)
+    return Tool(load_skill_tool, name="load_skill")

@@ -3,7 +3,7 @@
 This exposes Vikram's CLI-only ``coder`` agent over the `Agent Client Protocol
 <https://agentclientprotocol.com>`_ so editors such as Zed or Neovim can drive
 it. It is a thin adapter: every turn is still executed by ``build_agent`` and
-Strands streaming (same engine as ``vikram/cli.py``); only the I/O surface changes
+Pydantic AI streaming (same engine as ``vikram/cli.py``); only the I/O surface changes
 from a Rich REPL to JSON-RPC ``session/update`` notifications over stdio.
 
 Run it directly (the editor normally launches this for you)::
@@ -112,7 +112,7 @@ class _Session:
 
 
 class VikramAcpAgent(acp.Agent):
-    """ACP agent that wraps the local ``coder`` Strands agent."""
+    """ACP agent that wraps the local ``coder`` Pydantic AI agent."""
 
     def __init__(
         self, *, settings: "VikramSettings", agent_name: str = "coder"
