@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -12,12 +11,11 @@ from pydantic_settings.sources import PydanticBaseSettingsSource
 from vikram.config import load_config
 
 ModelProvider = Literal["ollama", "openai-compatible"]
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class VikramModel:
-    """A Strands model plus stable metadata used by tests and adapters."""
+    """A Pydantic AI model plus stable metadata used by adapters and UX."""
 
     raw: Any
     config: dict[str, Any]
@@ -212,31 +210,12 @@ class VikramSettings(BaseSettings):
         return values or None
 
 
-SUPPORTED_MODEL_SETTINGS = {
-    "temperature",
-    "top_p",
-    "max_tokens",
-    "stop_sequences",
-    "frequency_penalty",
-    "presence_penalty",
-}
-
-
 def map_model_settings(
     values: dict[str, Any] | None, *, agent_name: str
 ) -> dict[str, Any]:
-    """Best-effort map of Vikram spec settings to Strands provider params."""
-    mapped: dict[str, Any] = {}
-    for key, value in (values or {}).items():
-        if key in SUPPORTED_MODEL_SETTINGS:
-            mapped[key] = value
-        else:
-            logger.warning(
-                "unsupported_model_setting_ignored: %s",
-                key,
-                extra={"agent": agent_name, "setting": key},
-            )
-    return mapped
+    """Return spec model settings for Pydantic AI's provider-aware validation."""
+    del agent_name
+    return dict(values or {})
 
 
 def build_model(
@@ -258,19 +237,19 @@ def build_model(
         )
     params = map_model_settings(model_settings, agent_name=agent_name)
     if settings.model_provider == "ollama":
-        from strands.models.ollama import OllamaModel
+        from pydantic_ai.models.ollama import OllamaModel
+        from pydantic_ai.providers.ollama import OllamaProvider
 
         raw = OllamaModel(
-            host=settings.normalized_ollama_host,
-            model_id=settings.model,
-            **params,
+            settings.model,
+            provider=OllamaProvider(base_url=settings.normalized_ollama_base_url),
         )
         return VikramModel(
             raw=raw,
             config={
                 "provider": "ollama",
                 "model": settings.model,
-                "base_url": settings.normalized_ollama_host,
+                "base_url": settings.normalized_ollama_base_url,
                 "params": params,
             },
         )
@@ -281,15 +260,15 @@ def build_model(
                 "configure`, add it to .env, or set it in the runtime "
                 "environment to use the openai-compatible model provider."
             )
-        from strands.models.openai import OpenAIModel
+        from pydantic_ai.models.openai import OpenAIChatModel
+        from pydantic_ai.providers.openai import OpenAIProvider
 
-        raw = OpenAIModel(
-            client_args={
-                "base_url": settings.openai_compat_base_url,
-                "api_key": settings.openai_compat_api_key,
-            },
-            model_id=settings.model,
-            params=params,
+        raw = OpenAIChatModel(
+            settings.model,
+            provider=OpenAIProvider(
+                base_url=settings.openai_compat_base_url,
+                api_key=settings.openai_compat_api_key,
+            ),
         )
         return VikramModel(
             raw=raw,

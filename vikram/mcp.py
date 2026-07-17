@@ -2,7 +2,7 @@
 
 Agents declare MCP servers in ``agent.toml`` under ``[[mcp_servers]]``. Each
 entry is parsed into an :class:`MCPServerSpec` (carried on the agent spec) and
-realized into a Strands ``MCPClient`` tool provider by :func:`build_mcp_server`.
+realized into a Pydantic AI ``MCPToolset`` by :func:`build_mcp_server`.
 
 Secrets must never be written inline. String fields (``command``, ``args``,
 ``url``, ``cwd``, and the values of ``env``/``headers``) may reference
@@ -19,11 +19,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from mcp import StdioServerParameters, stdio_client
-from mcp.client.sse import sse_client
-from mcp.client.streamable_http import streamablehttp_client
+from fastmcp.client.transports import (
+    SSETransport,
+    StdioTransport,
+    StreamableHttpTransport,
+)
 from pydantic import BaseModel, Field
-from strands.tools.mcp import MCPClient
+from pydantic_ai.mcp import MCPToolset
+from pydantic_ai.toolsets import AbstractToolset
 
 MCPTransport = Literal["stdio", "http", "sse"]
 
@@ -66,7 +69,7 @@ class MCPServerSpec(BaseModel):
 @dataclass(frozen=True)
 class VikramMCPClient:
     id: str
-    raw: MCPClient
+    raw: AbstractToolset
     config: dict[str, object]
 
 
@@ -101,7 +104,7 @@ def _expand_mapping(
 def build_mcp_server(
     spec: MCPServerSpec, environ: Mapping[str, str] | None = None
 ) -> VikramMCPClient:
-    """Realize one :class:`MCPServerSpec` into a Strands MCP client provider.
+    """Realize one :class:`MCPServerSpec` into a Pydantic AI MCP toolset.
 
     ``environ`` defaults to ``os.environ`` and is used to expand ``${VAR}``
     references. The wrapper ``id`` is set to the spec name so its tools and any
@@ -128,23 +131,21 @@ def build_mcp_server(
             "read_timeout": spec.read_timeout,
         }
 
-        def make_transport():
-            return stdio_client(
-                StdioServerParameters(
-                    command=command,
-                    args=args,
-                    env=env or None,
-                    cwd=cwd,
-                )
-            )
+        toolset = MCPToolset(
+            StdioTransport(
+                command=command,
+                args=args,
+                env=env or None,
+                cwd=cwd,
+            ),
+            id=spec.name,
+            init_timeout=spec.timeout,
+            read_timeout=spec.read_timeout,
+        )
 
         return VikramMCPClient(
             id=spec.name,
-            raw=MCPClient(
-                make_transport,
-                startup_timeout=int(spec.timeout),
-                prefix=spec.tool_prefix,
-            ),
+            raw=toolset.prefixed(spec.tool_prefix) if spec.tool_prefix else toolset,
             config=config,
         )
 
@@ -165,28 +166,24 @@ def build_mcp_server(
             "read_timeout": spec.read_timeout,
         }
 
-        def make_transport():
-            if spec.transport == "http":
-                return streamablehttp_client(
-                    url,
-                    headers=headers or None,
-                    timeout=spec.timeout,
-                    sse_read_timeout=read_timeout,
-                )
-            return sse_client(
+        if spec.transport == "http":
+            transport = StreamableHttpTransport(url, headers=headers or None)
+        else:
+            transport = SSETransport(
                 url,
                 headers=headers or None,
-                timeout=spec.timeout,
                 sse_read_timeout=read_timeout,
             )
+        toolset = MCPToolset(
+            transport,
+            id=spec.name,
+            init_timeout=spec.timeout,
+            read_timeout=spec.read_timeout,
+        )
 
         return VikramMCPClient(
             id=spec.name,
-            raw=MCPClient(
-                make_transport,
-                startup_timeout=int(spec.timeout),
-                prefix=spec.tool_prefix,
-            ),
+            raw=toolset.prefixed(spec.tool_prefix) if spec.tool_prefix else toolset,
             config=config,
         )
 

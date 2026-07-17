@@ -1,9 +1,16 @@
 import shlex
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from pydantic_ai import Tool
+from pydantic_ai.exceptions import ApprovalRequired
 
 from vikram import tools
+
+
+def _ctx(*, approved: bool = False):
+    return SimpleNamespace(tool_call_approved=approved)
 
 
 @pytest.fixture(autouse=True)
@@ -106,12 +113,14 @@ async def test_run_command_non_allowlisted_reaches_approval(monkeypatch, tmp_pat
     decision, _ = tools._policy().classify(shlex.split("echo hello"), "echo hello")
     assert decision == "approve"
 
-    # Direct tool calls bypass Strands HITL; the wrapper gates this tool by name.
-    ran = await tools.run_command("echo hello")
+    with pytest.raises(ApprovalRequired):
+        await tools.run_command(_ctx(), "echo hello")
+
+    ran = await tools.run_command(_ctx(approved=True), "echo hello")
     assert "$ echo hello" in ran
 
     # Read-only commands still auto-run with no approval.
-    allowed = await tools.run_command("git status --short")
+    allowed = await tools.run_command(_ctx(), "git status --short")
     assert "$ git status --short" in allowed
 
 
@@ -145,8 +154,7 @@ async def test_inspect_command_refuses_non_read_only(monkeypatch, tmp_path):
 async def test_run_command_state_changes_reach_approval(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
 
-    # Strands HITL gates the run_command tool; policy still identifies
-    # state-changing commands as requiring approval rather than auto-run.
+    # Pydantic AI gates state-changing commands dynamically in the tool body.
     for command in (
         "git switch main",
         "git pull --ff-only",
@@ -159,9 +167,10 @@ async def test_run_command_state_changes_reach_approval(monkeypatch, tmp_path):
         decision, reason = tools._policy().classify(shlex.split(command), command)
         assert decision == "approve"
         assert reason is None
+        with pytest.raises(ApprovalRequired):
+            await tools.run_command(_ctx(), command)
 
-    # Once Strands allows the tool call, run_command executes the command.
-    switch = await tools.run_command("git switch main")
+    switch = await tools.run_command(_ctx(approved=True), "git switch main")
     assert "$ git switch main" in switch
 
 
@@ -182,7 +191,7 @@ async def test_deny_backstop_refuses_even_when_approved(monkeypatch, tmp_path):
     )
     for command, needle in dangerous:
         # Approval does not override the deny backstop.
-        result = await tools.run_command(command)
+        result = await tools.run_command(_ctx(approved=True), command)
         assert "Refusing" in result, command
         assert needle in result, command
 
@@ -191,7 +200,7 @@ async def test_deny_backstop_refuses_even_when_approved(monkeypatch, tmp_path):
 async def test_secret_path_deny_excludes_example(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
 
-    denied = await tools.run_command("cat .env.production")
+    denied = await tools.run_command(_ctx(approved=True), "cat .env.production")
     assert "Refusing" in denied
 
     # .env.example is excluded from the secret-path deny, so it reaches HITL.
@@ -221,21 +230,30 @@ async def test_run_command_argv_only_no_shell(monkeypatch, tmp_path):
     # A shell metacharacter is just an argv token; no shell expansion happens.
     # `true` is read-only (auto), so this runs without approval and the pipe is
     # passed verbatim as an argument rather than chaining commands.
-    result = await tools.run_command("true | rm -rf /")
+    result = await tools.run_command(_ctx(), "true | rm -rf /")
     assert "$ true | rm -rf /" in result
 
 
-def test_destructive_tools_require_strands_hitl_approval():
-    for name in ("write_file", "edit_file", "run_command"):
+def test_destructive_tools_require_pydantic_ai_approval():
+    for name in ("write_file", "edit_file"):
         tool = tools.TOOL_REGISTRY[name]
 
+        assert isinstance(tool, Tool)
         assert tool.requires_approval is True
         assert tool.name == name
 
 
+def test_run_command_uses_dynamic_approval():
+    tool = tools.TOOL_REGISTRY["run_command"]
+
+    assert isinstance(tool, Tool)
+    assert tool.requires_approval is False
+    assert tool.sequential is True
+
+
 def test_read_only_tools_do_not_require_approval():
     for name in ("read_file", "glob", "grep", "inspect_command"):
-        assert tools.TOOL_REGISTRY[name].requires_approval is False
+        assert not isinstance(tools.TOOL_REGISTRY[name], Tool)
 
 
 @pytest.mark.asyncio

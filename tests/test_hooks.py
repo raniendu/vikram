@@ -2,12 +2,15 @@ import sys
 import types
 
 import pytest
+from pydantic_ai.exceptions import ModelRetry
+from pydantic_ai.toolsets import AbstractToolset
 
-from vikram.agent import _strands_hook_callbacks, build_agent
+from vikram.agent import build_agent
 from vikram.hooks import (
     HookBlockedError,
     HookConfigError,
     HookSpec,
+    HookToolset,
     build_hooks,
     run_hooks,
 )
@@ -38,6 +41,23 @@ def _local_model_settings(monkeypatch, tmp_path) -> VikramSettings:
         VIKRAM_MODEL="test-model",
         OLLAMA_BASE_URL="http://localhost:11434",
     )
+
+
+class _StubToolset(AbstractToolset):
+    def __init__(self, return_value="ok"):
+        self.return_value = return_value
+        self.calls = []
+
+    @property
+    def id(self):
+        return "stub"
+
+    async def get_tools(self, ctx):
+        return {}
+
+    async def call_tool(self, name, tool_args, ctx, tool):
+        self.calls.append((name, tool_args))
+        return self.return_value
 
 
 @pytest.fixture
@@ -225,10 +245,10 @@ async def test_run_hooks_command_missing_binary_is_non_blocking():
     assert not decision.blocked
 
 
-# --- Strands tool hook callbacks (Pre/PostToolUse) ----------------------------
+# --- Pydantic AI tool hook wrapper (Pre/PostToolUse) --------------------------
 
 
-async def test_strands_pre_tool_hook_cancels_call(hook_module):
+async def test_hook_toolset_pre_block_raises_model_retry(hook_module):
     hook_module.deny = lambda payload: {
         "decision": "deny",
         "reason": "blocked by policy",
@@ -242,22 +262,15 @@ async def test_strands_pre_tool_hook_cancels_call(hook_module):
             )
         ]
     )
-    (callback,) = _strands_hook_callbacks(hooks, "t")
-    event = types.SimpleNamespace(
-        tool_use={
-            "toolUseId": "u1",
-            "name": "run_command",
-            "input": {"command": "rm -rf /"},
-        },
-        cancel_tool=None,
-    )
+    stub = _StubToolset()
+    toolset = HookToolset(stub, pre=hooks.pre, agent_name="t")
 
-    await callback(event)
-
-    assert event.cancel_tool == "blocked by policy"
+    with pytest.raises(ModelRetry, match="blocked by policy"):
+        await toolset.call_tool("run_command", {"command": "rm -rf /"}, None, None)
+    assert stub.calls == []
 
 
-async def test_strands_post_tool_hook_appends_context(hook_module):
+async def test_hook_toolset_post_appends_context(hook_module):
     hook_module.note = lambda payload: {"additional_context": "audited"}
     hooks = build_hooks(
         [
@@ -268,26 +281,18 @@ async def test_strands_post_tool_hook_appends_context(hook_module):
             )
         ]
     )
-    (callback,) = _strands_hook_callbacks(hooks, "t")
-    event = types.SimpleNamespace(
-        tool_use={"toolUseId": "u1", "name": "read_file", "input": {"path": "x"}},
-        result={
-            "toolUseId": "u1",
-            "status": "success",
-            "content": [{"text": "tool output"}],
-        },
+    toolset = HookToolset(
+        _StubToolset(return_value="tool output"),
+        post=hooks.post,
+        agent_name="t",
     )
 
-    await callback(event)
+    result = await toolset.call_tool("read_file", {"path": "x"}, None, None)
 
-    assert event.result == {
-        "toolUseId": "u1",
-        "status": "success",
-        "content": [{"text": "tool output"}, {"text": "audited"}],
-    }
+    assert result == "tool output\n\naudited"
 
 
-async def test_strands_post_tool_hook_returns_error_result(hook_module):
+async def test_hook_toolset_post_block_raises_model_retry(hook_module):
     hook_module.reject = lambda payload: {"decision": "block", "reason": "bad result"}
     hooks = build_hooks(
         [
@@ -298,26 +303,13 @@ async def test_strands_post_tool_hook_returns_error_result(hook_module):
             )
         ]
     )
-    (callback,) = _strands_hook_callbacks(hooks, "t")
-    event = types.SimpleNamespace(
-        tool_use={"toolUseId": "u1", "name": "read_file", "input": {"path": "x"}},
-        result={
-            "toolUseId": "u1",
-            "status": "success",
-            "content": [{"text": "tool output"}],
-        },
-    )
+    toolset = HookToolset(_StubToolset(), post=hooks.post, agent_name="t")
 
-    await callback(event)
-
-    assert event.result == {
-        "toolUseId": "u1",
-        "status": "error",
-        "content": [{"text": "bad result"}],
-    }
+    with pytest.raises(ModelRetry, match="bad result"):
+        await toolset.call_tool("read_file", {"path": "x"}, None, None)
 
 
-async def test_strands_pre_tool_hook_passthrough_leaves_call_uncancelled(hook_module):
+async def test_hook_toolset_pre_passthrough_runs_tool(hook_module):
     hook_module.allow = lambda payload: None
     hooks = build_hooks(
         [
@@ -328,15 +320,13 @@ async def test_strands_pre_tool_hook_passthrough_leaves_call_uncancelled(hook_mo
             )
         ]
     )
-    (callback,) = _strands_hook_callbacks(hooks, "t")
-    event = types.SimpleNamespace(
-        tool_use={"toolUseId": "u1", "name": "read_file", "input": {"path": "x"}},
-        cancel_tool=None,
-    )
+    stub = _StubToolset(return_value="ran")
+    toolset = HookToolset(stub, pre=hooks.pre, agent_name="t")
 
-    await callback(event)
+    result = await toolset.call_tool("read_file", {"path": "x"}, None, None)
 
-    assert event.cancel_tool is None
+    assert result == "ran"
+    assert stub.calls == [("read_file", {"path": "x"})]
 
 
 # --- VikramAgent run hooks (UserPromptSubmit / Stop) --------------------------
@@ -408,20 +398,12 @@ async def test_stop_hook_fires_with_output(hook_module, monkeypatch, tmp_path):
     spec = _spec_with_hooks(tmp_path, settings.spec_root / "shared", hook_specs)
     agent = build_agent(spec=spec, settings=settings)
 
-    class Result:
-        context_size = 0
-
-        def __str__(self):
-            return "done"
-
     class FakeRawAgent:
-        messages = [{"role": "assistant", "content": "done"}]
-
-        async def invoke_async(self, prompt, *, invocation_state):
-            return Result()
+        async def run(self, prompt, **kwargs):
+            return types.SimpleNamespace(output="done")
 
     fake_raw_agent = FakeRawAgent()
-    monkeypatch.setattr(agent, "_agent_for_run", lambda: fake_raw_agent)
+    monkeypatch.setattr(agent, "raw_agent", fake_raw_agent)
 
     result = await agent.run("go")
 
@@ -446,7 +428,7 @@ def _spec_with_hooks(tmp_path, shared_dir, hooks):
     )
 
 
-def test_build_agent_registers_strands_tool_hooks(monkeypatch, tmp_path):
+def test_build_agent_registers_pydantic_tool_hooks(monkeypatch, tmp_path):
     settings = _local_model_settings(monkeypatch, tmp_path)
     spec = _spec_with_hooks(
         tmp_path,
@@ -456,7 +438,7 @@ def test_build_agent_registers_strands_tool_hooks(monkeypatch, tmp_path):
     agent = build_agent(spec=spec, settings=settings)
 
     assert agent._hookset.has_tool_hooks
-    assert len(agent._agent_kwargs["hooks"]) == 1
+    assert any(isinstance(toolset, HookToolset) for toolset in agent.raw_agent.toolsets)
 
 
 def test_build_agent_records_run_hooks(monkeypatch, tmp_path):
@@ -468,7 +450,7 @@ def test_build_agent_records_run_hooks(monkeypatch, tmp_path):
     )
     agent = build_agent(spec=spec, settings=settings)
 
-    assert agent.runtime == "strands"
+    assert agent.runtime == "pydantic-ai"
     assert agent._hookset.has_run_hooks
 
 
@@ -477,8 +459,10 @@ def test_build_agent_plain_agent_without_hooks(monkeypatch, tmp_path):
     spec = _spec_with_hooks(tmp_path, settings.spec_root / "shared", [])
     agent = build_agent(spec=spec, settings=settings)
 
-    assert agent.runtime == "strands"
-    assert agent._agent_kwargs["hooks"] == []
+    assert agent.runtime == "pydantic-ai"
+    assert not any(
+        isinstance(toolset, HookToolset) for toolset in agent.raw_agent.toolsets
+    )
     assert not agent._hookset.has_tool_hooks
     assert not agent._hookset.has_run_hooks
 

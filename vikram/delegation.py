@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pydantic_ai import Tool
+
 from vikram.settings import VikramSettings
 from vikram.spec import AgentSpec, AgentSurfaceError, ensure_surface_allowed, load_spec
-from vikram.tools import ToolEntry, VikramTool
+from vikram.tools import ToolEntry
 
 DELEGATE_TOOL_NAME = "delegate_to_agent"
 
@@ -138,13 +140,14 @@ def make_delegate_to_agent_tool(
             settings=settings,
             surface=surface,
             enable_delegation=False,
+            approval_ask=_raise_delegated_approval,
         )
         try:
             result = await subagent.run(
                 prompt,
                 conversation_id=f"delegate:{orchestrator_name}:{requested_name}",
             )
-        except (DelegatedApprovalRequired, RuntimeError) as exc:
+        except DelegatedApprovalRequired as exc:
             return (
                 f"Subagent {target_spec.name} stopped because it {exc}. "
                 "Run that agent directly when the task needs approval-gated "
@@ -152,8 +155,13 @@ def make_delegate_to_agent_tool(
             )
         return f"Subagent {target_spec.name} completed.\n\n{result.output}"
 
-    return VikramTool(
-        DELEGATE_TOOL_NAME,
+    return Tool(
         delegate_to_agent,
+        name=DELEGATE_TOOL_NAME,
         requires_approval=requires_approval,
+        sequential=True,
     )
+
+
+async def _raise_delegated_approval(_: str) -> str:
+    raise DelegatedApprovalRequired("requested an approval-gated tool call")

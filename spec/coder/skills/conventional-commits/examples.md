@@ -29,5 +29,5 @@ default provider.
 A chore with no body (the subject is self-explanatory):
 
 ```
-chore: bump strands-agents to 1.44.0
+chore: bump pydantic-ai to 2.11.0
 ```

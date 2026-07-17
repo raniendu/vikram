@@ -63,7 +63,7 @@ async def test_prompt_streams_text_and_tool_calls():
         def all_messages(self):
             return [{"role": "assistant", "content": "done"}]
 
-    class FakeStrandsAgent:
+    class FakeStreamingAgent:
         async def stream_events(self, prompt, *, message_history, conversation_id):
             assert prompt == "hello"
             assert message_history == []
@@ -94,7 +94,7 @@ async def test_prompt_streams_text_and_tool_calls():
     agent = _make_agent()
     client = FakeClient()
     agent._client = client
-    session = _Session(agent=FakeStrandsAgent(), cwd=os.getcwd())
+    session = _Session(agent=FakeStreamingAgent(), cwd=os.getcwd())
 
     stop_reason = await agent._run_turn("s1", session, "hello")
 
@@ -108,7 +108,7 @@ async def test_prompt_streams_text_and_tool_calls():
     assert session.messages
 
 
-def test_tool_result_extracts_strands_message_event():
+def test_tool_result_extracts_compatibility_message_event():
     result = _tool_result_from_event(
         {
             "message": {
