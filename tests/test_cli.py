@@ -624,7 +624,7 @@ def test_print_status_includes_runtime_details(tmp_path):
     from vikram.cli import _print_status
 
     settings = SimpleNamespace(
-        model="qwen3",
+        model="gemma4:26b-a4b-it-qat",
         model_provider="ollama",
         context_window_tokens=32_000,
     )
@@ -642,7 +642,7 @@ def test_print_status_includes_runtime_details(tmp_path):
         os.chdir(old_cwd)
 
     output = buffer.getvalue()
-    for expected in ("Coder", "qwen3", "ollama", "25%", str(tmp_path)):
+    for expected in ("Coder", "gemma4:26b-a4b-it-qat", "ollama", "25%", str(tmp_path)):
         assert expected in output
 
 
