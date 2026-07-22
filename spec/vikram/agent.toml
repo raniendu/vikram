@@ -1,6 +1,8 @@
 name = "Vikram"
 description = "General-purpose assistant agent."
 system_prompt = "system_prompt.md"
+model_provider = "ollama"
+model = "gemma4:26b-a4b-it-qat"
 
 # Local resources - relative to spec/vikram/
 context_files = []

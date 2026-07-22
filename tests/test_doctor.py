@@ -38,8 +38,21 @@ def test_doctor_accepts_agent_model_defaults(monkeypatch, tmp_path):
 def test_doctor_reports_missing_default_model(monkeypatch, tmp_path):
     _clean_environment(monkeypatch, tmp_path)
 
+    # Both checked-in agents (coder, vikram) pin a model, so exercise the
+    # "no model configured anywhere" path against a bare spec instead.
+    spec_root = tmp_path / "spec"
+    agent_dir = spec_root / "bare"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "agent.toml").write_text(
+        'name = "Bare"\n'
+        'description = "Agent spec with no model configured."\n'
+        'system_prompt = "system_prompt.md"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VIKRAM_SPEC_ROOT", str(spec_root))
+
     diagnostics = collect_diagnostics(
-        agent_name="vikram",
+        agent_name="bare",
         cwd=APP_ROOT,
         config_file=tmp_path / "missing.toml",
     )

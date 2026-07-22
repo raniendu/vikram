@@ -107,8 +107,9 @@ specialized agent should do the work. In the interactive CLI, that delegation is
 shown as a normal tool call before the subagent runs.
 
 The checked-in `coder` spec defaults to local Ollama with `qwen3.6:35b-mlx`,
-which is an MLX text-only model suited to Apple silicon. Set
-`VIKRAM_MODEL_PROVIDER` and `VIKRAM_MODEL` to override it for one run.
+which is an MLX text-only model suited to Apple silicon. The `vikram`
+orchestrator defaults to local Ollama with `gemma4:26b-a4b-it-qat`. Set
+`VIKRAM_MODEL_PROVIDER` and `VIKRAM_MODEL` to override either for one run.
 
 ## MCP servers and skills
 
