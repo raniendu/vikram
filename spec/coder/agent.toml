@@ -3,7 +3,7 @@ description = "CLI-only coding agent for local repository work."
 system_prompt = "system_prompt.md"
 cli_only = true
 model_provider = "ollama"
-model = "gemma4:26b-a4b-it-qat"
+model = "qwen3.6:35b-mlx"
 
 # Local resources — relative to spec/coder/
 # skills point at skill folders under spec/coder/; only each skill's name and

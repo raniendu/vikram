@@ -30,7 +30,7 @@ def test_doctor_accepts_agent_model_defaults(monkeypatch, tmp_path):
     by_name = {item.name: item for item in diagnostics}
     assert by_name["Agent spec"].status == "ok"
     assert by_name["Model provider"].detail == "ollama"
-    assert by_name["Model"].detail == "gemma4:26b-a4b-it-qat"
+    assert by_name["Model"].detail == "qwen3.6:35b-mlx"
     assert by_name["Command policy"].status == "ok"
     assert not [item for item in diagnostics if item.status == "error"]
 

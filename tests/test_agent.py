@@ -135,7 +135,7 @@ async def test_vikram_agent_streams_pydantic_events_and_final_result():
     assert events[-1]["vikram_result"].output == "hello"
 
 
-def test_coder_spec_defaults_to_gemma(monkeypatch, tmp_path):
+def test_coder_spec_defaults_to_qwen_mlx(monkeypatch, tmp_path):
     settings = clean_settings(monkeypatch, tmp_path)
     spec = load_spec("coder", settings.spec_root)
 
@@ -144,7 +144,7 @@ def test_coder_spec_defaults_to_gemma(monkeypatch, tmp_path):
     assert agent.runtime == "pydantic-ai"
     assert isinstance(agent.model, OllamaModel)
     assert agent.model_config["provider"] == "ollama"
-    assert agent.model_config["model"] == "gemma4:26b-a4b-it-qat"
+    assert agent.model_config["model"] == "qwen3.6:35b-mlx"
 
 
 def test_environment_overrides_coder_spec_model(monkeypatch, tmp_path):
