@@ -790,3 +790,222 @@ def test_print_banner_resolves_model_from_provider_models():
 
     assert "claude-sonnet-5" in output
     assert "anthropic" in output
+
+
+class _FakeModelSettings:
+    """Settings double for /model tests: getattr + model_copy, no env I/O."""
+
+    context_window_tokens = 0
+
+    def __init__(self, model_provider=None, model=None, provider_models=None):
+        self.model_provider = model_provider
+        self.model = model
+        self.provider_models = provider_models or {}
+
+    def model_copy(self, *, update):
+        copied = _FakeModelSettings(
+            self.model_provider, self.model, dict(self.provider_models)
+        )
+        for key, value in update.items():
+            setattr(copied, key, value)
+        return copied
+
+
+class _SwitchedAgent:
+    model_config = {"provider": "stub"}
+
+
+async def _run_model_command(arg, settings, rebuild):
+    from vikram.cli import _handle_model_command
+
+    console = _CapturingConsole()
+    old_agent = object()
+    agent, new_settings = await _handle_model_command(
+        arg,
+        old_agent,
+        settings,
+        console,
+        rebuild_agent=rebuild,
+    )
+    return agent, new_settings, console, old_agent
+
+
+async def test_model_command_lists_current_and_configured_providers():
+    settings = _FakeModelSettings(
+        model_provider="anthropic",
+        provider_models={"anthropic": "claude-sonnet-5", "ollama": "llama3.2"},
+    )
+
+    agent, new_settings, console, old_agent = await _run_model_command(
+        "", settings, lambda s: _SwitchedAgent()
+    )
+
+    assert agent is old_agent
+    assert new_settings is settings
+    output = "\n".join(str(message) for message in console.messages)
+    assert "claude-sonnet-5" in output
+    assert "ollama" in output
+    assert "not configured" in output
+
+
+async def test_model_command_switches_to_configured_provider():
+    settings = _FakeModelSettings(
+        model_provider="anthropic",
+        provider_models={"anthropic": "claude-sonnet-5", "ollama": "llama3.2"},
+    )
+    rebuilds = []
+
+    def rebuild(new_settings):
+        rebuilds.append(new_settings)
+        return _SwitchedAgent()
+
+    agent, new_settings, console, _ = await _run_model_command(
+        "ollama", settings, rebuild
+    )
+
+    assert isinstance(agent, _SwitchedAgent)
+    assert new_settings.model_provider == "ollama"
+    assert new_settings.model is None
+    assert rebuilds[0].model_provider == "ollama"
+    output = "\n".join(str(message) for message in console.messages)
+    assert "llama3.2" in output
+    assert "history kept" in output
+
+
+async def test_model_command_sets_provider_and_model():
+    settings = _FakeModelSettings(model_provider="anthropic")
+
+    agent, new_settings, console, _ = await _run_model_command(
+        "ollama qwen3", settings, lambda s: _SwitchedAgent()
+    )
+
+    assert isinstance(agent, _SwitchedAgent)
+    assert new_settings.model_provider == "ollama"
+    assert new_settings.model == "qwen3"
+
+
+async def test_model_command_changes_model_on_current_provider():
+    settings = _FakeModelSettings(
+        model_provider="anthropic",
+        provider_models={"anthropic": "claude-sonnet-5"},
+    )
+
+    agent, new_settings, console, _ = await _run_model_command(
+        "my-custom-model", settings, lambda s: _SwitchedAgent()
+    )
+
+    assert isinstance(agent, _SwitchedAgent)
+    assert new_settings.model_provider == "anthropic"
+    assert new_settings.model == "my-custom-model"
+
+
+async def test_model_command_rejects_provider_without_configured_model():
+    settings = _FakeModelSettings(
+        model_provider="anthropic",
+        provider_models={"anthropic": "claude-sonnet-5"},
+    )
+    rebuilds = []
+
+    agent, new_settings, console, old_agent = await _run_model_command(
+        "gemini", settings, lambda s: rebuilds.append(s)
+    )
+
+    assert agent is old_agent
+    assert new_settings is settings
+    assert rebuilds == []
+    output = "\n".join(str(message) for message in console.messages)
+    assert "No model configured for gemini" in output
+
+
+async def test_model_command_keeps_agent_when_rebuild_fails():
+    settings = _FakeModelSettings(
+        model_provider="anthropic",
+        provider_models={"anthropic": "claude-sonnet-5", "gemini": "gemini-2.5-flash"},
+    )
+
+    def rebuild(new_settings):
+        raise RuntimeError("GEMINI_API_KEY is not set.")
+
+    agent, new_settings, console, old_agent = await _run_model_command(
+        "gemini", settings, rebuild
+    )
+
+    assert agent is old_agent
+    assert new_settings is settings
+    output = "\n".join(str(message) for message in console.messages)
+    assert "GEMINI_API_KEY" in output
+
+
+async def test_model_command_suggests_provider_for_typo():
+    settings = _FakeModelSettings(
+        model_provider="ollama",
+        provider_models={"ollama": "llama3.2"},
+    )
+    rebuilds = []
+
+    agent, new_settings, console, old_agent = await _run_model_command(
+        "anthropc", settings, lambda s: rebuilds.append(s)
+    )
+
+    assert agent is old_agent
+    assert rebuilds == []
+    output = "\n".join(str(message) for message in console.messages)
+    assert "/model anthropic" in output
+
+
+async def test_model_command_unavailable_without_rebuild_callback():
+    agent, new_settings, console, old_agent = await _run_model_command(
+        "ollama", _FakeModelSettings(), None
+    )
+
+    assert agent is old_agent
+    output = "\n".join(str(message) for message in console.messages)
+    assert "not available" in output
+
+
+async def test_run_interactive_routes_model_command(monkeypatch, tmp_path):
+    import prompt_toolkit
+    import prompt_toolkit.history
+    import rich.console
+
+    from vikram import cli
+    from vikram.cli import run_interactive
+
+    prompts = []
+
+    class FakeSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def prompt_async(self, prompt, **kwargs):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return "/model ollama"
+            raise EOFError
+
+    class SilentConsole:
+        def print(self, *args, **kwargs):
+            pass
+
+    monkeypatch.setattr(prompt_toolkit, "PromptSession", FakeSession)
+    monkeypatch.setattr(prompt_toolkit.history, "FileHistory", lambda *a, **k: None)
+    monkeypatch.setattr(rich.console, "Console", SilentConsole)
+    monkeypatch.setattr(cli, "HISTORY_PATH", tmp_path / "hist")
+
+    settings = _FakeModelSettings(provider_models={"ollama": "llama3.2"})
+    rebuilds = []
+
+    def rebuild(new_settings):
+        rebuilds.append(new_settings)
+        return _SwitchedAgent()
+
+    await run_interactive(
+        SimpleNamespace(),
+        prog_name="Demo",
+        quiet=False,
+        settings=settings,
+        rebuild_agent=rebuild,
+    )
+
+    assert len(rebuilds) == 1
+    assert rebuilds[0].model_provider == "ollama"
