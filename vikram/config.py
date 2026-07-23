@@ -51,7 +51,7 @@ ENV_KEY_MAP = {
 
 _FILE_HEADER = "# Written by `vikram configure`.\n"
 _TOP_LEVEL_KEY_ORDER = ("config_version", "default_provider", "model")
-_PROVIDER_SECTION_KEY_ORDER = ("model", "base_url", "api_key")
+_PROVIDER_SECTION_KEY_ORDER = ("provider", "model", "base_url", "api_key")
 
 
 class ConfigParseError(RuntimeError):
@@ -127,10 +127,28 @@ def _flatten_for_settings(data: dict[str, Any]) -> dict[str, Any]:
     config: dict[str, Any] = {}
     default_provider = data.get("default_provider")
     if isinstance(default_provider, str) and default_provider:
-        config["model_provider"] = default_provider
+        # Deliberately not model_provider: the file's default must rank below
+        # an agent spec's pinned provider, unlike an explicit env override.
+        config["config_default_provider"] = default_provider
     model = data.get("model")
     if isinstance(model, str) and model:
         config["model"] = model
+
+    agents_table = data.get("agents")
+    agent_overrides: dict[str, dict[str, str]] = {}
+    if isinstance(agents_table, dict):
+        for agent_id, section in agents_table.items():
+            if not isinstance(section, dict):
+                continue
+            override = {
+                key: value
+                for key, value in section.items()
+                if key in ("provider", "model") and isinstance(value, str) and value
+            }
+            if override:
+                agent_overrides[str(agent_id)] = override
+    if agent_overrides:
+        config["agent_overrides"] = agent_overrides
 
     providers_table = data.get("providers")
     provider_models: dict[str, str] = {}
@@ -205,8 +223,10 @@ def _ordered_scalar_keys(table: dict[str, Any], path: tuple[str, ...]) -> list[s
 def _ordered_subtable_keys(table: dict[str, Any], path: tuple[str, ...]) -> list[str]:
     keys = [key for key, value in table.items() if isinstance(value, dict)]
     if not path:
-        ordered = [key for key in ("providers",) if key in keys]
-        ordered.extend(sorted(key for key in keys if key != "providers"))
+        ordered = [key for key in ("providers", "agents") if key in keys]
+        ordered.extend(
+            sorted(key for key in keys if key not in ("providers", "agents"))
+        )
         return ordered
     if path == ("providers",):
         ordered = [key for key in PROVIDER_IDS if key in keys]
@@ -276,6 +296,20 @@ def merge_write_config(
     os.replace(tmp_path, path)
     os.chmod(path, 0o600)
     return path
+
+
+def write_agent_model(
+    agent_id: str,
+    *,
+    provider: str,
+    model: str,
+    path: Path | None = None,
+) -> Path:
+    """Persist an agent's model choice to ``[agents.<agent_id>]`` (merged)."""
+    return merge_write_config(
+        {"agents": {agent_id: {"provider": provider, "model": model}}},
+        path=path,
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:

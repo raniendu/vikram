@@ -272,8 +272,12 @@ def test_environment_overrides_local_model_config(monkeypatch, tmp_path):
 
     settings = VikramSettings(_env_file=None)
 
-    assert settings.model_provider == "ollama"
+    assert settings.config_default_provider == "ollama"
     assert settings.model == "from-env"
+
+    from vikram.settings import resolve_model_selection
+
+    assert resolve_model_selection(settings) == ("ollama", "from-env")
 
 
 def test_build_model_uses_openai_compatible_when_provider_is_set(monkeypatch, tmp_path):
@@ -503,7 +507,9 @@ def test_env_provider_switch_picks_that_providers_model(monkeypatch, tmp_path):
     assert model.config["model"] == "gemini-2.5-flash"
 
 
-def test_config_provider_model_outranks_coder_spec_pin(monkeypatch, tmp_path):
+def test_coder_spec_pin_beats_config_global_default(monkeypatch, tmp_path):
+    # A global default model in config.toml must not leak into an agent
+    # whose spec pins its own model (the coder-defaults-to-gemma bug).
     config_dir = tmp_path / "vikram"
     config_dir.mkdir(parents=True)
     (config_dir / "config.toml").write_text(
@@ -513,7 +519,7 @@ def test_config_provider_model_outranks_coder_spec_pin(monkeypatch, tmp_path):
                 'default_provider = "ollama"',
                 "",
                 "[providers.ollama]",
-                'model = "llama3.2"',
+                'model = "gemma4:26b-a4b-it-qat"',
                 "",
             ]
         ),
@@ -528,7 +534,92 @@ def test_config_provider_model_outranks_coder_spec_pin(monkeypatch, tmp_path):
     agent = build_agent(spec=spec, settings=settings)
 
     assert agent.model_config["provider"] == "ollama"
-    assert agent.model_config["model"] == "llama3.2"
+    assert agent.model_config["model"] == "qwen3.6:35b-mlx"
+
+
+def test_agent_override_beats_spec_pin(monkeypatch, tmp_path):
+    # /model writes [agents.<id>]; that saved choice outranks the spec pin.
+    config_dir = tmp_path / "vikram"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text(
+        "\n".join(
+            [
+                "config_version = 2",
+                'default_provider = "ollama"',
+                "",
+                "[providers.ollama]",
+                'model = "gemma4:26b-a4b-it-qat"',
+                "",
+                "[agents.coder]",
+                'provider = "ollama"',
+                'model = "qwen3-coder:30b"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for env_var in VIKRAM_ENV_VARS:
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    settings = VikramSettings(_env_file=None)
+    spec = load_spec("coder", settings.spec_root)
+
+    agent = build_agent(spec=spec, settings=settings)
+
+    assert agent.model_config["provider"] == "ollama"
+    assert agent.model_config["model"] == "qwen3-coder:30b"
+
+
+def test_environment_still_beats_agent_override(monkeypatch, tmp_path):
+    config_dir = tmp_path / "vikram"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text(
+        "\n".join(
+            [
+                "config_version = 2",
+                "",
+                "[agents.coder]",
+                'provider = "ollama"',
+                'model = "qwen3-coder:30b"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for env_var in VIKRAM_ENV_VARS:
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("VIKRAM_MODEL_PROVIDER", "ollama")
+    monkeypatch.setenv("VIKRAM_MODEL", "env-model")
+    settings = VikramSettings(_env_file=None)
+    spec = load_spec("coder", settings.spec_root)
+
+    agent = build_agent(spec=spec, settings=settings)
+
+    assert agent.model_config["model"] == "env-model"
+
+
+def test_unpinned_agent_uses_config_default(monkeypatch, tmp_path):
+    # An agent whose spec pins nothing still gets the config default.
+    _write_v2_config(tmp_path)
+    for env_var in VIKRAM_ENV_VARS:
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    settings = VikramSettings(_env_file=None)
+    (tmp_path / "system_prompt.md").write_text("PROMPT", encoding="utf-8")
+    spec = AgentSpec(
+        name="Plain",
+        description="No model pin",
+        system_prompt=tmp_path / "system_prompt.md",
+        agent_dir=tmp_path,
+        # Reuse the real shared dir so the command policy file resolves.
+        shared_dir=settings.spec_root / "shared",
+    )
+
+    agent = build_agent(spec=spec, settings=settings)
+
+    assert agent.model_config["provider"] == "anthropic"
+    assert agent.model_config["model"] == "claude-sonnet-5"
 
 
 def _local_model_settings(monkeypatch, tmp_path) -> VikramSettings:

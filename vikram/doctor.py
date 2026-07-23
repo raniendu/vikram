@@ -101,13 +101,14 @@ def collect_diagnostics(
         )
 
     from vikram.providers import PROVIDERS
-    from vikram.settings import resolve_model_selection
+    from vikram.settings import resolve_agent_model_selection
 
-    provider, model = resolve_model_selection(settings)
-    provider = provider or (spec.model_provider if spec else None)
-    if not model and provider:
-        model = settings.provider_models.get(provider)
-    model = model or (spec.model if spec else None)
+    provider, model = resolve_agent_model_selection(
+        settings,
+        agent_id=selected_agent,
+        spec_provider=spec.model_provider if spec else None,
+        spec_model=spec.model if spec else None,
+    )
     diagnostics.append(
         Diagnostic(
             "Model provider",

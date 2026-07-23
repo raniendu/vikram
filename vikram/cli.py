@@ -384,6 +384,7 @@ def _run(
                 keep_servers_warm=bool(spec.mcp_servers),
                 settings=settings,
                 rebuild_agent=rebuild_agent,
+                agent_id=spec.agent_dir.name,
             )
         )
     finally:
@@ -396,6 +397,7 @@ async def run_interactive(
     prog_name: str,
     quiet: bool,
     rebuild_agent: Any | None = None,
+    agent_id: str | None = None,
     keep_servers_warm: bool = False,
     settings: "VikramSettings" | None = None,
 ) -> None:
@@ -433,7 +435,12 @@ async def run_interactive(
         if keep_servers_warm and hasattr(agent, "__aenter__"):
             await stack.enter_async_context(agent)
 
-        _print_banner(console, prog_name, settings)
+        _print_banner(
+            console,
+            prog_name,
+            settings,
+            model_config=getattr(agent, "model_config", None),
+        )
 
         while True:
             try:
@@ -461,6 +468,8 @@ async def run_interactive(
                     rebuild_agent=rebuild_agent,
                     stack=stack,
                     keep_servers_warm=keep_servers_warm,
+                    agent_id=agent_id,
+                    input_async=session.prompt_async,
                 )
                 continue
 
@@ -483,6 +492,7 @@ async def run_interactive(
                     prog_name=prog_name,
                     settings=settings,
                     context_percent=context_percent,
+                    model_config=getattr(agent, "model_config", None),
                 )
                 if should_exit:
                     return
@@ -517,14 +527,18 @@ async def _handle_model_command(
     rebuild_agent: Any | None,
     stack: contextlib.AsyncExitStack | None = None,
     keep_servers_warm: bool = False,
+    agent_id: str | None = None,
+    input_async: Any | None = None,
 ) -> tuple[Any, "VikramSettings" | None]:
     """Show or switch the active model; returns the (agent, settings) to use.
 
-    ``/model`` lists the current selection and every configured provider;
+    ``/model`` opens a numbered selector over the configured providers;
     ``/model <provider>`` switches to that provider's configured model;
     ``/model <provider> <model>`` pins both; ``/model <model>`` keeps the
-    provider and changes only the model. A failed switch (e.g. missing API
-    key) keeps the current agent. Conversation history is preserved.
+    provider and changes only the model. A successful switch is saved as
+    this agent's default (``[agents.<id>]`` in config.toml). A failed switch
+    (e.g. missing API key) keeps the current agent. Conversation history is
+    preserved.
     """
     from vikram.providers import PROVIDER_IDS, PROVIDERS
     from vikram.settings import resolve_model_selection
@@ -533,7 +547,10 @@ async def _handle_model_command(
         console.print("[dim]/model is not available in this session[/dim]")
         return agent, settings
 
+    current_config = getattr(agent, "model_config", None) or {}
     provider, model = resolve_model_selection(settings)
+    provider = current_config.get("provider") or provider
+    model = current_config.get("model") or model
     provider_models = getattr(settings, "provider_models", None) or {}
 
     if not arg:
@@ -541,16 +558,48 @@ async def _handle_model_command(
             console.print(f"Current model: {model} [dim]({provider})[/dim]")
         else:
             console.print("[dim]No model configured.[/dim]")
+        selectable: list[str] = []
         for provider_id in PROVIDER_IDS:
             configured = provider_models.get(provider_id)
             marker = "*" if provider_id == provider else " "
-            status = configured or "[dim]not configured[/dim]"
-            console.print(f"  {marker} {provider_id:<18} {status}", highlight=False)
-        console.print(
-            "[dim]Switch with /model <provider>, /model <provider> <model>, "
-            "or /model <model>.[/dim]\n"
-        )
-        return agent, settings
+            if configured:
+                selectable.append(provider_id)
+                console.print(
+                    f"  {marker} {len(selectable)}) {provider_id:<18} {configured}",
+                    highlight=False,
+                )
+            else:
+                console.print(
+                    f"  {marker}    {provider_id:<18} [dim]not configured[/dim]",
+                    highlight=False,
+                )
+        if not selectable or input_async is None:
+            console.print(
+                "[dim]Switch with /model <provider>, /model <provider> <model>, "
+                "or /model <model>. Run `vikram configure` to add "
+                "providers.[/dim]\n"
+            )
+            return agent, settings
+        try:
+            choice = str(
+                await input_async(
+                    f"Select model (1-{len(selectable)}, blank to " "cancel): "
+                )
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            choice = ""
+        if not choice:
+            console.print("[dim]Cancelled.[/dim]\n")
+            return agent, settings
+        if choice.isdigit() and 1 <= int(choice) <= len(selectable):
+            # Picking a numbered row selects exactly the model shown on it.
+            picked = selectable[int(choice) - 1]
+            arg = f"{picked} {provider_models[picked]}"
+        elif choice in PROVIDERS:
+            arg = choice
+        else:
+            console.print(f"[dim]Invalid selection: {choice!r}[/dim]\n")
+            return agent, settings
 
     parts = arg.split()
     updates: dict[str, Any]
@@ -577,19 +626,20 @@ async def _handle_model_command(
         updates = {"model": parts[0]}
 
     new_settings = settings.model_copy(update=updates)
-    new_provider, new_model = resolve_model_selection(new_settings)
-    if not new_model:
-        console.print(
-            f"[red]No model configured for {new_provider}.[/red] "
-            f"[dim]Run `vikram configure` or use /model {new_provider} "
-            "<model>.[/dim]\n"
-        )
-        return agent, settings
-
+    expected_provider, _ = resolve_model_selection(new_settings)
     try:
         new_agent = rebuild_agent(new_settings)
     except Exception as exc:
-        console.print(f"[red]{type(exc).__name__}[/red]: {exc}\n")
+        # The spec may still supply a model, so a missing model is only
+        # known after the rebuild attempt.
+        if "model is not configured" in str(exc).lower():
+            console.print(
+                f"[red]No model configured for {expected_provider}.[/red] "
+                f"[dim]Run `vikram configure` or use /model "
+                f"{expected_provider} <model>.[/dim]\n"
+            )
+        else:
+            console.print(f"[red]{type(exc).__name__}[/red]: {exc}\n")
         return agent, settings
 
     if keep_servers_warm and stack is not None and hasattr(new_agent, "__aenter__"):
@@ -597,11 +647,31 @@ async def _handle_model_command(
         # they are all cleaned up together when the session exits.
         await stack.enter_async_context(new_agent)
 
-    shown_provider = new_provider or (
-        getattr(new_agent, "model_config", None) or {}
-    ).get("provider")
+    # The rebuilt agent's model_config is the source of truth (a spec pin may
+    # have supplied the model); fall back to settings resolution for doubles.
+    new_config = getattr(new_agent, "model_config", None) or {}
+    resolved_provider, resolved_model = resolve_model_selection(new_settings)
+    new_provider = new_config.get("provider") or resolved_provider
+    new_model = new_config.get("model") or resolved_model
+
+    saved_note = ""
+    if agent_id and new_provider and new_model:
+        try:
+            from vikram.config import write_agent_model
+
+            write_agent_model(agent_id, provider=new_provider, model=new_model)
+        except Exception as exc:
+            console.print(f"[yellow]Could not save model choice: {exc}[/yellow]")
+        else:
+            saved_note = f" and saved as the {agent_id} default"
+            overrides = dict(getattr(new_settings, "agent_overrides", None) or {})
+            overrides[agent_id] = {"provider": new_provider, "model": new_model}
+            new_settings = new_settings.model_copy(
+                update={"agent_overrides": overrides}
+            )
+
     console.print(
-        f"[dim]Model set to[/dim] {new_model} [dim]({shown_provider}) — "
+        f"[dim]Model set to[/dim] {new_model} [dim]({new_provider}){saved_note} — "
         "conversation history kept[/dim]\n",
         highlight=False,
     )
@@ -609,14 +679,21 @@ async def _handle_model_command(
 
 
 def _print_banner(
-    console: "Console", prog_name: str, settings: "VikramSettings" | None
+    console: "Console",
+    prog_name: str,
+    settings: "VikramSettings" | None,
+    model_config: dict[str, Any] | None = None,
 ) -> None:
-    if settings is not None:
+    # The built agent's model_config is authoritative (spec pins and saved
+    # per-agent choices apply there); settings resolution is the fallback.
+    provider = (model_config or {}).get("provider")
+    model = (model_config or {}).get("model")
+    if (not provider or not model) and settings is not None:
         from vikram.settings import resolve_model_selection
 
-        provider, model = resolve_model_selection(settings)
-    else:
-        provider = model = None
+        resolved_provider, resolved_model = resolve_model_selection(settings)
+        provider = provider or resolved_provider
+        model = model or resolved_model
     if model and provider:
         console.print(
             f"[bold cyan]{prog_name}[/bold cyan] [dim]·[/dim] "
@@ -828,6 +905,7 @@ def _handle_slash_command(
     prog_name: str = "vikram",
     settings: "VikramSettings" | None = None,
     context_percent: int = 0,
+    model_config: dict[str, Any] | None = None,
 ) -> tuple[bool, bool]:
     from rich.markdown import Markdown
 
@@ -841,7 +919,9 @@ def _handle_slash_command(
         console.print(Markdown(json.dumps(messages, default=str, indent=2)))
         return False, multiline
     if command == "/status":
-        _print_status(console, prog_name, settings, context_percent)
+        _print_status(
+            console, prog_name, settings, context_percent, model_config=model_config
+        )
         return False, multiline
     if command in {"/copy", "/cp"}:
         text = _last_assistant_text(messages)
@@ -876,6 +956,7 @@ def _print_status(
     prog_name: str,
     settings: "VikramSettings" | None,
     context_percent: int,
+    model_config: dict[str, Any] | None = None,
 ) -> None:
     from rich.table import Table
 
@@ -883,13 +964,20 @@ def _print_status(
     table.add_column(style="cyan", no_wrap=True)
     table.add_column()
     table.add_row("Agent", prog_name)
-    if settings is not None:
-        from vikram.settings import resolve_model_selection
+    if settings is not None or model_config:
+        # The built agent's model_config is authoritative; settings
+        # resolution covers callers without a live agent.
+        provider = (model_config or {}).get("provider")
+        model = (model_config or {}).get("model")
+        if (not provider or not model) and settings is not None:
+            from vikram.settings import resolve_model_selection
 
-        provider, model = resolve_model_selection(settings)
+            resolved_provider, resolved_model = resolve_model_selection(settings)
+            provider = provider or resolved_provider
+            model = model or resolved_model
         table.add_row("Model", str(model or "not configured"))
         table.add_row("Provider", str(provider or "not configured"))
-        if settings.context_window_tokens > 0:
+        if settings is not None and settings.context_window_tokens > 0:
             table.add_row(
                 "Context",
                 f"{context_percent}% of {settings.context_window_tokens:,} tokens",
