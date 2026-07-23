@@ -815,7 +815,7 @@ class _SwitchedAgent:
     model_config = {"provider": "stub"}
 
 
-async def _run_model_command(arg, settings, rebuild):
+async def _run_model_command(arg, settings, rebuild, **kwargs):
     from vikram.cli import _handle_model_command
 
     console = _CapturingConsole()
@@ -826,6 +826,7 @@ async def _run_model_command(arg, settings, rebuild):
         settings,
         console,
         rebuild_agent=rebuild,
+        **kwargs,
     )
     return agent, new_settings, console, old_agent
 
@@ -904,15 +905,20 @@ async def test_model_command_rejects_provider_without_configured_model():
         model_provider="anthropic",
         provider_models={"anthropic": "claude-sonnet-5"},
     )
-    rebuilds = []
+
+    def rebuild(new_settings):
+        # build_model raises this when neither config nor spec supplies one.
+        raise RuntimeError(
+            "Vikram model is not configured. Run `vikram configure` or set "
+            "VIKRAM_MODEL."
+        )
 
     agent, new_settings, console, old_agent = await _run_model_command(
-        "gemini", settings, lambda s: rebuilds.append(s)
+        "gemini", settings, rebuild
     )
 
     assert agent is old_agent
     assert new_settings is settings
-    assert rebuilds == []
     output = "\n".join(str(message) for message in console.messages)
     assert "No model configured for gemini" in output
 
@@ -1009,3 +1015,78 @@ async def test_run_interactive_routes_model_command(monkeypatch, tmp_path):
 
     assert len(rebuilds) == 1
     assert rebuilds[0].model_provider == "ollama"
+
+
+async def test_model_command_selector_picks_by_number():
+    settings = _FakeModelSettings(
+        model_provider="anthropic",
+        provider_models={"ollama": "llama3.2", "anthropic": "claude-sonnet-5"},
+    )
+    rebuilds = []
+
+    def rebuild(new_settings):
+        rebuilds.append(new_settings)
+        return _SwitchedAgent()
+
+    async def pick(prompt):
+        return "1"  # registry order: ollama is the first configured entry
+
+    agent, new_settings, console, _ = await _run_model_command(
+        "", settings, rebuild, input_async=pick
+    )
+
+    assert isinstance(agent, _SwitchedAgent)
+    assert rebuilds[0].model_provider == "ollama"
+    # The picked row's displayed model is selected explicitly, so spec pins
+    # cannot swap in a different model than the one shown.
+    assert rebuilds[0].model == "llama3.2"
+    output = "\n".join(str(message) for message in console.messages)
+    assert "1) ollama" in output
+    assert "2) anthropic" in output
+
+
+async def test_model_command_selector_blank_cancels():
+    settings = _FakeModelSettings(
+        model_provider="anthropic",
+        provider_models={"anthropic": "claude-sonnet-5"},
+    )
+    rebuilds = []
+
+    async def pick(prompt):
+        return ""
+
+    agent, new_settings, console, old_agent = await _run_model_command(
+        "", settings, rebuild=lambda s: rebuilds.append(s), input_async=pick
+    )
+
+    assert agent is old_agent
+    assert rebuilds == []
+    output = "\n".join(str(message) for message in console.messages)
+    assert "Cancelled" in output
+
+
+async def test_model_command_persists_agent_choice(monkeypatch, tmp_path):
+    import tomllib as _tomllib
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    settings = _FakeModelSettings(
+        model_provider="anthropic",
+        provider_models={"ollama": "llama3.2", "anthropic": "claude-sonnet-5"},
+    )
+
+    class _OllamaAgent:
+        model_config = {"provider": "ollama", "model": "llama3.2"}
+
+    agent, new_settings, console, _ = await _run_model_command(
+        "ollama", settings, lambda s: _OllamaAgent(), agent_id="coder"
+    )
+
+    config_file = tmp_path / "vikram" / "config.toml"
+    data = _tomllib.loads(config_file.read_text(encoding="utf-8"))
+    assert data["agents"]["coder"] == {"provider": "ollama", "model": "llama3.2"}
+    assert new_settings.agent_overrides["coder"] == {
+        "provider": "ollama",
+        "model": "llama3.2",
+    }
+    output = "\n".join(str(message) for message in console.messages)
+    assert "saved as the coder default" in output

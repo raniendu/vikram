@@ -73,9 +73,13 @@ model = "llama3.2"
 base_url = "http://localhost:11434"
 ```
 
-Pick a different configured provider for one run with
-`VIKRAM_MODEL_PROVIDER=<id>` — its own model from the config applies — and
-override the model itself with `VIKRAM_MODEL`.
+Model resolution per agent, highest to lowest: `VIKRAM_MODEL_PROVIDER` /
+`VIKRAM_MODEL` / `-m` (one run) → your saved per-agent choice
+(`[agents.<name>]`, written by the in-session `/model` command) → the agent
+spec's pinned model → the config file's `default_provider` and that
+provider's model. An agent that pins its own model (like `coder`) therefore
+keeps it even when the global default points elsewhere, until you switch it
+with `/model`.
 
 For local Ollama, pull a model you want to use before configuring it:
 
@@ -125,11 +129,12 @@ model for that run, and `-o/--output-last-message` also saves the final reply to
 a file. The older `--once --prompt` form remains supported for existing scripts.
 
 Interactive sessions support `/status` for the active agent, model, directory,
-and context usage, `/model` to show or switch the active model without leaving
-the session (`/model`, `/model anthropic`, `/model ollama qwen3`, or
-`/model <model>` to change only the model — conversation history is kept),
-`/diff` to inspect the working tree, `/copy` to copy the last reply, and `/new`
-to start a fresh conversation without exiting. Run
+and context usage, `/model` to switch models without leaving the session —
+`/model` alone opens a numbered selector over your configured providers, or
+type `/model anthropic`, `/model ollama qwen3`, or `/model <model>` directly.
+A switch keeps the conversation history and is saved as that agent's default
+for future sessions. `/diff` inspects the working tree, `/copy` copies the
+last reply, and `/new` starts a fresh conversation without exiting. Run
 `vikram doctor` when setup or agent loading is not behaving as expected; it
 checks configuration, specs, model selection, credentials without printing
 their values, command policy, Python, and the current Git workspace.
@@ -148,9 +153,10 @@ shown as a normal tool call before the subagent runs.
 
 The checked-in `coder` spec defaults to local Ollama with `qwen3.6:35b-mlx`,
 which is an MLX text-only model suited to Apple silicon. The `vikram`
-orchestrator defaults to local Ollama with `gemma4:26b-a4b-it-qat`. Anything
-you set via `vikram configure` or `VIKRAM_MODEL_PROVIDER`/`VIKRAM_MODEL`
-overrides those spec fallbacks.
+orchestrator defaults to local Ollama with `gemma4:26b-a4b-it-qat`. These
+spec pins hold even when your config sets a different global default; switch
+an agent's model with `/model` (saved for next time) or override one run with
+`VIKRAM_MODEL_PROVIDER`/`VIKRAM_MODEL`.
 
 ## MCP servers and skills
 

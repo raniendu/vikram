@@ -74,7 +74,7 @@ def test_load_config_flattens_v2_layout(tmp_path):
     )
 
     assert load_config(config_file) == {
-        "model_provider": "anthropic",
+        "config_default_provider": "anthropic",
         "provider_models": {
             "anthropic": "claude-sonnet-5",
             "ollama": "llama3.2",
@@ -99,9 +99,59 @@ def test_load_config_still_reads_v1_flat_files(tmp_path):
     )
 
     assert load_config(config_file) == {
-        "model_provider": "ollama",
+        "config_default_provider": "ollama",
         "provider_models": {"ollama": "llama3.2"},
         "ollama_base_url": "http://localhost:11434",
+    }
+
+
+def test_load_config_flattens_agent_overrides(tmp_path):
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        "\n".join(
+            [
+                "config_version = 2",
+                'default_provider = "ollama"',
+                "",
+                "[providers.ollama]",
+                'model = "gemma4:26b-a4b-it-qat"',
+                "",
+                "[agents.coder]",
+                'provider = "ollama"',
+                'model = "qwen3.6:35b-mlx"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    flat = load_config(config_file)
+
+    assert flat["agent_overrides"] == {
+        "coder": {"provider": "ollama", "model": "qwen3.6:35b-mlx"}
+    }
+
+
+def test_write_agent_model_merges_into_existing_config(tmp_path):
+    from vikram.config import write_agent_model
+
+    config_file = tmp_path / "config.toml"
+    merge_write_config(
+        {"providers": {"ollama": {"model": "gemma4:26b-a4b-it-qat"}}},
+        default_provider="ollama",
+        path=config_file,
+    )
+
+    write_agent_model(
+        "coder", provider="ollama", model="qwen3.6:35b-mlx", path=config_file
+    )
+
+    data = tomllib.loads(config_file.read_text(encoding="utf-8"))
+    assert data["default_provider"] == "ollama"
+    assert data["providers"]["ollama"] == {"model": "gemma4:26b-a4b-it-qat"}
+    assert data["agents"]["coder"] == {
+        "provider": "ollama",
+        "model": "qwen3.6:35b-mlx",
     }
 
 
