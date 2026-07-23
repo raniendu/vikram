@@ -371,6 +371,11 @@ def _run(
 
         import asyncio
 
+        def rebuild_agent(new_settings: Any) -> Any:
+            return build_agent(
+                spec=spec, settings=new_settings, approve_all=args.approve_all
+            )
+
         asyncio.run(
             run_interactive(
                 agent,
@@ -378,6 +383,7 @@ def _run(
                 quiet=quiet,
                 keep_servers_warm=bool(spec.mcp_servers),
                 settings=settings,
+                rebuild_agent=rebuild_agent,
             )
         )
     finally:
@@ -389,6 +395,7 @@ async def run_interactive(
     *,
     prog_name: str,
     quiet: bool,
+    rebuild_agent: Any | None = None,
     keep_servers_warm: bool = False,
     settings: "VikramSettings" | None = None,
 ) -> None:
@@ -407,6 +414,7 @@ async def run_interactive(
         [
             "/help",
             "/status",
+            "/model",
             "/new",
             "/clear",
             "/copy",
@@ -441,6 +449,19 @@ async def run_interactive(
                 return
 
             if not text.strip():
+                continue
+
+            stripped = text.strip()
+            if stripped == "/model" or stripped.startswith("/model "):
+                agent, settings = await _handle_model_command(
+                    stripped[len("/model") :].strip(),
+                    agent,
+                    settings,
+                    console,
+                    rebuild_agent=rebuild_agent,
+                    stack=stack,
+                    keep_servers_warm=keep_servers_warm,
+                )
                 continue
 
             ident_prompt = text.lower().strip().replace(" ", "-")
@@ -487,6 +508,106 @@ async def run_interactive(
                 console.print(f"\n[red]{type(exc).__name__}[/red]: {exc}")
 
 
+async def _handle_model_command(
+    arg: str,
+    agent: Any,
+    settings: "VikramSettings" | None,
+    console: "Console",
+    *,
+    rebuild_agent: Any | None,
+    stack: contextlib.AsyncExitStack | None = None,
+    keep_servers_warm: bool = False,
+) -> tuple[Any, "VikramSettings" | None]:
+    """Show or switch the active model; returns the (agent, settings) to use.
+
+    ``/model`` lists the current selection and every configured provider;
+    ``/model <provider>`` switches to that provider's configured model;
+    ``/model <provider> <model>`` pins both; ``/model <model>`` keeps the
+    provider and changes only the model. A failed switch (e.g. missing API
+    key) keeps the current agent. Conversation history is preserved.
+    """
+    from vikram.providers import PROVIDER_IDS, PROVIDERS
+    from vikram.settings import resolve_model_selection
+
+    if settings is None or rebuild_agent is None:
+        console.print("[dim]/model is not available in this session[/dim]")
+        return agent, settings
+
+    provider, model = resolve_model_selection(settings)
+    provider_models = getattr(settings, "provider_models", None) or {}
+
+    if not arg:
+        if model and provider:
+            console.print(f"Current model: {model} [dim]({provider})[/dim]")
+        else:
+            console.print("[dim]No model configured.[/dim]")
+        for provider_id in PROVIDER_IDS:
+            configured = provider_models.get(provider_id)
+            marker = "*" if provider_id == provider else " "
+            status = configured or "[dim]not configured[/dim]"
+            console.print(f"  {marker} {provider_id:<18} {status}", highlight=False)
+        console.print(
+            "[dim]Switch with /model <provider>, /model <provider> <model>, "
+            "or /model <model>.[/dim]\n"
+        )
+        return agent, settings
+
+    parts = arg.split()
+    updates: dict[str, Any]
+    if parts[0] in PROVIDERS:
+        updates = {
+            "model_provider": parts[0],
+            "model": parts[1] if len(parts) > 1 else None,
+        }
+    elif len(parts) > 1:
+        console.print(
+            f"[red]Unknown provider: {parts[0]!r}.[/red] "
+            f"[dim]Valid providers: {', '.join(PROVIDER_IDS)}[/dim]\n"
+        )
+        return agent, settings
+    else:
+        suggestion = difflib.get_close_matches(parts[0], PROVIDER_IDS, n=1)
+        if suggestion:
+            console.print(
+                f"[dim]Unknown provider {parts[0]!r} — did you mean "
+                f"`/model {suggestion[0]}`? To set a model with that name, "
+                f"use /model <provider> {parts[0]}.[/dim]\n"
+            )
+            return agent, settings
+        updates = {"model": parts[0]}
+
+    new_settings = settings.model_copy(update=updates)
+    new_provider, new_model = resolve_model_selection(new_settings)
+    if not new_model:
+        console.print(
+            f"[red]No model configured for {new_provider}.[/red] "
+            f"[dim]Run `vikram configure` or use /model {new_provider} "
+            "<model>.[/dim]\n"
+        )
+        return agent, settings
+
+    try:
+        new_agent = rebuild_agent(new_settings)
+    except Exception as exc:
+        console.print(f"[red]{type(exc).__name__}[/red]: {exc}\n")
+        return agent, settings
+
+    if keep_servers_warm and stack is not None and hasattr(new_agent, "__aenter__"):
+        # The previous agent's MCP servers stay open on the session stack;
+        # they are all cleaned up together when the session exits.
+        await stack.enter_async_context(new_agent)
+
+    shown_provider = new_provider or (
+        getattr(new_agent, "model_config", None) or {}
+    ).get("provider")
+    console.print(
+        f"[dim]Model set to[/dim] {new_model} [dim]({shown_provider}) — "
+        "conversation history kept[/dim]\n",
+        highlight=False,
+    )
+    return new_agent, new_settings
+
+
 def _print_banner(
     console: "Console", prog_name: str, settings: "VikramSettings" | None
 ) -> None:
@@ -520,6 +641,7 @@ def _print_help(console: "Console") -> None:
     commands = [
         ("/help", "Show this help (also /? or /h)"),
         ("/status", "Show the active agent, model, directory, and context usage"),
+        ("/model", "Show or switch the model, e.g. /model anthropic"),
         ("/new", "Start a new conversation (also /clear or /reset)"),
         ("/copy", "Copy the last assistant reply (also /cp)"),
         ("/diff", "Show staged, unstaged, and untracked changes"),
