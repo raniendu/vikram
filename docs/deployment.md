@@ -23,9 +23,10 @@ state across container restarts.
 
 ## Required Runtime Env
 
-For direct app installs, `vikram configure` writes local model config to
-`~/.config/vikram/config.toml`. Deployment environments can use env vars
-instead; provider and model must be set explicitly.
+For direct app installs, `vikram configure` (alias: `vikram setup`) writes
+multi-provider model config to `~/.config/vikram/config.toml` and is safe to
+re-run — it merges instead of overwriting. Deployment environments can use env
+vars instead; provider and model must be set explicitly.
 
 For local Ollama:
 
@@ -35,13 +36,39 @@ VIKRAM_MODEL=<model-tag>
 OLLAMA_BASE_URL=http://localhost:11434/v1
 ```
 
-For a hosted OpenAI-compatible endpoint:
+For hosted providers, set the provider id, the model, and that provider's key:
 
 ```env
+# Anthropic Claude
+VIKRAM_MODEL_PROVIDER=anthropic
+VIKRAM_MODEL=claude-sonnet-5
+ANTHROPIC_API_KEY=...
+
+# Google Gemini
+VIKRAM_MODEL_PROVIDER=gemini
+VIKRAM_MODEL=gemini-2.5-flash
+GEMINI_API_KEY=...
+
+# OpenAI
+VIKRAM_MODEL_PROVIDER=openai
+VIKRAM_MODEL=gpt-5-mini
+OPENAI_API_KEY=...
+
+# DigitalOcean serverless inference
+VIKRAM_MODEL_PROVIDER=digitalocean
+VIKRAM_MODEL=llama3.3-70b-instruct
+DIGITALOCEAN_ACCESS_TOKEN=...
+
+# Ollama Cloud
+VIKRAM_MODEL_PROVIDER=ollama-cloud
+VIKRAM_MODEL=gpt-oss:120b
+OLLAMA_API_KEY=...
+
+# Any other OpenAI-compatible endpoint
 VIKRAM_MODEL_PROVIDER=openai-compatible
+VIKRAM_MODEL=<model-id>
 VIKRAM_OPENAI_COMPAT_API_KEY=...
-VIKRAM_OPENAI_COMPAT_BASE_URL=https://api.openai.com/v1
-VIKRAM_MODEL=gpt-4.1-mini
+VIKRAM_OPENAI_COMPAT_BASE_URL=https://api.example.com/v1
 ```
 
 For Telegram:

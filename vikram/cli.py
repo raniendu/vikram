@@ -26,7 +26,7 @@ CODE_THEME = "monokai"
 HISTORY_PATH = Path.home() / ".vikram" / "cli_history"
 COMMANDS = {
     "exec": "Run one task non-interactively",
-    "configure": "Configure the model provider and model",
+    "configure": "Configure model providers (alias: setup)",
     "doctor": "Check configuration and workspace health",
     "update": "Check for or install Vikram updates",
 }
@@ -268,7 +268,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         from vikram.update import run as run_update
 
         sys.exit(run_update(raw_args[1:]))
-    if raw_args and raw_args[0] == "configure":
+    if raw_args and raw_args[0] in {"configure", "setup"}:
         from vikram.config import run_configure
 
         code = run_configure(raw_args[1:])
@@ -490,10 +490,12 @@ async def run_interactive(
 def _print_banner(
     console: "Console", prog_name: str, settings: "VikramSettings" | None
 ) -> None:
-    model = getattr(settings, "model", None) if settings is not None else None
-    provider = (
-        getattr(settings, "model_provider", None) if settings is not None else None
-    )
+    if settings is not None:
+        from vikram.settings import resolve_model_selection
+
+        provider, model = resolve_model_selection(settings)
+    else:
+        provider = model = None
     if model and provider:
         console.print(
             f"[bold cyan]{prog_name}[/bold cyan] [dim]·[/dim] "
@@ -760,8 +762,11 @@ def _print_status(
     table.add_column()
     table.add_row("Agent", prog_name)
     if settings is not None:
-        table.add_row("Model", str(settings.model or "not configured"))
-        table.add_row("Provider", str(settings.model_provider or "not configured"))
+        from vikram.settings import resolve_model_selection
+
+        provider, model = resolve_model_selection(settings)
+        table.add_row("Model", str(model or "not configured"))
+        table.add_row("Provider", str(provider or "not configured"))
         if settings.context_window_tokens > 0:
             table.add_row(
                 "Context",

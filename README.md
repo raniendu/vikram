@@ -35,12 +35,49 @@ uv run vikram configure
 uv run vikram --once --prompt "say pong"
 ```
 
-Vikram does not ship with a default model provider or model name. Configuration
-lives in `~/.config/vikram/config.toml`; environment variables and `.env` still
-override that local file for development and deployment.
+Vikram does not ship with a default model provider or model name. Run
+`vikram configure` (alias: `vikram setup`) once after installing: it walks a
+menu of providers, lets you configure as many as you want in one session
+(model + API key per provider), and asks which one is the default. Settings
+are stored in `~/.config/vikram/config.toml`; environment variables and `.env`
+still override that local file for development and deployment.
 
-For local Ollama, pull a model you want to use, then run `vikram configure` and
-enter that exact tag:
+The wizard is safe to re-run at any time — it merges into the existing file,
+so adding or updating one provider never discards the others. Package updates
+(`vikram update` or the installer) never touch it either.
+
+### Model providers
+
+| Provider id | Backend | API key env var |
+| --- | --- | --- |
+| `ollama` | Local Ollama | — |
+| `ollama-cloud` | [ollama.com](https://ollama.com) hosted models | `OLLAMA_API_KEY` |
+| `anthropic` | Anthropic Claude | `ANTHROPIC_API_KEY` |
+| `gemini` | Google Gemini | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) |
+| `openai` | OpenAI | `OPENAI_API_KEY` |
+| `digitalocean` | DigitalOcean serverless inference | `DIGITALOCEAN_ACCESS_TOKEN` |
+| `openai-compatible` | Any OpenAI-compatible endpoint (e.g. Sarvam AI) | `VIKRAM_OPENAI_COMPAT_API_KEY` |
+
+The resulting config looks like:
+
+```toml
+config_version = 2
+default_provider = "anthropic"
+
+[providers.anthropic]
+model = "claude-sonnet-5"
+api_key = "sk-ant-..."
+
+[providers.ollama]
+model = "llama3.2"
+base_url = "http://localhost:11434"
+```
+
+Pick a different configured provider for one run with
+`VIKRAM_MODEL_PROVIDER=<id>` — its own model from the config applies — and
+override the model itself with `VIKRAM_MODEL`.
+
+For local Ollama, pull a model you want to use before configuring it:
 
 ```bash
 ollama pull <model-tag>
@@ -55,19 +92,19 @@ VIKRAM_MODEL=<model-tag>
 OLLAMA_BASE_URL=http://localhost:11434/v1
 ```
 
-Equivalent `.env` settings for a hosted OpenAI-compatible endpoint:
+Equivalent `.env` settings for a hosted provider (Anthropic shown; use the
+matching key env var from the table for the others):
 
 ```env
-VIKRAM_MODEL_PROVIDER=openai-compatible
-VIKRAM_OPENAI_COMPAT_API_KEY=...
-VIKRAM_OPENAI_COMPAT_BASE_URL=https://api.openai.com/v1
-VIKRAM_MODEL=gpt-4.1-mini
+VIKRAM_MODEL_PROVIDER=anthropic
+VIKRAM_MODEL=claude-sonnet-5
+ANTHROPIC_API_KEY=...
 ```
 
 ## CLI
 
 ```bash
-uv run vikram configure
+uv run vikram configure   # multi-provider setup wizard (alias: vikram setup)
 uv run vikram
 uv run vikram --agent coder
 uv run vikram exec --agent coder "summarize this repo"
@@ -108,8 +145,9 @@ shown as a normal tool call before the subagent runs.
 
 The checked-in `coder` spec defaults to local Ollama with `qwen3.6:35b-mlx`,
 which is an MLX text-only model suited to Apple silicon. The `vikram`
-orchestrator defaults to local Ollama with `gemma4:26b-a4b-it-qat`. Set
-`VIKRAM_MODEL_PROVIDER` and `VIKRAM_MODEL` to override either for one run.
+orchestrator defaults to local Ollama with `gemma4:26b-a4b-it-qat`. Anything
+you set via `vikram configure` or `VIKRAM_MODEL_PROVIDER`/`VIKRAM_MODEL`
+overrides those spec fallbacks.
 
 ## MCP servers and skills
 
@@ -227,10 +265,11 @@ On another machine after authentication with GitHub CLI:
 VIKRAM_INSTALL_DIR="$HOME/.local/share/vikram" bash install.sh
 ```
 
-The installer asks for model configuration and writes it to
-`~/.config/vikram/config.toml`. It records install metadata in
-`~/.config/vikram/install.toml` so `vikram update` can fast-forward and
-reinstall the `uv tool`.
+The installer offers to run the `vikram configure` wizard and writes provider
+settings to `~/.config/vikram/config.toml`. Re-running the installer or
+`vikram update` never overwrites that file, and re-running the wizard merges
+into it. Install metadata lands in `~/.config/vikram/install.toml` so
+`vikram update` can fast-forward and reinstall the `uv tool`.
 
 ## Docker
 

@@ -100,8 +100,14 @@ def collect_diagnostics(
             )
         )
 
-    provider = settings.model_provider or (spec.model_provider if spec else None)
-    model = settings.model or (spec.model if spec else None)
+    from vikram.providers import PROVIDERS
+    from vikram.settings import resolve_model_selection
+
+    provider, model = resolve_model_selection(settings)
+    provider = provider or (spec.model_provider if spec else None)
+    if not model and provider:
+        model = settings.provider_models.get(provider)
+    model = model or (spec.model if spec else None)
     diagnostics.append(
         Diagnostic(
             "Model provider",
@@ -122,8 +128,9 @@ def collect_diagnostics(
             None if model else "Run `vikram configure` or set VIKRAM_MODEL.",
         )
     )
-    if provider == "openai-compatible":
-        has_key = bool(settings.openai_compat_api_key)
+    provider_entry = PROVIDERS.get(provider or "")
+    if provider_entry is not None and provider_entry.needs_api_key:
+        has_key = bool(getattr(settings, provider_entry.api_key_field or "", None))
         diagnostics.append(
             Diagnostic(
                 "API credential",
@@ -132,7 +139,10 @@ def collect_diagnostics(
                 (
                     None
                     if has_key
-                    else "Set VIKRAM_OPENAI_COMPAT_API_KEY or run `vikram configure`."
+                    else (
+                        f"Set {provider_entry.api_key_env} or run "
+                        "`vikram configure`."
+                    )
                 ),
             )
         )

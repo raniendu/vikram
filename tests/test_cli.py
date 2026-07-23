@@ -5,6 +5,7 @@ import os
 import stat
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -235,7 +236,7 @@ def test_cli_exec_applies_model_and_directory_overrides(monkeypatch, tmp_path):
 def test_cli_configure_writes_ollama_local_config(monkeypatch, tmp_path, capsys):
     from vikram.cli import main
 
-    answers = iter(["ollama", "llama3.2", "http://localhost:11434"])
+    answers = iter(["1", "llama3.2", "http://localhost:11434", ""])
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
 
@@ -243,14 +244,67 @@ def test_cli_configure_writes_ollama_local_config(monkeypatch, tmp_path, capsys)
 
     config_path = tmp_path / "vikram" / "config.toml"
     assert config_path.is_file()
-    assert config_path.read_text(encoding="utf-8") == (
-        "# Written by `vikram configure`.\n"
-        'model_provider = "ollama"\n'
-        'model = "llama3.2"\n'
-        'ollama_base_url = "http://localhost:11434"\n'
-    )
+    text = config_path.read_text(encoding="utf-8")
+    assert text.startswith("# Written by `vikram configure`.")
+    assert tomllib.loads(text) == {
+        "config_version": 2,
+        "default_provider": "ollama",
+        "providers": {
+            "ollama": {
+                "model": "llama3.2",
+                "base_url": "http://localhost:11434",
+            }
+        },
+    }
     assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
     assert str(config_path) in capsys.readouterr().out
+
+
+def test_cli_setup_adds_provider_and_preserves_existing(monkeypatch, tmp_path):
+    from vikram.cli import main
+
+    config_dir = tmp_path / "vikram"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text(
+        "\n".join(
+            [
+                "config_version = 2",
+                'default_provider = "ollama"',
+                "",
+                "[providers.ollama]",
+                'model = "llama3.2"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    answers = iter(["anthropic", "claude-sonnet-5", "", "anthropic"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    monkeypatch.setattr("getpass.getpass", lambda prompt="": "sk-ant-test")
+
+    main(["setup"])
+
+    data = tomllib.loads((config_dir / "config.toml").read_text(encoding="utf-8"))
+    assert data["default_provider"] == "anthropic"
+    assert data["providers"]["ollama"] == {"model": "llama3.2"}
+    assert data["providers"]["anthropic"] == {
+        "model": "claude-sonnet-5",
+        "api_key": "sk-ant-test",
+    }
+
+
+def test_cli_configure_without_changes_writes_nothing(monkeypatch, tmp_path, capsys):
+    from vikram.cli import main
+
+    answers = iter([""])
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+
+    main(["configure"])
+
+    assert not (tmp_path / "vikram" / "config.toml").exists()
+    assert "No changes made" in capsys.readouterr().out
 
 
 def test_prompt_requires_once(capsys):
@@ -714,3 +768,25 @@ def test_print_banner_includes_model_and_provider():
     assert "llama3.2" in output
     assert "ollama" in output
     assert "/help" in output
+
+
+def test_print_banner_resolves_model_from_provider_models():
+    import io
+
+    from rich.console import Console
+
+    from vikram.cli import _print_banner
+
+    settings = SimpleNamespace(
+        model=None,
+        model_provider="anthropic",
+        provider_models={"anthropic": "claude-sonnet-5"},
+    )
+    buffer = io.StringIO()
+    _print_banner(
+        Console(file=buffer, width=100, force_terminal=False), "Vikram", settings
+    )
+    output = buffer.getvalue()
+
+    assert "claude-sonnet-5" in output
+    assert "anthropic" in output

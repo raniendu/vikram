@@ -392,7 +392,14 @@ def _settings_with_spec_model(
     updates: dict[str, Any] = {}
     if spec.model_provider and settings.model_provider is None:
         updates["model_provider"] = spec.model_provider
-    if spec.model and settings.model is None:
+    effective_provider = updates.get("model_provider", settings.model_provider)
+    if (
+        spec.model
+        and settings.model is None
+        # A provider-specific model configured via `vikram configure` still
+        # outranks the spec fallback, matching env > config > spec precedence.
+        and not settings.provider_models.get(effective_provider or "")
+    ):
         updates["model"] = spec.model
     return settings.model_copy(update=updates) if updates else settings
 
