@@ -125,8 +125,11 @@ model for that run, and `-o/--output-last-message` also saves the final reply to
 a file. The older `--once --prompt` form remains supported for existing scripts.
 
 Interactive sessions support `/status` for the active agent, model, directory,
-and context usage, `/diff` to inspect the working tree, `/copy` to copy the last
-reply, and `/new` to start a fresh conversation without exiting. Run
+and context usage, `/model` to show or switch the active model without leaving
+the session (`/model`, `/model anthropic`, `/model ollama qwen3`, or
+`/model <model>` to change only the model — conversation history is kept),
+`/diff` to inspect the working tree, `/copy` to copy the last reply, and `/new`
+to start a fresh conversation without exiting. Run
 `vikram doctor` when setup or agent loading is not behaving as expected; it
 checks configuration, specs, model selection, credentials without printing
 their values, command policy, Python, and the current Git workspace.
