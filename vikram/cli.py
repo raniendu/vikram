@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import difflib
 import json
+import os
+import shutil
+import subprocess
 import sys
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
@@ -20,6 +24,12 @@ if TYPE_CHECKING:
 
 CODE_THEME = "monokai"
 HISTORY_PATH = Path.home() / ".vikram" / "cli_history"
+COMMANDS = {
+    "exec": "Run one task non-interactively",
+    "configure": "Configure model providers (alias: setup)",
+    "doctor": "Check configuration and workspace health",
+    "update": "Check for or install Vikram updates",
+}
 
 
 class _CommandAutoSuggest:
@@ -82,9 +92,21 @@ class _LazyVersionAction(argparse.Action):
 
 
 def build_parser() -> argparse.ArgumentParser:
+    command_help = "\n".join(
+        f"  {name:<10} {description}" for name, description in COMMANDS.items()
+    )
     parser = argparse.ArgumentParser(
         prog="vikram",
-        epilog="Commands: vikram configure (alias: vikram setup), vikram update",
+        description="Run a spec-driven coding agent in your terminal.",
+        epilog=(
+            f"commands:\n{command_help}\n\n"
+            "examples:\n"
+            "  vikram configure\n"
+            "  vikram --agent coder\n"
+            '  vikram exec --agent coder "summarize this repo"\n'
+            "  vikram doctor"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--version",
@@ -95,6 +117,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--agent",
         default=None,
         help="Agent name to load from spec/ (default: vikram)",
+    )
+    parser.add_argument(
+        "-m",
+        "--model",
+        default=None,
+        help="Override the configured model for this run.",
+    )
+    parser.add_argument(
+        "-C",
+        "--cd",
+        type=_existing_directory,
+        default=None,
+        metavar="PATH",
+        help="Set the agent working directory before the run starts.",
     )
     parser.add_argument(
         "--once",
@@ -137,6 +173,70 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_exec_parser() -> argparse.ArgumentParser:
+    """Build the Codex-style non-interactive command parser."""
+    parser = argparse.ArgumentParser(
+        prog="vikram exec",
+        description=(
+            "Run Vikram non-interactively. If PROMPT is omitted, read it from stdin."
+        ),
+    )
+    parser.add_argument(
+        "prompt",
+        nargs="?",
+        metavar="PROMPT",
+        help="Prompt text, '-', '@path', or an existing prompt file path.",
+    )
+    parser.add_argument(
+        "--agent",
+        default=None,
+        help="Agent name to load from spec/ (default: vikram)",
+    )
+    parser.add_argument(
+        "-m",
+        "--model",
+        default=None,
+        help="Override the configured model for this run.",
+    )
+    parser.add_argument(
+        "-C",
+        "--cd",
+        type=_existing_directory,
+        default=None,
+        metavar="PATH",
+        help="Set the agent working directory before the run starts.",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the final result as one JSON object.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output-last-message",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Also write the final agent message to a file.",
+    )
+    parser.add_argument(
+        "-y",
+        "--yes",
+        "--approve-all",
+        dest="approve_all",
+        action="store_true",
+        help="Auto-approve every tool call without prompting.",
+    )
+    return parser
+
+
+def _existing_directory(value: str) -> Path:
+    path = Path(value).expanduser().resolve()
+    if not path.is_dir():
+        raise argparse.ArgumentTypeError(f"not a directory: {value}")
+    return path
+
+
 def read_prompt(value: str) -> str:
     if value == "-":
         return sys.stdin.read()
@@ -153,6 +253,17 @@ def read_prompt(value: str) -> str:
 
 def main(argv: Sequence[str] | None = None) -> None:
     raw_args = list(argv) if argv is not None else sys.argv[1:]
+    if raw_args and raw_args[0] == "exec":
+        parser = build_exec_parser()
+        args = parser.parse_args(raw_args[1:])
+        prompt = _read_exec_prompt(args.prompt, parser)
+        _run(
+            args,
+            prompt=prompt,
+            json_output=args.json,
+            output_last_message=args.output_last_message,
+        )
+        return
     if raw_args and raw_args[0] == "update":
         from vikram.update import run as run_update
 
@@ -164,6 +275,18 @@ def main(argv: Sequence[str] | None = None) -> None:
         if code:
             sys.exit(code)
         return
+    if raw_args and raw_args[0] == "doctor":
+        from vikram.doctor import run as run_doctor
+
+        sys.exit(run_doctor(raw_args[1:]))
+    if raw_args and not raw_args[0].startswith("-"):
+        parser = build_parser()
+        command = raw_args[0]
+        suggestion = difflib.get_close_matches(command, COMMANDS, n=1)
+        message = f"unknown command: {command}"
+        if suggestion:
+            message += f". Did you mean `vikram {suggestion[0]}`?"
+        parser.error(message)
 
     parser = build_parser()
     args = parser.parse_args(raw_args)
@@ -176,36 +299,89 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.quiet and args.once:
         parser.error("--quiet cannot be combined with --once")
 
+    if args.once:
+        _run(args, prompt=read_prompt(args.prompt), json_output=args.json)
+        return
+    _run(args, quiet=args.quiet)
+
+
+def _read_exec_prompt(value: str | None, parser: argparse.ArgumentParser) -> str:
+    if value is not None:
+        prompt = read_prompt(value)
+        if value != "-" and not getattr(sys.stdin, "isatty", lambda: False)():
+            try:
+                stdin_context = sys.stdin.read()
+            except OSError:
+                # Test runners and embedded callers may replace stdin with an
+                # object that intentionally rejects reads.
+                stdin_context = ""
+            if stdin_context.strip():
+                prompt = f"{prompt}\n\nAdditional context from stdin:\n{stdin_context}"
+    else:
+        is_tty = getattr(sys.stdin, "isatty", lambda: False)()
+        if is_tty:
+            parser.error("PROMPT is required when stdin is a terminal")
+        prompt = sys.stdin.read()
+    if not prompt.strip():
+        parser.error(
+            "prompt is empty; pass a task as an argument or pipe content on stdin\n"
+            'example: vikram exec "summarize this repo"'
+        )
+    return prompt
+
+
+def _run(
+    args: argparse.Namespace,
+    *,
+    prompt: str | None = None,
+    quiet: bool = False,
+    json_output: bool = False,
+    output_last_message: Path | None = None,
+) -> None:
     from vikram.agent import build_agent
     from vikram.settings import VikramSettings
     from vikram.spec import load_spec
 
-    settings = VikramSettings()
-    if args.agent:
-        settings = settings.model_copy(update={"default_agent": args.agent})
-    spec = load_spec(settings.default_agent, settings.spec_root)
-    agent = build_agent(spec=spec, settings=settings, approve_all=args.approve_all)
+    old_cwd = Path.cwd()
+    try:
+        if args.cd is not None:
+            os.chdir(args.cd)
 
-    if args.once:
-        result = agent.run_sync(read_prompt(args.prompt))
-        output = str(result.output)
-        if args.json:
-            print(json.dumps({"agent": spec.name, "output": output}))
-        else:
-            print(output)
-        return
+        settings = VikramSettings()
+        overrides: dict[str, Any] = {}
+        if args.agent:
+            overrides["default_agent"] = args.agent
+        if args.model:
+            overrides["model"] = args.model
+        if overrides:
+            settings = settings.model_copy(update=overrides)
+        spec = load_spec(settings.default_agent, settings.spec_root)
+        agent = build_agent(spec=spec, settings=settings, approve_all=args.approve_all)
 
-    import asyncio
+        if prompt is not None:
+            result = agent.run_sync(prompt)
+            output = str(result.output)
+            if output_last_message is not None:
+                output_last_message.expanduser().write_text(output, encoding="utf-8")
+            if json_output:
+                print(json.dumps({"agent": spec.name, "output": output}))
+            else:
+                print(output)
+            return
 
-    asyncio.run(
-        run_interactive(
-            agent,
-            prog_name=spec.name,
-            quiet=args.quiet,
-            keep_servers_warm=bool(spec.mcp_servers),
-            settings=settings,
+        import asyncio
+
+        asyncio.run(
+            run_interactive(
+                agent,
+                prog_name=spec.name,
+                quiet=quiet,
+                keep_servers_warm=bool(spec.mcp_servers),
+                settings=settings,
+            )
         )
-    )
+    finally:
+        os.chdir(old_cwd)
 
 
 async def run_interactive(
@@ -228,7 +404,17 @@ async def run_interactive(
     messages: list[Any] = []
     multiline = False
     auto_suggest = _CommandAutoSuggest(
-        ["/help", "/clear", "/markdown", "/multiline", "/exit"]
+        [
+            "/help",
+            "/status",
+            "/new",
+            "/clear",
+            "/copy",
+            "/diff",
+            "/markdown",
+            "/multiline",
+            "/exit",
+        ]
     )
     context_percent = 0
     context_warned = False
@@ -262,14 +448,20 @@ async def run_interactive(
                 if ident_prompt in {"/help", "/?", "/h"}:
                     _print_help(console)
                     continue
-                if ident_prompt in {"/clear", "/reset"}:
+                if ident_prompt in {"/clear", "/reset", "/new"}:
                     messages = []
                     context_percent = 0
                     context_warned = False
                     console.print("[dim]Conversation history cleared.[/dim]\n")
                     continue
                 should_exit, multiline = _handle_slash_command(
-                    ident_prompt, messages, multiline, console
+                    ident_prompt,
+                    messages,
+                    multiline,
+                    console,
+                    prog_name=prog_name,
+                    settings=settings,
+                    context_percent=context_percent,
                 )
                 if should_exit:
                     return
@@ -327,7 +519,10 @@ def _print_help(console: "Console") -> None:
     table.add_column(style="dim")
     commands = [
         ("/help", "Show this help (also /? or /h)"),
-        ("/clear", "Clear conversation history (also /reset)"),
+        ("/status", "Show the active agent, model, directory, and context usage"),
+        ("/new", "Start a new conversation (also /clear or /reset)"),
+        ("/copy", "Copy the last assistant reply (also /cp)"),
+        ("/diff", "Show staged, unstaged, and untracked changes"),
         ("/multiline", "Toggle multiline input (Esc then Enter to send)"),
         ("/markdown", "Show the raw message history as Markdown"),
         ("/exit", "Quit the session (also /quit, /q, Ctrl-D)"),
@@ -507,6 +702,10 @@ def _handle_slash_command(
     messages: list[Any],
     multiline: bool,
     console: "Console",
+    *,
+    prog_name: str = "vikram",
+    settings: "VikramSettings" | None = None,
+    context_percent: int = 0,
 ) -> tuple[bool, bool]:
     from rich.markdown import Markdown
 
@@ -519,11 +718,150 @@ def _handle_slash_command(
     if command == "/markdown":
         console.print(Markdown(json.dumps(messages, default=str, indent=2)))
         return False, multiline
-    if command == "/cp":
-        console.print("[dim]copy is not available in this CLI runtime[/dim]")
+    if command == "/status":
+        _print_status(console, prog_name, settings, context_percent)
+        return False, multiline
+    if command in {"/copy", "/cp"}:
+        text = _last_assistant_text(messages)
+        if not text:
+            console.print("[yellow]No assistant reply to copy yet.[/yellow]")
+            return False, multiline
+        error = _copy_to_clipboard(text)
+        if error:
+            console.print(f"[yellow]Could not copy reply:[/yellow] {error}")
+        else:
+            console.print("[dim]Copied the last assistant reply.[/dim]")
+        return False, multiline
+    if command == "/diff":
+        from rich.syntax import Syntax
+
+        try:
+            diff = _git_diff()
+        except RuntimeError as exc:
+            console.print(f"[yellow]Could not show changes:[/yellow] {exc}")
+            return False, multiline
+        if not diff:
+            console.print("[dim]Working tree is clean.[/dim]")
+        else:
+            console.print(Syntax(diff, "diff", theme=CODE_THEME, word_wrap=False))
         return False, multiline
     console.print(f"[dim]Unknown command: {command}[/dim]")
     return False, multiline
+
+
+def _print_status(
+    console: "Console",
+    prog_name: str,
+    settings: "VikramSettings" | None,
+    context_percent: int,
+) -> None:
+    from rich.table import Table
+
+    table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
+    table.add_column(style="cyan", no_wrap=True)
+    table.add_column()
+    table.add_row("Agent", prog_name)
+    if settings is not None:
+        from vikram.settings import resolve_model_selection
+
+        provider, model = resolve_model_selection(settings)
+        table.add_row("Model", str(model or "not configured"))
+        table.add_row("Provider", str(provider or "not configured"))
+        if settings.context_window_tokens > 0:
+            table.add_row(
+                "Context",
+                f"{context_percent}% of {settings.context_window_tokens:,} tokens",
+            )
+    table.add_row("Directory", str(Path.cwd()))
+    console.print(table)
+    console.print()
+
+
+def _last_assistant_text(messages: list[Any]) -> str:
+    for message in reversed(messages):
+        role = (
+            message.get("role")
+            if isinstance(message, dict)
+            else getattr(message, "role", None)
+        )
+        if str(role).lower() != "assistant":
+            continue
+        content = (
+            message.get("content")
+            if isinstance(message, dict)
+            else getattr(message, "content", None)
+        )
+        if isinstance(content, str):
+            return content.strip()
+        rendered: list[str] = []
+        for item in content or []:
+            if isinstance(item, str):
+                rendered.append(item)
+            elif isinstance(item, dict) and item.get("text") is not None:
+                rendered.append(str(item["text"]))
+            elif getattr(item, "text", None) is not None:
+                rendered.append(str(item.text))
+        text = "\n".join(rendered).strip()
+        if text:
+            return text
+    return ""
+
+
+def _copy_to_clipboard(text: str) -> str | None:
+    if sys.platform == "darwin":
+        candidates = [["pbcopy"]]
+    elif sys.platform == "win32":
+        candidates = [["clip"]]
+    else:
+        candidates = [
+            ["wl-copy"],
+            ["xclip", "-selection", "clipboard"],
+            ["xsel", "--clipboard", "--input"],
+        ]
+    command = next((item for item in candidates if shutil.which(item[0])), None)
+    if command is None:
+        return "no supported clipboard command was found"
+    try:
+        subprocess.run(
+            command,
+            input=text,
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        return " ".join(str(exc).splitlines())
+    return None
+
+
+def _git_diff() -> str:
+    status = _run_git("status", "--short")
+    unstaged = _run_git("diff", "--no-ext-diff", "--")
+    staged = _run_git("diff", "--no-ext-diff", "--cached", "--")
+    sections: list[str] = []
+    if status:
+        sections.append(f"Working tree\n{status}")
+    if unstaged:
+        sections.append(f"Unstaged changes\n{unstaged}")
+    if staged:
+        sections.append(f"Staged changes\n{staged}")
+    return "\n\n".join(sections)
+
+
+def _run_git(*args: str) -> str:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+    except OSError as exc:
+        raise RuntimeError("Git is not available") from exc
+    if result.returncode:
+        detail = result.stderr.strip() or f"git {' '.join(args)} failed"
+        raise RuntimeError(detail)
+    return result.stdout.rstrip()
 
 
 def _context_percent(result: Any, settings: "VikramSettings" | None) -> int | None:

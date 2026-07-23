@@ -64,7 +64,7 @@ def test_thread_store_clears_legacy_histories_once(tmp_path):
             )
             VALUES ('telegram', '123', 'vikram', ?, ?, ?)
             """,
-            (b'["pydantic-history"]', now, now),
+            (b'["strands-history"]', now, now),
         )
 
     store = ThreadStore(db_path)
@@ -77,7 +77,7 @@ def test_thread_store_clears_legacy_histories_once(tmp_path):
         "telegram",
         "123",
         agent_name="vikram",
-        message_history_json=b'["strands-history"]',
+        message_history_json=b'["pydantic-history"]',
     )
 
     reopened = ThreadStore(db_path)
@@ -85,7 +85,7 @@ def test_thread_store_clears_legacy_histories_once(tmp_path):
         reopened.get_thread(
             "telegram", "123", default_agent="vikram"
         ).message_history_json
-        == b'["strands-history"]'
+        == b'["pydantic-history"]'
     )
 
 

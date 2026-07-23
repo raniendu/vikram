@@ -1,5 +1,6 @@
 import pytest
-from strands.tools.mcp import MCPClient
+from pydantic_ai.mcp import MCPToolset
+from pydantic_ai.toolsets import PrefixedToolset
 
 from vikram.mcp import (
     MCPConfigError,
@@ -30,7 +31,8 @@ def test_build_stdio_server_with_env_expansion():
     server = build_mcp_server(spec, environ)
 
     assert isinstance(server, VikramMCPClient)
-    assert isinstance(server.raw, MCPClient)
+    assert isinstance(server.raw, PrefixedToolset)
+    assert isinstance(server.raw.wrapped, MCPToolset)
     assert server.config["transport"] == "stdio"
     assert server.config["command"] == "npx"
     assert server.config["args"] == ["-y", "@modelcontextprotocol/server-github"]

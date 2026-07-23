@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -10,20 +9,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings.sources import PydanticBaseSettingsSource
 
 from vikram.config import load_config
-from vikram.providers import (
-    PROVIDER_IDS,
-    PROVIDERS,
-    ModelProvider,
-    ModelRequest,
-    strip_v1_suffix,
-)
-
-logger = logging.getLogger(__name__)
+from vikram.providers import PROVIDER_IDS, PROVIDERS, ModelProvider, ModelRequest
 
 
 @dataclass(frozen=True)
 class VikramModel:
-    """A Strands model plus stable metadata used by tests and adapters."""
+    """A Pydantic AI model plus stable metadata used by adapters and UX."""
 
     raw: Any
     config: dict[str, Any]
@@ -224,11 +215,17 @@ class VikramSettings(BaseSettings):
 
     @property
     def normalized_ollama_base_url(self) -> str:
-        return f"{strip_v1_suffix(self.ollama_base_url)}/v1"
+        base_url = self.ollama_base_url.strip().rstrip("/")
+        if base_url.endswith("/v1"):
+            return base_url
+        return f"{base_url}/v1"
 
     @property
     def normalized_ollama_host(self) -> str:
-        return strip_v1_suffix(self.ollama_base_url)
+        base_url = self.ollama_base_url.strip().rstrip("/")
+        if base_url.endswith("/v1"):
+            return base_url[: -len("/v1")]
+        return base_url
 
     @property
     def telegram_allowed_chat_id_set(self) -> set[int]:
@@ -255,31 +252,12 @@ class VikramSettings(BaseSettings):
         return values or None
 
 
-SUPPORTED_MODEL_SETTINGS = {
-    "temperature",
-    "top_p",
-    "max_tokens",
-    "stop_sequences",
-    "frequency_penalty",
-    "presence_penalty",
-}
-
-
 def map_model_settings(
     values: dict[str, Any] | None, *, agent_name: str
 ) -> dict[str, Any]:
-    """Best-effort map of Vikram spec settings to Strands provider params."""
-    mapped: dict[str, Any] = {}
-    for key, value in (values or {}).items():
-        if key in SUPPORTED_MODEL_SETTINGS:
-            mapped[key] = value
-        else:
-            logger.warning(
-                "unsupported_model_setting_ignored: %s",
-                key,
-                extra={"agent": agent_name, "setting": key},
-            )
-    return mapped
+    """Return spec model settings for Pydantic AI's provider-aware validation."""
+    del agent_name
+    return dict(values or {})
 
 
 def resolve_model_selection(settings: Any) -> tuple[str | None, str | None]:
@@ -323,17 +301,6 @@ def build_model(
         )
 
     params = map_model_settings(model_settings, agent_name=agent_name)
-    for key in sorted(set(params) & provider.dropped_params):
-        del params[key]
-        logger.warning(
-            "unsupported_model_setting_ignored: %s",
-            key,
-            extra={"agent": agent_name, "setting": key, "provider": provider_id},
-        )
-    for old_key, new_key in provider.param_renames.items():
-        if old_key in params:
-            params[new_key] = params.pop(old_key)
-
     base_url: str | None = None
     if provider.base_url_field:
         base_url = (

@@ -1,11 +1,7 @@
 import stat
 import tomllib
 
-from vikram.config import (
-    load_config,
-    merge_write_config,
-    migrate_v1,
-)
+from vikram.config import load_config, merge_write_config, migrate_v1
 
 
 def test_migrate_v1_ollama_flat_config():

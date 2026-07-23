@@ -32,9 +32,9 @@ values of ``env``) may reference environment variables with ``${VAR}`` syntax,
 expanded when the agent is built; a missing variable is a hard error. This keeps
 specs safe to commit while real secrets stay in ``.env`` or the environment.
 
-Tool and run events are wired by ``vikram.agent`` into Strands hooks. The hook
-transport and decision model stay Vikram-owned so existing ``[[hooks]]`` TOML
-continues to work across runtime migrations.
+Tool events are wired through a Pydantic AI wrapper toolset, while run events
+are fired by ``vikram.agent.VikramAgent``. The transport and decision model stay
+Vikram-owned so existing ``[[hooks]]`` TOML remains stable.
 """
 
 from __future__ import annotations
@@ -51,6 +51,9 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+from pydantic_ai import RunContext
+from pydantic_ai.exceptions import ModelRetry
+from pydantic_ai.toolsets import ToolsetTool, WrapperToolset
 
 from vikram.logging import get_logger
 
@@ -369,3 +372,55 @@ async def run_hooks(
 
 def _stringify(result: Any) -> str:
     return result if isinstance(result, str) else str(result)
+
+
+@dataclass
+class HookToolset(WrapperToolset[Any]):
+    """Run ``PreToolUse`` and ``PostToolUse`` around every tool call."""
+
+    pre: tuple[Hook, ...] = ()
+    post: tuple[Hook, ...] = ()
+    agent_name: str = ""
+
+    async def call_tool(
+        self,
+        name: str,
+        tool_args: dict[str, Any],
+        ctx: RunContext[Any],
+        tool: ToolsetTool[Any],
+    ) -> Any:
+        if self.pre:
+            decision = await run_hooks(
+                self.pre,
+                {
+                    "event": "PreToolUse",
+                    "agent": self.agent_name,
+                    "tool_name": name,
+                    "tool_input": tool_args,
+                    "cwd": os.getcwd(),
+                },
+                tool_name=name,
+            )
+            if decision.blocked:
+                raise ModelRetry(decision.reason or f"A hook blocked {name}.")
+
+        result = await super().call_tool(name, tool_args, ctx, tool)
+
+        if self.post:
+            decision = await run_hooks(
+                self.post,
+                {
+                    "event": "PostToolUse",
+                    "agent": self.agent_name,
+                    "tool_name": name,
+                    "tool_input": tool_args,
+                    "tool_output": _stringify(result),
+                    "cwd": os.getcwd(),
+                },
+                tool_name=name,
+            )
+            if decision.blocked:
+                raise ModelRetry(decision.reason or f"A hook rejected {name}'s result.")
+            if decision.context and isinstance(result, str):
+                return f"{result}\n\n{decision.context}"
+        return result

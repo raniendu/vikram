@@ -27,7 +27,7 @@ tools = [
 ]
 
 # MCP servers — external Model Context Protocol tool servers. Each entry becomes
-# a Strands MCP client provider. Reference secrets as ${ENV_VAR}; never inline
+# a Pydantic AI MCP toolset. Reference secrets as ${ENV_VAR}; never inline
 # them. Uncomment and adapt:
 #
 # [[mcp_servers]]
@@ -52,7 +52,7 @@ tools = [
 # transport = "python"           # in-process callable, imported at build time
 # entrypoint = "myhooks.audit:on_tool"   # "module:function"
 
-# Model knobs — mapped best-effort into Strands provider parameters.
+# Model knobs — passed to Pydantic AI for provider-aware handling.
 [model_settings]
 temperature = 0.2
 parallel_tool_calls = false

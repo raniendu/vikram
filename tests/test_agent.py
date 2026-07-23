@@ -1,11 +1,17 @@
 from types import SimpleNamespace
 
 import pytest
+from pydantic_ai import Agent, Tool
+from pydantic_ai.capabilities import HandleDeferredToolCalls
+from pydantic_ai.models.ollama import OllamaModel
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.test import TestModel
 
-from vikram.agent import build_agent
-from vikram.delegation import make_delegate_to_agent_tool
+from vikram.agent import VikramAgent, _approval_handler, build_agent
+from vikram.delegation import DelegatedApprovalRequired, make_delegate_to_agent_tool
+from vikram.hooks import HookSet
 from vikram.mcp import MCPServerSpec
-from vikram.settings import VikramSettings, build_model, map_model_settings
+from vikram.settings import VikramModel, VikramSettings, build_model, map_model_settings
 from vikram.spec import AgentSpec, load_spec
 
 VIKRAM_ENV_VARS = (
@@ -54,22 +60,94 @@ def test_build_agent_uses_requested_settings(monkeypatch, tmp_path):
     )
 
     assert local_agent.name == "Vikram"
-    assert local_agent.runtime == "strands"
+    assert local_agent.runtime == "pydantic-ai"
+    assert isinstance(local_agent.raw_agent, Agent)
+    assert isinstance(local_agent.model, OllamaModel)
     assert local_agent.model_config["provider"] == "ollama"
     assert local_agent.model_config["model"] == "test-model"
 
 
-def test_agent_creates_fresh_strands_runtime_for_each_run(monkeypatch, tmp_path):
+def test_agent_uses_managed_pydantic_ai_runtime(monkeypatch, tmp_path):
     settings = _local_model_settings(monkeypatch, tmp_path)
     spec = load_spec("vikram", settings.spec_root)
     agent = build_agent(spec=spec, settings=settings)
 
-    first = agent._agent_for_run()
-    second = agent._agent_for_run()
+    assert isinstance(agent.raw_agent, Agent)
+    assert agent.raw_agent.model is agent.model
 
-    assert first is not second
-    assert first is not agent.raw_agent
-    assert second is not agent.raw_agent
+
+async def test_approve_all_resolves_pydantic_deferred_tools_inline():
+    calls = []
+
+    async def destructive(path: str) -> str:
+        calls.append(path)
+        return "done"
+
+    agent = Agent(
+        TestModel(call_tools=["destructive"]),
+        tools=[Tool(destructive, requires_approval=True)],
+        capabilities=[
+            HandleDeferredToolCalls(
+                handler=_approval_handler(
+                    surface="cli", approve_all=True, approval_ask=None
+                )
+            )
+        ],
+    )
+
+    result = await agent.run("make the change")
+
+    assert result.output == '{"destructive":"done"}'
+    assert calls == ["a"]
+
+
+async def test_approval_handler_uses_interface_callback():
+    prompts = []
+    calls = []
+
+    async def destructive(path: str) -> str:
+        calls.append(path)
+        return "done"
+
+    async def ask(prompt: str) -> str:
+        prompts.append(prompt)
+        return "no"
+
+    agent = Agent(
+        TestModel(call_tools=["destructive"]),
+        tools=[Tool(destructive, requires_approval=True)],
+        capabilities=[
+            HandleDeferredToolCalls(
+                handler=_approval_handler(
+                    surface="acp", approve_all=False, approval_ask=ask
+                )
+            )
+        ],
+    )
+
+    await agent.run("make the change")
+
+    assert calls == []
+    assert prompts and 'Tool "destructive" requires human approval.' in prompts[0]
+
+
+async def test_vikram_agent_streams_pydantic_events_and_final_result():
+    raw_agent = Agent(TestModel(custom_output_text="hello"))
+    agent = VikramAgent(
+        raw_agent=raw_agent,
+        name="Test",
+        description="test",
+        model=VikramModel(raw=raw_agent.model, config={}),
+        system_prompt="",
+        tools=[],
+        mcp_clients=[],
+        hooks=HookSet(),
+    )
+
+    events = [event async for event in agent.stream_events("hi")]
+
+    assert "".join(event.get("data", "") for event in events) == "hello"
+    assert events[-1]["vikram_result"].output == "hello"
 
 
 def test_coder_spec_defaults_to_qwen_mlx(monkeypatch, tmp_path):
@@ -78,7 +156,8 @@ def test_coder_spec_defaults_to_qwen_mlx(monkeypatch, tmp_path):
 
     agent = build_agent(spec=spec, settings=settings)
 
-    assert agent.runtime == "strands"
+    assert agent.runtime == "pydantic-ai"
+    assert isinstance(agent.model, OllamaModel)
     assert agent.model_config["provider"] == "ollama"
     assert agent.model_config["model"] == "qwen3.6:35b-mlx"
 
@@ -168,7 +247,7 @@ def test_settings_load_model_from_local_config(monkeypatch, tmp_path):
     assert model.config["provider"] == "ollama"
     assert model.config["model"] == "llama3.2"
     assert settings.normalized_ollama_base_url == "http://localhost:11434/v1"
-    assert model.config["base_url"].rstrip("/") == "http://localhost:11434"
+    assert model.config["base_url"].rstrip("/") == "http://localhost:11434/v1"
     assert settings.vikram_db_path.name == "vikram.sqlite3"
     assert settings.vikram_db_path.parent.name == ".vikram"
 
@@ -213,7 +292,7 @@ def test_build_model_uses_openai_compatible_when_provider_is_set(monkeypatch, tm
     assert model.config["base_url"].rstrip("/") == "https://llm.example.test/v1"
 
 
-def test_map_model_settings_warns_and_drops_unsupported_keys(caplog):
+def test_map_model_settings_preserves_provider_specific_keys():
     mapped = map_model_settings(
         {
             "temperature": 0.2,
@@ -226,9 +305,14 @@ def test_map_model_settings_warns_and_drops_unsupported_keys(caplog):
         agent_name="Coder",
     )
 
-    assert mapped == {"temperature": 0.2, "max_tokens": 128}
-    assert "unsupported_model_setting_ignored" in caplog.text
-    assert "parallel_tool_calls" in caplog.text
+    assert mapped == {
+        "temperature": 0.2,
+        "max_tokens": 128,
+        "parallel_tool_calls": False,
+        "thinking": "low",
+        "timeout": 60,
+        "extra_headers": {"X-Test": "1"},
+    }
 
 
 def test_build_model_openai_compatible_requires_api_key(monkeypatch, tmp_path):
@@ -242,9 +326,9 @@ def test_build_model_openai_compatible_requires_api_key(monkeypatch, tmp_path):
         build_model(settings)
 
 
-def test_build_model_anthropic_defaults_max_tokens_and_drops_penalties(
-    monkeypatch, tmp_path, caplog
-):
+def test_build_model_anthropic(monkeypatch, tmp_path):
+    from pydantic_ai.models.anthropic import AnthropicModel
+
     settings = clean_settings(
         monkeypatch,
         tmp_path,
@@ -253,38 +337,12 @@ def test_build_model_anthropic_defaults_max_tokens_and_drops_penalties(
         ANTHROPIC_API_KEY="anthropic-key",
     )
 
-    model = build_model(
-        settings,
-        model_settings={"temperature": 0.2, "frequency_penalty": 0.5},
-        agent_name="Coder",
-    )
+    model = build_model(settings)
 
+    assert isinstance(model.raw, AnthropicModel)
     assert model.config["provider"] == "anthropic"
     assert model.config["model"] == "claude-sonnet-5"
-    raw_config = model.raw.get_config()
-    assert raw_config["model_id"] == "claude-sonnet-5"
-    assert raw_config["max_tokens"] == 8192
-    assert raw_config["params"] == {"temperature": 0.2}
-    assert "unsupported_model_setting_ignored" in caplog.text
-    assert "frequency_penalty" in caplog.text
-
-
-def test_build_model_anthropic_spec_max_tokens_moves_to_constructor(
-    monkeypatch, tmp_path
-):
-    settings = clean_settings(
-        monkeypatch,
-        tmp_path,
-        VIKRAM_MODEL_PROVIDER="anthropic",
-        VIKRAM_MODEL="claude-sonnet-5",
-        ANTHROPIC_API_KEY="anthropic-key",
-    )
-
-    model = build_model(settings, model_settings={"max_tokens": 1024})
-
-    raw_config = model.raw.get_config()
-    assert raw_config["max_tokens"] == 1024
-    assert not raw_config.get("params")
+    assert model.raw.model_name == "claude-sonnet-5"
 
 
 def test_build_model_anthropic_requires_api_key(monkeypatch, tmp_path):
@@ -299,7 +357,9 @@ def test_build_model_anthropic_requires_api_key(monkeypatch, tmp_path):
         build_model(settings)
 
 
-def test_build_model_gemini_renames_max_tokens(monkeypatch, tmp_path):
+def test_build_model_gemini(monkeypatch, tmp_path):
+    from pydantic_ai.models.google import GoogleModel
+
     settings = clean_settings(
         monkeypatch,
         tmp_path,
@@ -308,15 +368,11 @@ def test_build_model_gemini_renames_max_tokens(monkeypatch, tmp_path):
         GEMINI_API_KEY="gemini-key",
     )
 
-    model = build_model(
-        settings, model_settings={"max_tokens": 256, "temperature": 0.1}
-    )
+    model = build_model(settings)
 
+    assert isinstance(model.raw, GoogleModel)
     assert model.config["provider"] == "gemini"
-    assert model.raw.get_config()["params"] == {
-        "max_output_tokens": 256,
-        "temperature": 0.1,
-    }
+    assert model.raw.model_name == "gemini-2.5-flash"
 
 
 def test_build_model_gemini_accepts_google_api_key_alias(monkeypatch, tmp_path):
@@ -334,6 +390,8 @@ def test_build_model_gemini_accepts_google_api_key_alias(monkeypatch, tmp_path):
 
 
 def test_build_model_openai_uses_default_base_url(monkeypatch, tmp_path):
+    from pydantic_ai.models.openai import OpenAIChatModel
+
     settings = clean_settings(
         monkeypatch,
         tmp_path,
@@ -344,8 +402,10 @@ def test_build_model_openai_uses_default_base_url(monkeypatch, tmp_path):
 
     model = build_model(settings)
 
+    assert isinstance(model.raw, OpenAIChatModel)
     assert model.config["provider"] == "openai"
     assert model.config["base_url"] == "https://api.openai.com/v1"
+    assert str(model.raw.client.base_url).rstrip("/") == "https://api.openai.com/v1"
 
 
 def test_build_model_digitalocean_uses_inference_endpoint(monkeypatch, tmp_path):
@@ -363,7 +423,9 @@ def test_build_model_digitalocean_uses_inference_endpoint(monkeypatch, tmp_path)
     assert model.config["base_url"] == "https://inference.do-ai.run/v1"
 
 
-def test_build_model_ollama_cloud_sends_bearer_auth(monkeypatch, tmp_path):
+def test_build_model_ollama_cloud_sends_api_key(monkeypatch, tmp_path):
+    from pydantic_ai.models.ollama import OllamaModel
+
     settings = clean_settings(
         monkeypatch,
         tmp_path,
@@ -374,11 +436,11 @@ def test_build_model_ollama_cloud_sends_bearer_auth(monkeypatch, tmp_path):
 
     model = build_model(settings)
 
+    assert isinstance(model.raw, OllamaModel)
     assert model.config["provider"] == "ollama-cloud"
-    assert model.config["base_url"] == "https://ollama.com"
-    assert model.raw.client_args == {
-        "headers": {"Authorization": "Bearer ollama-cloud-key"}
-    }
+    assert model.config["base_url"] == "https://ollama.com/v1"
+    assert model.raw.client.api_key == "ollama-cloud-key"
+    assert str(model.raw.client.base_url).rstrip("/") == "https://ollama.com/v1"
 
 
 def test_build_model_ollama_cloud_requires_api_key(monkeypatch, tmp_path):
@@ -607,7 +669,9 @@ async def test_delegate_to_agent_fails_when_subagent_requests_approval(
 
     class FakeAgent:
         async def run(self, prompt, *, conversation_id):
-            raise RuntimeError("requested approval-gated tool calls: write_file")
+            raise DelegatedApprovalRequired(
+                "requested approval-gated tool calls: write_file"
+            )
 
     monkeypatch.setattr("vikram.agent.build_agent", lambda **kwargs: FakeAgent())
     tool = make_delegate_to_agent_tool(

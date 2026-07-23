@@ -2,16 +2,17 @@
 
 Each :class:`Provider` describes where a provider's credentials and endpoint
 live on ``VikramSettings``, how the ``vikram configure`` wizard should prompt
-for it, and how to build the underlying Strands model. ``settings.py``,
+for it, and how to build the underlying Pydantic AI model. ``settings.py``,
 ``config.py`` and ``spec.py`` all import from here; this module must not
-import from any ``vikram`` module so it stays cycle-free, and Strands imports
-happen inside the builder functions so importing the registry stays cheap.
+import from any ``vikram`` module so it stays cycle-free, and Pydantic AI
+imports happen inside the builder functions so importing the registry stays
+cheap.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal
 
 ModelProvider = Literal[
@@ -24,18 +25,13 @@ ModelProvider = Literal[
     "openai-compatible",
 ]
 
-# AnthropicModel requires max_tokens at construction time; every current
-# Claude model supports at least this many output tokens. Override per agent
-# via [model_settings] max_tokens.
-DEFAULT_ANTHROPIC_MAX_TOKENS = 8192
 
-
-def strip_v1_suffix(base_url: str) -> str:
-    """Normalize an OpenAI-style base URL to a bare host for the ollama SDK."""
+def ensure_v1_suffix(base_url: str) -> str:
+    """Normalize a host or base URL to the OpenAI-compatible ``/v1`` form."""
     value = base_url.strip().rstrip("/")
     if value.endswith("/v1"):
-        return value[: -len("/v1")]
-    return value
+        return value
+    return f"{value}/v1"
 
 
 @dataclass(frozen=True)
@@ -62,64 +58,58 @@ class Provider:
     suggested_model: str | None = None
     prompt_base_url: bool = False
     base_url_hint: str | None = None
-    dropped_params: frozenset[str] = frozenset()
-    param_renames: dict[str, str] = field(default_factory=dict)
 
 
 def _build_ollama(request: ModelRequest) -> Any:
-    from strands.models.ollama import OllamaModel
+    from pydantic_ai.models.ollama import OllamaModel
+    from pydantic_ai.providers.ollama import OllamaProvider
 
     return OllamaModel(
-        host=request.base_url,
-        model_id=request.model,
-        **request.params,
+        request.model,
+        provider=OllamaProvider(base_url=request.base_url),
     )
 
 
 def _build_ollama_cloud(request: ModelRequest) -> Any:
-    from strands.models.ollama import OllamaModel
+    from pydantic_ai.models.ollama import OllamaModel
+    from pydantic_ai.providers.ollama import OllamaProvider
 
     return OllamaModel(
-        host=request.base_url,
-        ollama_client_args={"headers": {"Authorization": f"Bearer {request.api_key}"}},
-        model_id=request.model,
-        **request.params,
+        request.model,
+        provider=OllamaProvider(base_url=request.base_url, api_key=request.api_key),
     )
 
 
 def _build_anthropic(request: ModelRequest) -> Any:
-    from strands.models.anthropic import AnthropicModel
+    from pydantic_ai.models.anthropic import AnthropicModel
+    from pydantic_ai.providers.anthropic import AnthropicProvider
 
-    params = dict(request.params)
-    max_tokens = params.pop("max_tokens", DEFAULT_ANTHROPIC_MAX_TOKENS)
     return AnthropicModel(
-        client_args={"api_key": request.api_key},
-        model_id=request.model,
-        max_tokens=max_tokens,
-        params=params or None,
+        request.model,
+        provider=AnthropicProvider(api_key=request.api_key),
     )
 
 
 def _build_gemini(request: ModelRequest) -> Any:
-    from strands.models.gemini import GeminiModel
+    from pydantic_ai.models.google import GoogleModel
+    from pydantic_ai.providers.google import GoogleProvider
 
-    return GeminiModel(
-        client_args={"api_key": request.api_key},
-        model_id=request.model,
-        params=request.params,
+    return GoogleModel(
+        request.model,
+        provider=GoogleProvider(api_key=request.api_key),
     )
 
 
 def _build_openai_compatible(request: ModelRequest) -> Any:
-    from strands.models.openai import OpenAIModel
+    from pydantic_ai.models.openai import OpenAIChatModel
+    from pydantic_ai.providers.openai import OpenAIProvider
 
-    return OpenAIModel(
-        client_args={
-            "base_url": request.base_url,
-            "api_key": request.api_key,
-        },
-        model_id=request.model,
-        params=request.params,
+    return OpenAIChatModel(
+        request.model,
+        provider=OpenAIProvider(
+            base_url=request.base_url,
+            api_key=request.api_key,
+        ),
     )
 
 
@@ -132,7 +122,7 @@ PROVIDERS: dict[str, Provider] = {
             build=_build_ollama,
             base_url_field="ollama_base_url",
             default_base_url="http://localhost:11434/v1",
-            normalize_base_url=strip_v1_suffix,
+            normalize_base_url=ensure_v1_suffix,
             suggested_model="llama3.2",
             prompt_base_url=True,
             base_url_hint="blank uses http://localhost:11434",
@@ -146,6 +136,7 @@ PROVIDERS: dict[str, Provider] = {
             api_key_env="OLLAMA_API_KEY",
             base_url_field="ollama_cloud_base_url",
             default_base_url="https://ollama.com",
+            normalize_base_url=ensure_v1_suffix,
             suggested_model="gpt-oss:120b",
         ),
         Provider(
@@ -156,7 +147,6 @@ PROVIDERS: dict[str, Provider] = {
             api_key_field="anthropic_api_key",
             api_key_env="ANTHROPIC_API_KEY",
             suggested_model="claude-sonnet-5",
-            dropped_params=frozenset({"frequency_penalty", "presence_penalty"}),
         ),
         Provider(
             id="gemini",
@@ -166,7 +156,6 @@ PROVIDERS: dict[str, Provider] = {
             api_key_field="gemini_api_key",
             api_key_env="GEMINI_API_KEY",
             suggested_model="gemini-2.5-flash",
-            param_renames={"max_tokens": "max_output_tokens"},
         ),
         Provider(
             id="openai",
