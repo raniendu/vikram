@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel
 
 from vikram.command_policy import POLICY_FILENAME, CommandPolicy, load_command_policy
 from vikram.hooks import HookSpec
 from vikram.mcp import MCPServerSpec
+from vikram.providers import ModelProvider
 
 SHARED_DIR_NAME = "shared"
-ModelProvider = Literal["ollama", "openai-compatible"]
 
 
 class AgentSurfaceError(RuntimeError):

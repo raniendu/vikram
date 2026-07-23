@@ -3,15 +3,21 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings.sources import PydanticBaseSettingsSource
 
 from vikram.config import load_config
+from vikram.providers import (
+    PROVIDER_IDS,
+    PROVIDERS,
+    ModelProvider,
+    ModelRequest,
+    strip_v1_suffix,
+)
 
-ModelProvider = Literal["ollama", "openai-compatible"]
 logger = logging.getLogger(__name__)
 
 
@@ -74,9 +80,52 @@ class VikramSettings(BaseSettings):
         default=None,
         validation_alias="VIKRAM_MODEL",
     )
+    provider_models: dict[str, str] = Field(
+        default_factory=dict,
+        validation_alias="VIKRAM_PROVIDER_MODELS",
+    )
     ollama_base_url: str = Field(
         default="http://localhost:11434/v1",
         validation_alias="OLLAMA_BASE_URL",
+    )
+    ollama_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("VIKRAM_OLLAMA_API_KEY", "OLLAMA_API_KEY"),
+    )
+    ollama_cloud_base_url: str = Field(
+        default="https://ollama.com",
+        validation_alias="VIKRAM_OLLAMA_CLOUD_BASE_URL",
+    )
+    anthropic_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("VIKRAM_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
+    )
+    gemini_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "VIKRAM_GEMINI_API_KEY",
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+        ),
+    )
+    openai_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("VIKRAM_OPENAI_API_KEY", "OPENAI_API_KEY"),
+    )
+    openai_base_url: str = Field(
+        default="https://api.openai.com/v1",
+        validation_alias="VIKRAM_OPENAI_BASE_URL",
+    )
+    digitalocean_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "VIKRAM_DIGITALOCEAN_API_KEY",
+            "DIGITALOCEAN_ACCESS_TOKEN",
+        ),
+    )
+    digitalocean_base_url: str = Field(
+        default="https://inference.do-ai.run/v1",
+        validation_alias="VIKRAM_DIGITALOCEAN_BASE_URL",
     )
     openai_compat_api_key: str | None = Field(
         default=None,
@@ -175,17 +224,11 @@ class VikramSettings(BaseSettings):
 
     @property
     def normalized_ollama_base_url(self) -> str:
-        base_url = self.ollama_base_url.strip().rstrip("/")
-        if base_url.endswith("/v1"):
-            return base_url
-        return f"{base_url}/v1"
+        return f"{strip_v1_suffix(self.ollama_base_url)}/v1"
 
     @property
     def normalized_ollama_host(self) -> str:
-        base_url = self.ollama_base_url.strip().rstrip("/")
-        if base_url.endswith("/v1"):
-            return base_url[: -len("/v1")]
-        return base_url
+        return strip_v1_suffix(self.ollama_base_url)
 
     @property
     def telegram_allowed_chat_id_set(self) -> set[int]:
@@ -239,6 +282,21 @@ def map_model_settings(
     return mapped
 
 
+def resolve_model_selection(settings: Any) -> tuple[str | None, str | None]:
+    """Resolve the effective (provider, model) pair for a settings object.
+
+    ``settings.model`` (env/CLI/spec) wins; otherwise fall back to the
+    provider's own default model from ``provider_models`` (config.toml).
+    Accepts any settings-like object so lightweight test doubles work.
+    """
+    provider = getattr(settings, "model_provider", None)
+    model = getattr(settings, "model", None)
+    if not model and provider:
+        provider_models = getattr(settings, "provider_models", None) or {}
+        model = provider_models.get(provider) or None
+    return provider, model
+
+
 def build_model(
     settings: VikramSettings | None = None,
     *,
@@ -246,58 +304,63 @@ def build_model(
     agent_name: str = "agent",
 ) -> VikramModel:
     settings = settings or VikramSettings()
-    if not settings.model_provider:
+    provider_id, model = resolve_model_selection(settings)
+    if not provider_id:
         raise RuntimeError(
             "Vikram model provider is not configured. Run `vikram configure` "
             "or set VIKRAM_MODEL_PROVIDER."
         )
-    if not settings.model:
+    provider = PROVIDERS.get(provider_id)
+    if provider is None:
+        raise RuntimeError(
+            f"Unknown VIKRAM_MODEL_PROVIDER: {provider_id!r}. "
+            f"Valid providers: {', '.join(PROVIDER_IDS)}."
+        )
+    if not model:
         raise RuntimeError(
             "Vikram model is not configured. Run `vikram configure` or set "
             "VIKRAM_MODEL."
         )
+
     params = map_model_settings(model_settings, agent_name=agent_name)
-    if settings.model_provider == "ollama":
-        from strands.models.ollama import OllamaModel
+    for key in sorted(set(params) & provider.dropped_params):
+        del params[key]
+        logger.warning(
+            "unsupported_model_setting_ignored: %s",
+            key,
+            extra={"agent": agent_name, "setting": key, "provider": provider_id},
+        )
+    for old_key, new_key in provider.param_renames.items():
+        if old_key in params:
+            params[new_key] = params.pop(old_key)
 
-        raw = OllamaModel(
-            host=settings.normalized_ollama_host,
-            model_id=settings.model,
-            **params,
+    base_url: str | None = None
+    if provider.base_url_field:
+        base_url = (
+            getattr(settings, provider.base_url_field) or provider.default_base_url
         )
-        return VikramModel(
-            raw=raw,
-            config={
-                "provider": "ollama",
-                "model": settings.model,
-                "base_url": settings.normalized_ollama_host,
-                "params": params,
-            },
-        )
-    if settings.model_provider == "openai-compatible":
-        if not settings.openai_compat_api_key:
-            raise RuntimeError(
-                "VIKRAM_OPENAI_COMPAT_API_KEY is not set. Run `vikram "
-                "configure`, add it to .env, or set it in the runtime "
-                "environment to use the openai-compatible model provider."
-            )
-        from strands.models.openai import OpenAIModel
+        if base_url and provider.normalize_base_url:
+            base_url = provider.normalize_base_url(base_url)
 
-        raw = OpenAIModel(
-            client_args={
-                "base_url": settings.openai_compat_base_url,
-                "api_key": settings.openai_compat_api_key,
-            },
-            model_id=settings.model,
-            params=params,
+    api_key: str | None = None
+    if provider.api_key_field:
+        api_key = getattr(settings, provider.api_key_field)
+    if provider.needs_api_key and not api_key:
+        raise RuntimeError(
+            f"{provider.api_key_env} is not set. Run `vikram configure`, add "
+            f"it to .env, or set it in the runtime environment to use the "
+            f"{provider_id} model provider."
         )
-        return VikramModel(
-            raw=raw,
-            config={
-                "provider": "openai-compatible",
-                "model": settings.model,
-                "base_url": settings.openai_compat_base_url,
-                "params": params,
-            },
-        )
-    raise RuntimeError(f"Unknown VIKRAM_MODEL_PROVIDER: {settings.model_provider!r}")
+
+    raw = provider.build(
+        ModelRequest(model=model, params=params, api_key=api_key, base_url=base_url)
+    )
+    return VikramModel(
+        raw=raw,
+        config={
+            "provider": provider_id,
+            "model": model,
+            "base_url": base_url,
+            "params": params,
+        },
+    )

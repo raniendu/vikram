@@ -11,7 +11,7 @@ from vikram.dbos_gateway import EventDispatcher, launch_dbos, shutdown_dbos
 from vikram.gateway import InboundMessage, ThreadStore
 from vikram.logging import configure_logging, get_logger, thread_hash
 from vikram.observability import init_observability
-from vikram.settings import VikramSettings
+from vikram.settings import VikramSettings, resolve_model_selection
 from vikram.spec import AgentSurfaceError, ensure_surface_allowed, load_spec
 from vikram.telegram import TelegramAdapter
 from vikram.telegram_config import TelegramConfig, load_telegram_config
@@ -111,11 +111,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = _get_settings()
     configure_logging(settings.log_level)
     init_observability(settings)
+    model_provider, model = resolve_model_selection(settings)
     logger.info(
         "api_starting",
         default_agent=settings.default_agent,
-        model_provider=settings.model_provider,
-        model=settings.model,
+        model_provider=model_provider,
+        model=model,
         db_path=str(settings.vikram_db_path),
     )
     launch_dbos(settings)

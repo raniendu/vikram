@@ -84,7 +84,7 @@ class _LazyVersionAction(argparse.Action):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="vikram",
-        epilog="Commands: vikram configure, vikram update",
+        epilog="Commands: vikram configure (alias: vikram setup), vikram update",
     )
     parser.add_argument(
         "--version",
@@ -157,7 +157,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         from vikram.update import run as run_update
 
         sys.exit(run_update(raw_args[1:]))
-    if raw_args and raw_args[0] == "configure":
+    if raw_args and raw_args[0] in {"configure", "setup"}:
         from vikram.config import run_configure
 
         code = run_configure(raw_args[1:])
@@ -298,10 +298,12 @@ async def run_interactive(
 def _print_banner(
     console: "Console", prog_name: str, settings: "VikramSettings" | None
 ) -> None:
-    model = getattr(settings, "model", None) if settings is not None else None
-    provider = (
-        getattr(settings, "model_provider", None) if settings is not None else None
-    )
+    if settings is not None:
+        from vikram.settings import resolve_model_selection
+
+        provider, model = resolve_model_selection(settings)
+    else:
+        provider = model = None
     if model and provider:
         console.print(
             f"[bold cyan]{prog_name}[/bold cyan] [dim]·[/dim] "

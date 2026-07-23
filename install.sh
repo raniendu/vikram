@@ -156,11 +156,11 @@ info "Vikram has no default model provider or model name."
 if [ -t 0 ]; then
   if [ -f "$config_file" ]; then
     info "Existing local config: $config_file"
-    printf 'Reconfigure model settings now? [y/N] '
+    printf 'Add or update model providers now? (existing providers are kept) [y/N] '
     read -r configure_answer
     configure_answer="${configure_answer:-n}"
   else
-    printf 'Configure model settings now? [Y/n] '
+    printf 'Configure model providers now? [Y/n] '
     read -r configure_answer
     configure_answer="${configure_answer:-y}"
   fi
@@ -208,7 +208,7 @@ cat <<EOF
 EOF
 
 bold "Model config:"
-info "Run or rerun: $bin_dir/vikram configure"
+info "Run or rerun: $bin_dir/vikram configure (safe to re-run; merges into existing config)"
 info "Env vars like VIKRAM_MODEL_PROVIDER and VIKRAM_MODEL still override $config_file."
 
 bold "Optional (see $vikram_dir/.env.example for the full list):"

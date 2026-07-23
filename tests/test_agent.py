@@ -14,9 +14,24 @@ VIKRAM_ENV_VARS = (
     "VIKRAM_SPEC_ROOT",
     "VIKRAM_AGENT",
     "VIKRAM_MODEL_PROVIDER",
+    "VIKRAM_PROVIDER_MODELS",
     "VIKRAM_OPENAI_COMPAT_API_KEY",
     "VIKRAM_OPENAI_COMPAT_BASE_URL",
     "OPENAI_API_KEY",
+    "VIKRAM_OPENAI_API_KEY",
+    "VIKRAM_OPENAI_BASE_URL",
+    "VIKRAM_ANTHROPIC_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "VIKRAM_GEMINI_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "VIKRAM_DIGITALOCEAN_API_KEY",
+    "DIGITALOCEAN_ACCESS_TOKEN",
+    "VIKRAM_DIGITALOCEAN_BASE_URL",
+    "VIKRAM_OLLAMA_API_KEY",
+    "OLLAMA_API_KEY",
+    "VIKRAM_OLLAMA_CLOUD_BASE_URL",
+    "SARVAM_API_KEY",
 )
 
 
@@ -225,6 +240,233 @@ def test_build_model_openai_compatible_requires_api_key(monkeypatch, tmp_path):
     )
     with pytest.raises(RuntimeError, match="VIKRAM_OPENAI_COMPAT_API_KEY"):
         build_model(settings)
+
+
+def test_build_model_anthropic_defaults_max_tokens_and_drops_penalties(
+    monkeypatch, tmp_path, caplog
+):
+    settings = clean_settings(
+        monkeypatch,
+        tmp_path,
+        VIKRAM_MODEL_PROVIDER="anthropic",
+        VIKRAM_MODEL="claude-sonnet-5",
+        ANTHROPIC_API_KEY="anthropic-key",
+    )
+
+    model = build_model(
+        settings,
+        model_settings={"temperature": 0.2, "frequency_penalty": 0.5},
+        agent_name="Coder",
+    )
+
+    assert model.config["provider"] == "anthropic"
+    assert model.config["model"] == "claude-sonnet-5"
+    raw_config = model.raw.get_config()
+    assert raw_config["model_id"] == "claude-sonnet-5"
+    assert raw_config["max_tokens"] == 8192
+    assert raw_config["params"] == {"temperature": 0.2}
+    assert "unsupported_model_setting_ignored" in caplog.text
+    assert "frequency_penalty" in caplog.text
+
+
+def test_build_model_anthropic_spec_max_tokens_moves_to_constructor(
+    monkeypatch, tmp_path
+):
+    settings = clean_settings(
+        monkeypatch,
+        tmp_path,
+        VIKRAM_MODEL_PROVIDER="anthropic",
+        VIKRAM_MODEL="claude-sonnet-5",
+        ANTHROPIC_API_KEY="anthropic-key",
+    )
+
+    model = build_model(settings, model_settings={"max_tokens": 1024})
+
+    raw_config = model.raw.get_config()
+    assert raw_config["max_tokens"] == 1024
+    assert not raw_config.get("params")
+
+
+def test_build_model_anthropic_requires_api_key(monkeypatch, tmp_path):
+    settings = clean_settings(
+        monkeypatch,
+        tmp_path,
+        VIKRAM_MODEL_PROVIDER="anthropic",
+        VIKRAM_MODEL="claude-sonnet-5",
+    )
+
+    with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+        build_model(settings)
+
+
+def test_build_model_gemini_renames_max_tokens(monkeypatch, tmp_path):
+    settings = clean_settings(
+        monkeypatch,
+        tmp_path,
+        VIKRAM_MODEL_PROVIDER="gemini",
+        VIKRAM_MODEL="gemini-2.5-flash",
+        GEMINI_API_KEY="gemini-key",
+    )
+
+    model = build_model(
+        settings, model_settings={"max_tokens": 256, "temperature": 0.1}
+    )
+
+    assert model.config["provider"] == "gemini"
+    assert model.raw.get_config()["params"] == {
+        "max_output_tokens": 256,
+        "temperature": 0.1,
+    }
+
+
+def test_build_model_gemini_accepts_google_api_key_alias(monkeypatch, tmp_path):
+    settings = clean_settings(
+        monkeypatch,
+        tmp_path,
+        VIKRAM_MODEL_PROVIDER="gemini",
+        VIKRAM_MODEL="gemini-2.5-flash",
+        GOOGLE_API_KEY="google-key",
+    )
+
+    model = build_model(settings)
+
+    assert model.config["provider"] == "gemini"
+
+
+def test_build_model_openai_uses_default_base_url(monkeypatch, tmp_path):
+    settings = clean_settings(
+        monkeypatch,
+        tmp_path,
+        VIKRAM_MODEL_PROVIDER="openai",
+        VIKRAM_MODEL="gpt-5-mini",
+        OPENAI_API_KEY="openai-key",
+    )
+
+    model = build_model(settings)
+
+    assert model.config["provider"] == "openai"
+    assert model.config["base_url"] == "https://api.openai.com/v1"
+
+
+def test_build_model_digitalocean_uses_inference_endpoint(monkeypatch, tmp_path):
+    settings = clean_settings(
+        monkeypatch,
+        tmp_path,
+        VIKRAM_MODEL_PROVIDER="digitalocean",
+        VIKRAM_MODEL="llama3.3-70b-instruct",
+        DIGITALOCEAN_ACCESS_TOKEN="dop_v1_test",
+    )
+
+    model = build_model(settings)
+
+    assert model.config["provider"] == "digitalocean"
+    assert model.config["base_url"] == "https://inference.do-ai.run/v1"
+
+
+def test_build_model_ollama_cloud_sends_bearer_auth(monkeypatch, tmp_path):
+    settings = clean_settings(
+        monkeypatch,
+        tmp_path,
+        VIKRAM_MODEL_PROVIDER="ollama-cloud",
+        VIKRAM_MODEL="gpt-oss:120b",
+        OLLAMA_API_KEY="ollama-cloud-key",
+    )
+
+    model = build_model(settings)
+
+    assert model.config["provider"] == "ollama-cloud"
+    assert model.config["base_url"] == "https://ollama.com"
+    assert model.raw.client_args == {
+        "headers": {"Authorization": "Bearer ollama-cloud-key"}
+    }
+
+
+def test_build_model_ollama_cloud_requires_api_key(monkeypatch, tmp_path):
+    settings = clean_settings(
+        monkeypatch,
+        tmp_path,
+        VIKRAM_MODEL_PROVIDER="ollama-cloud",
+        VIKRAM_MODEL="gpt-oss:120b",
+    )
+
+    with pytest.raises(RuntimeError, match="OLLAMA_API_KEY"):
+        build_model(settings)
+
+
+def _write_v2_config(tmp_path) -> None:
+    config_dir = tmp_path / "vikram"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "config.toml").write_text(
+        "\n".join(
+            [
+                "config_version = 2",
+                'default_provider = "anthropic"',
+                "",
+                "[providers.anthropic]",
+                'model = "claude-sonnet-5"',
+                'api_key = "key-a"',
+                "",
+                "[providers.gemini]",
+                'model = "gemini-2.5-flash"',
+                'api_key = "key-g"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_v2_config_selects_default_provider_and_model(monkeypatch, tmp_path):
+    _write_v2_config(tmp_path)
+    for env_var in VIKRAM_ENV_VARS:
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    model = build_model(VikramSettings(_env_file=None))
+
+    assert model.config["provider"] == "anthropic"
+    assert model.config["model"] == "claude-sonnet-5"
+
+
+def test_env_provider_switch_picks_that_providers_model(monkeypatch, tmp_path):
+    _write_v2_config(tmp_path)
+    for env_var in VIKRAM_ENV_VARS:
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("VIKRAM_MODEL_PROVIDER", "gemini")
+
+    model = build_model(VikramSettings(_env_file=None))
+
+    assert model.config["provider"] == "gemini"
+    assert model.config["model"] == "gemini-2.5-flash"
+
+
+def test_config_provider_model_outranks_coder_spec_pin(monkeypatch, tmp_path):
+    config_dir = tmp_path / "vikram"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text(
+        "\n".join(
+            [
+                "config_version = 2",
+                'default_provider = "ollama"',
+                "",
+                "[providers.ollama]",
+                'model = "llama3.2"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for env_var in VIKRAM_ENV_VARS:
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    settings = VikramSettings(_env_file=None)
+    spec = load_spec("coder", settings.spec_root)
+
+    agent = build_agent(spec=spec, settings=settings)
+
+    assert agent.model_config["provider"] == "ollama"
+    assert agent.model_config["model"] == "llama3.2"
 
 
 def _local_model_settings(monkeypatch, tmp_path) -> VikramSettings:
