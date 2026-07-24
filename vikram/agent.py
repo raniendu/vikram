@@ -37,7 +37,12 @@ from vikram.delegation import (
 )
 from vikram.hooks import HookBlockedError, HookSet, HookToolset, build_hooks, run_hooks
 from vikram.mcp import VikramMCPClient, build_mcp_servers
-from vikram.settings import VikramModel, VikramSettings, build_model
+from vikram.settings import (
+    VikramModel,
+    VikramSettings,
+    build_model,
+    resolve_agent_model_selection,
+)
 from vikram.skills import discover_skills, make_load_skill_tool, skills_instructions
 from vikram.spec import AgentSpec, load_spec
 from vikram.tools import TOOL_REGISTRY, ToolEntry, set_command_policy
@@ -389,18 +394,29 @@ def _requires_approval(entry: ToolEntry) -> bool:
 def _settings_with_spec_model(
     settings: VikramSettings, spec: AgentSpec
 ) -> VikramSettings:
+    """Resolve the agent's provider/model onto settings.
+
+    Precedence: explicit env/CLI (``model_provider``/``model`` already set) >
+    the user's saved per-agent choice (``[agents.<id>]`` in config.toml,
+    written by ``/model``) > the spec's pinned provider/model > the config
+    file's global ``default_provider``. A saved or pinned model only applies
+    when its provider matches the resolved provider, so an env provider
+    switch never pairs another provider's model. When no model resolves
+    here, ``build_model`` falls back to the resolved provider's own model
+    from ``[providers.<id>]``.
+    """
+    provider, model = resolve_agent_model_selection(
+        settings,
+        agent_id=spec.agent_dir.name,
+        spec_provider=spec.model_provider,
+        spec_model=spec.model,
+    )
+
     updates: dict[str, Any] = {}
-    if spec.model_provider and settings.model_provider is None:
-        updates["model_provider"] = spec.model_provider
-    effective_provider = updates.get("model_provider", settings.model_provider)
-    if (
-        spec.model
-        and settings.model is None
-        # A provider-specific model configured via `vikram configure` still
-        # outranks the spec fallback, matching env > config > spec precedence.
-        and not settings.provider_models.get(effective_provider or "")
-    ):
-        updates["model"] = spec.model
+    if provider != settings.model_provider:
+        updates["model_provider"] = provider
+    if model != settings.model:
+        updates["model"] = model
     return settings.model_copy(update=updates) if updates else settings
 
 

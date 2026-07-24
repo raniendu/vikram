@@ -75,6 +75,11 @@ class VikramSettings(BaseSettings):
         default_factory=dict,
         validation_alias="VIKRAM_PROVIDER_MODELS",
     )
+    # Populated only by the config.toml source (no env alias on purpose):
+    # the file's default_provider must rank below agent spec pins, while an
+    # explicit VIKRAM_MODEL_PROVIDER (model_provider above) ranks above them.
+    config_default_provider: str | None = None
+    agent_overrides: dict[str, dict[str, str]] = Field(default_factory=dict)
     ollama_base_url: str = Field(
         default="http://localhost:11434/v1",
         validation_alias="OLLAMA_BASE_URL",
@@ -267,11 +272,52 @@ def resolve_model_selection(settings: Any) -> tuple[str | None, str | None]:
     provider's own default model from ``provider_models`` (config.toml).
     Accepts any settings-like object so lightweight test doubles work.
     """
-    provider = getattr(settings, "model_provider", None)
+    provider = getattr(settings, "model_provider", None) or getattr(
+        settings, "config_default_provider", None
+    )
     model = getattr(settings, "model", None)
     if not model and provider:
         provider_models = getattr(settings, "provider_models", None) or {}
         model = provider_models.get(provider) or None
+    return provider, model
+
+
+def resolve_agent_model_selection(
+    settings: Any,
+    *,
+    agent_id: str | None = None,
+    spec_provider: str | None = None,
+    spec_model: str | None = None,
+) -> tuple[str | None, str | None]:
+    """Resolve (provider, model) for one agent, spec pins included.
+
+    Precedence: explicit env/CLI > saved per-agent choice (``[agents.<id>]``,
+    written by ``/model``) > spec pin > config ``default_provider``, with the
+    provider's own ``[providers.<id>]`` model as the final fallback. A saved
+    or pinned model only applies when its provider matches the resolved
+    provider.
+    """
+    override = (getattr(settings, "agent_overrides", None) or {}).get(
+        agent_id or ""
+    ) or {}
+    provider = (
+        getattr(settings, "model_provider", None)
+        or override.get("provider")
+        or spec_provider
+        or getattr(settings, "config_default_provider", None)
+    )
+    model = getattr(settings, "model", None)
+    override_provider = override.get("provider")
+    if (
+        not model
+        and override.get("model")
+        and (not override_provider or override_provider == provider)
+    ):
+        model = override["model"]
+    if not model and spec_model and provider == spec_provider:
+        model = spec_model
+    if not model and provider:
+        model = (getattr(settings, "provider_models", None) or {}).get(provider)
     return provider, model
 
 
