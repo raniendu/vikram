@@ -10,6 +10,7 @@ dependencies = [
     "fastapi>=0.136.1",
     "httpx>=0.28.1",
     "openlit>=1.42.0",
+    "opentelemetry-api>=1.42.0",
     "parallel-web>=0.6.0",
     "prompt-toolkit>=3.0.52",
     "pydantic-ai-slim[anthropic,google,mcp,openai]>=2.11.0",

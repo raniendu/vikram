@@ -12,7 +12,6 @@ from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from vikram.streaming import tool_result_from_event as _tool_result_from_event
 from vikram.streaming import tool_results_from_event as _tool_results_from_event
 from vikram.streaming import tool_use_from_event as _tool_use_from_event
 
@@ -251,6 +250,31 @@ def read_prompt(value: str) -> str:
     return value
 
 
+def _log() -> Any:
+    """Return this module's logger, importing ``vikram.logging`` lazily.
+
+    ``vikram/cli.py`` is runnable as a file (``python vikram/cli.py --help``),
+    which puts ``vikram/`` itself on ``sys.path`` and makes ``vikram/logging.py``
+    shadow the standard library's ``logging``. Deferring the import keeps that
+    entry point working, and matches how the rest of this module imports.
+    """
+    from vikram.logging import get_logger
+
+    return get_logger("vikram.cli")
+
+
+def _cli_log_level(settings: Any) -> str:
+    """Pick the CLI's log level.
+
+    The terminal belongs to the conversation, so info-level chatter is muted
+    unless the operator explicitly asked for it with ``VIKRAM_LOG_LEVEL``.
+    Warnings and errors always reach stderr.
+    """
+    if os.environ.get("VIKRAM_LOG_LEVEL"):
+        return settings.log_level
+    return "WARNING"
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     raw_args = list(argv) if argv is not None else sys.argv[1:]
     if raw_args and raw_args[0] == "exec":
@@ -339,6 +363,8 @@ def _run(
     output_last_message: Path | None = None,
 ) -> None:
     from vikram.agent import build_agent
+    from vikram.logging import configure_logging
+    from vikram.observability import init_observability
     from vikram.settings import VikramSettings
     from vikram.spec import load_spec
 
@@ -355,6 +381,10 @@ def _run(
             overrides["model"] = args.model
         if overrides:
             settings = settings.model_copy(update=overrides)
+        # stdout carries the product here (chat text, --json payloads), so logs
+        # go to stderr and stay quiet unless VIKRAM_LOG_LEVEL asks otherwise.
+        configure_logging(_cli_log_level(settings), stream=sys.stderr)
+        init_observability(settings)
         spec = load_spec(settings.default_agent, settings.spec_root)
         agent = build_agent(spec=spec, settings=settings, approve_all=args.approve_all)
 
@@ -514,7 +544,15 @@ async def run_interactive(
                     )
             except KeyboardInterrupt:
                 console.print("[dim]Interrupted[/dim]")
-            except Exception as exc:  # pragma: no cover - surface anything to user
+            except Exception as exc:
+                # The console line is for the human; the log carries the
+                # traceback so an interactive failure is still diagnosable.
+                _log().exception(
+                    "cli_turn_failed",
+                    agent=prog_name,
+                    error_type=type(exc).__name__,
+                    prompt_length=len(text),
+                )
                 console.print(f"\n[red]{type(exc).__name__}[/red]: {exc}")
 
 
@@ -1119,20 +1157,6 @@ def _repr_value(value: Any) -> str:
         return repr(value)
 
 
-def _stringify_tool_return(part: Any) -> str:
-    try:
-        items = part.content_items(mode="str")
-    except Exception:
-        return str(part.content)
-    rendered: list[str] = []
-    for item in items:
-        if isinstance(item, str):
-            rendered.append(item)
-        else:
-            rendered.append(f"<{type(item).__name__}>")
-    return "\n".join(rendered)
-
-
 def _stringify_tool_result(result: dict[str, Any]) -> str:
     rendered: list[str] = []
     for item in result.get("content") or []:
@@ -1144,15 +1168,6 @@ def _stringify_tool_result(result: dict[str, Any]) -> str:
         else:
             rendered.append(str(item))
     return "\n".join(rendered)
-
-
-def _stringify_retry_content(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    try:
-        return json.dumps(content, default=str, indent=2)
-    except Exception:
-        return str(content)
 
 
 def _truncate(text: str, limit: int = 200) -> str:

@@ -33,7 +33,10 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+from vikram.logging import get_logger
 from vikram.providers import PROVIDER_IDS, PROVIDERS, Provider
+
+logger = get_logger(__name__)
 
 CONFIG_FILE_NAME = "config.toml"
 CONFIG_VERSION = 2
@@ -178,6 +181,11 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
     try:
         raw = load_config_raw(path)
     except ConfigParseError:
+        # An unreadable config must not stop startup: env vars may still supply
+        # everything. But it is silent otherwise, so surface why it was skipped.
+        logger.warning(
+            "model_config_unreadable", config_path=str(path or config_path())
+        )
         return {}
     return _flatten_for_settings(migrate_v1(raw))
 

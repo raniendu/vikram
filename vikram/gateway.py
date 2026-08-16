@@ -15,6 +15,7 @@ from pydantic_ai.messages import ModelMessage
 
 from vikram.agent import build_agent
 from vikram.logging import get_logger, safe_metadata, thread_hash
+from vikram.observability import inject_trace_context
 from vikram.settings import VikramSettings
 from vikram.spec import ensure_surface_allowed, load_spec
 
@@ -376,12 +377,16 @@ class ConversationService:
 
 
 def make_message_received_event(message: InboundMessage) -> CloudEvent:
+    # traceparent/tracestate ride along as CloudEvents distributed-tracing
+    # attributes so the workflow that answers this message joins the trace of
+    # the request that enqueued it.
     return CloudEvent(
         {
             "type": "vikram.message.received",
             "source": f"/interfaces/{message.interface}/threads/{message.external_thread_id}",
             "subject": message.external_thread_id,
             "datacontenttype": "application/json",
+            **inject_trace_context(),
         },
         {
             "interface": message.interface,
@@ -403,6 +408,7 @@ def make_reply_requested_event(
             "source": f"/interfaces/{reply.interface}/threads/{reply.external_thread_id}",
             "subject": reply.external_thread_id,
             "datacontenttype": "application/json",
+            **inject_trace_context(),
         },
         {
             "interface": reply.interface,

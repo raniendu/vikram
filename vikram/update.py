@@ -43,12 +43,21 @@ def _parse_toml(text: str) -> dict[str, Any]:
 
 
 def load_metadata(path: Path | None = None) -> dict[str, Any]:
+    """Read install metadata, treating an unreadable file as "no metadata".
+
+    This module stays import-light on purpose (see the module docstring), so it
+    has no logger; the narrow except list is what keeps the fallback honest —
+    a corrupt or unreadable ``install.toml`` degrades gracefully, while a bug in
+    our own parsing still raises instead of silently reading as empty.
+    """
+    import tomllib
+
     path = path or metadata_path()
     if not path.is_file():
         return {}
     try:
         return _parse_toml(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return {}
 
 

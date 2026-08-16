@@ -36,6 +36,7 @@ from vikram.delegation import (
     subagent_instructions,
 )
 from vikram.hooks import HookBlockedError, HookSet, HookToolset, build_hooks, run_hooks
+from vikram.logging import get_logger
 from vikram.mcp import VikramMCPClient, build_mcp_servers
 from vikram.settings import (
     VikramModel,
@@ -46,6 +47,8 @@ from vikram.settings import (
 from vikram.skills import discover_skills, make_load_skill_tool, skills_instructions
 from vikram.spec import AgentSpec, load_spec
 from vikram.tools import TOOL_REGISTRY, ToolEntry, set_command_policy
+
+logger = get_logger(__name__)
 
 
 class AgentToolError(RuntimeError):
@@ -156,8 +159,17 @@ class VikramAgent:
             },
         )
         if decision.blocked:
+            logger.warning(
+                "hook_blocked_prompt", agent=self.name, hook_event="UserPromptSubmit"
+            )
             raise HookBlockedError(decision.reason or "A hook blocked this prompt.")
         if decision.context:
+            logger.info(
+                "hook_added_prompt_context",
+                agent=self.name,
+                hook_event="UserPromptSubmit",
+                context_length=len(decision.context),
+            )
             return f"{decision.context}\n\n{user_prompt}"
         return user_prompt
 
@@ -189,6 +201,12 @@ def _resolve_tools(
     ]
     if missing:
         missing_list = ", ".join(missing)
+        logger.error(
+            "agent_tools_unresolved",
+            agent=spec.name,
+            surface=surface,
+            missing_tools=missing,
+        )
         raise AgentToolError(
             f"Agent {spec.name} references unknown tool(s): {missing_list}. "
             "The installed Vikram package may be stale relative to the agent "
@@ -230,7 +248,8 @@ def build_agent(
         surface=surface,
         enable_delegation=enable_delegation,
     )
-    set_command_policy(spec.load_command_policy())
+    command_policy = spec.load_command_policy()
+    set_command_policy(command_policy)
 
     skills = discover_skills(spec)
     instructions: list[str] = [spec.instructions, agent_identity(spec.name)]
@@ -285,6 +304,20 @@ def build_agent(
         toolsets=[toolset],
         capabilities=capabilities,
     )
+    logger.info(
+        "agent_built",
+        agent=spec.name,
+        surface=surface,
+        model_provider=model.config.get("provider"),
+        model=model.config.get("model"),
+        tools=sorted(_tool_name(entry) for entry in tools),
+        mcp_servers=[client.id for client in mcp_clients],
+        skills=[skill.name for skill in skills],
+        hook_events=_configured_hook_events(hooks),
+        command_policy_deny_rules=len(command_policy.deny),
+        approve_all=approve_all,
+        system_prompt_length=len(system_prompt),
+    )
     return VikramAgent(
         raw_agent=raw_agent,
         name=spec.name,
@@ -295,6 +328,16 @@ def build_agent(
         mcp_clients=mcp_clients,
         hooks=hooks,
     )
+
+
+def _configured_hook_events(hooks: HookSet) -> list[str]:
+    events = {
+        "PreToolUse": hooks.pre,
+        "PostToolUse": hooks.post,
+        "UserPromptSubmit": hooks.user_prompt_submit,
+        "Stop": hooks.stop,
+    }
+    return [event for event, configured in events.items() if configured]
 
 
 def _approval_handler(
@@ -418,10 +461,3 @@ def _settings_with_spec_model(
     if model != settings.model:
         updates["model"] = model
     return settings.model_copy(update=updates) if updates else settings
-
-
-def __getattr__(name: str) -> VikramAgent:
-    """Build the module-level default agent only when it is requested."""
-    if name == "agent":
-        return build_agent()
-    raise AttributeError(f"module 'vikram.agent' has no attribute {name!r}")

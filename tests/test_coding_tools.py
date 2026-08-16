@@ -1,11 +1,12 @@
+import json
 import shlex
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from pydantic_ai import Tool
 from pydantic_ai.exceptions import ApprovalRequired
 
+from tests.conftest import find_log_event
 from vikram import tools
 
 
@@ -264,3 +265,90 @@ async def test_web_search_no_api_key(monkeypatch):
 
     result = await tools.web_search("test query")
     assert "PARALLEL_API_KEY is not set" in result
+
+
+@pytest.mark.asyncio
+async def test_refusals_are_logged_with_a_stable_reason(
+    monkeypatch, tmp_path, log_events
+):
+    secret = tmp_path / ".env.local"
+    secret.write_text("TOKEN=secret\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    await tools.read_file(".env.local")
+    await tools.grep("x", path="../outside")
+
+    refusals = [entry for entry in log_events if entry["event"] == "tool_call_refused"]
+    assert {(entry["tool"], entry["reason"]) for entry in refusals} == {
+        ("read_file", "sensitive_path"),
+        ("grep", "path_escapes_workspace"),
+    }
+    assert {entry["log_level"] for entry in refusals} == {"warning"}
+
+
+@pytest.mark.asyncio
+async def test_denied_command_is_logged_as_a_policy_refusal(
+    monkeypatch, tmp_path, log_events
+):
+    monkeypatch.chdir(tmp_path)
+
+    await tools.run_command(_ctx(approved=True), "git push --force origin main")
+
+    refusal = find_log_event(log_events, "tool_call_refused")
+    assert refusal["tool"] == "run_command"
+    assert refusal["reason"] == "policy_denied"
+
+
+@pytest.mark.asyncio
+async def test_command_execution_is_logged_without_the_command_string(
+    monkeypatch, tmp_path, log_events
+):
+    monkeypatch.chdir(tmp_path)
+
+    # `true` is classified read-only, so it runs without approval. The token
+    # here stands in for a credential passed as a command-line flag.
+    await tools.run_command(_ctx(approved=True), "true --token supersecretvalue")
+
+    started = find_log_event(log_events, "tool_command_started")
+    assert started["executable"] == "true"
+    assert started["argument_count"] == 2
+
+    finished = find_log_event(log_events, "tool_command_finished")
+    assert finished["exit_code"] == 0
+    assert finished["duration_ms"] >= 0
+
+    # No log line may carry the argument values themselves.
+    assert "supersecretvalue" not in json.dumps(log_events, default=str)
+
+
+@pytest.mark.asyncio
+async def test_missing_command_is_logged_not_silently_swallowed(
+    monkeypatch, tmp_path, log_events
+):
+    monkeypatch.chdir(tmp_path)
+
+    result = await tools.run_command(
+        _ctx(approved=True), "definitely-not-a-real-binary-xyz"
+    )
+
+    assert "Command not found" in result
+    not_found = find_log_event(log_events, "tool_command_not_found")
+    assert not_found["log_level"] == "warning"
+    assert not_found["executable"] == "definitely-not-a-real-binary-xyz"
+
+
+@pytest.mark.asyncio
+async def test_write_and_edit_file_log_what_changed(monkeypatch, tmp_path, log_events):
+    monkeypatch.chdir(tmp_path)
+
+    await tools.write_file("notes.txt", "alpha\n")
+    await tools.edit_file("notes.txt", "alpha", "beta")
+
+    written = find_log_event(log_events, "tool_write_file_succeeded")
+    assert written["path"] == "notes.txt"
+    assert written["content_length"] == 6
+    assert written["overwrote_existing"] is False
+
+    edited = find_log_event(log_events, "tool_edit_file_succeeded")
+    assert edited["path"] == "notes.txt"
+    assert edited["replacements"] == 1

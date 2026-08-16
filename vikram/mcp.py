@@ -28,6 +28,10 @@ from pydantic import BaseModel, Field
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.toolsets import AbstractToolset
 
+from vikram.logging import get_logger
+
+logger = get_logger(__name__)
+
 MCPTransport = Literal["stdio", "http", "sse"]
 
 # Matches ${NAME} references for environment-variable expansion.
@@ -203,4 +207,13 @@ def build_mcp_servers(
             )
         seen.add(spec.name)
         servers.append(build_mcp_server(spec, environ))
+        # Deliberately no url/command/env here: those are exactly the fields
+        # that carry expanded ${VAR} secrets.
+        logger.info(
+            "mcp_server_built",
+            mcp_server=spec.name,
+            transport=spec.transport,
+            tool_prefix=spec.tool_prefix,
+            timeout=spec.timeout,
+        )
     return servers

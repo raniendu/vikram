@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from pydantic_ai import Tool
 
+from vikram.logging import get_logger
 from vikram.settings import VikramSettings
-from vikram.spec import AgentSpec, AgentSurfaceError, ensure_surface_allowed, load_spec
+from vikram.spec import AgentSurfaceError, ensure_surface_allowed, load_spec
 from vikram.tools import ToolEntry
+
+logger = get_logger(__name__)
 
 DELEGATE_TOOL_NAME = "delegate_to_agent"
 
@@ -142,17 +146,39 @@ def make_delegate_to_agent_tool(
             enable_delegation=False,
             approval_ask=_raise_delegated_approval,
         )
+        log = logger.bind(
+            tool=DELEGATE_TOOL_NAME,
+            orchestrator=orchestrator_name,
+            subagent=requested_name,
+            surface=surface,
+            prompt_length=len(prompt),
+        )
+        log.info("delegation_started")
+        start = time.perf_counter()
         try:
             result = await subagent.run(
                 prompt,
                 conversation_id=f"delegate:{orchestrator_name}:{requested_name}",
             )
         except DelegatedApprovalRequired as exc:
+            log.info(
+                "delegation_stopped",
+                duration_ms=_elapsed_ms(start),
+                reason="approval_required",
+            )
             return (
                 f"Subagent {target_spec.name} stopped because it {exc}. "
                 "Run that agent directly when the task needs approval-gated "
                 "tools, or delegate a read-only task."
             )
+        except Exception:
+            log.exception("delegation_failed", duration_ms=_elapsed_ms(start))
+            raise
+        log.info(
+            "delegation_succeeded",
+            duration_ms=_elapsed_ms(start),
+            output_length=len(str(result.output)),
+        )
         return f"Subagent {target_spec.name} completed.\n\n{result.output}"
 
     return Tool(
@@ -161,6 +187,10 @@ def make_delegate_to_agent_tool(
         requires_approval=requires_approval,
         sequential=True,
     )
+
+
+def _elapsed_ms(start: float) -> float:
+    return round((time.perf_counter() - start) * 1000, 2)
 
 
 async def _raise_delegated_approval(_: str) -> str:

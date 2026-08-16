@@ -4,7 +4,7 @@ import logging
 import sys
 from collections.abc import Mapping
 from hashlib import sha256
-from typing import Any
+from typing import Any, TextIO
 from urllib.parse import urlsplit, urlunsplit
 
 import structlog
@@ -15,11 +15,18 @@ except ImportError:  # pragma: no cover - Pydantic AI depends on opentelemetry.
     trace = None  # type: ignore[assignment]
 
 
-def configure_logging(log_level: str = "INFO") -> None:
+def configure_logging(log_level: str = "INFO", stream: TextIO | None = None) -> None:
+    """Route structlog through stdlib logging as one JSON object per line.
+
+    ``stream`` defaults to stdout, which suits servers whose stdout *is* the log
+    stream. Front-ends whose stdout carries the actual product (the CLI's chat
+    output and ``--json`` payload, ACP's JSON-RPC stream) pass ``sys.stderr`` so
+    the two never interleave.
+    """
     logging.basicConfig(
         format="%(message)s",
         level=_normalize_log_level(log_level),
-        stream=sys.stdout,
+        stream=stream if stream is not None else sys.stdout,
         force=True,
     )
     structlog.configure(

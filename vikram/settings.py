@@ -9,7 +9,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings.sources import PydanticBaseSettingsSource
 
 from vikram.config import load_config
+from vikram.logging import get_logger
 from vikram.providers import PROVIDER_IDS, PROVIDERS, ModelProvider, ModelRequest
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -167,9 +170,10 @@ class VikramSettings(BaseSettings):
         default="https://api.telegram.org",
         validation_alias="VIKRAM_TELEGRAM_API_BASE_URL",
     )
-    telegram_bot_username: str | None = Field(
-        default=None, validation_alias="VIKRAM_TELEGRAM_BOT_USERNAME"
-    )
+    # NOTE: VIKRAM_TELEGRAM_BOT_USERNAME is deliberately absent here. Bot
+    # usernames are per-bot and resolved by vikram.telegram_config straight
+    # from the environment via spec/telegram.toml's ``username_env``; a field
+    # here would look authoritative while being read by nothing.
     log_level: str = Field(default="INFO", validation_alias="VIKRAM_LOG_LEVEL")
     environment: str = Field(default="local", validation_alias="ENVIRONMENT")
     observability_enabled: bool = Field(
@@ -367,6 +371,15 @@ def build_model(
 
     raw = provider.build(
         ModelRequest(model=model, params=params, api_key=api_key, base_url=base_url)
+    )
+    # base_url is an endpoint, never a credential; api_key stays out entirely.
+    logger.info(
+        "model_built",
+        agent=agent_name,
+        model_provider=provider_id,
+        model=model,
+        base_url=base_url,
+        model_settings=sorted(params),
     )
     return VikramModel(
         raw=raw,

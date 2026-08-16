@@ -52,6 +52,10 @@ class FakeSettings:
     default_agent = "vikram"
     spec_root = APP_ROOT / "spec"
     model = None
+    # _run() configures logging and telemetry from settings before building the
+    # agent, so the fake has to answer those too.
+    log_level = "INFO"
+    observability_enabled = False
 
     def model_copy(self, *, update):
         copied = FakeSettings()
@@ -359,10 +363,10 @@ def test_quiet_rejects_once(capsys):
     assert "--quiet cannot be combined with --once" in capsys.readouterr().err
 
 
-def test_tool_result_extracts_compatibility_message_event():
-    from vikram.cli import _tool_result_from_event
+def test_tool_results_extract_compatibility_message_event():
+    from vikram.streaming import tool_results_from_event
 
-    result = _tool_result_from_event(
+    results = tool_results_from_event(
         {
             "message": {
                 "role": "user",
@@ -379,11 +383,13 @@ def test_tool_result_extracts_compatibility_message_event():
         }
     )
 
-    assert result == {
-        "toolUseId": "call-1",
-        "status": "success",
-        "content": [{"text": "done"}],
-    }
+    assert results == [
+        {
+            "toolUseId": "call-1",
+            "status": "success",
+            "content": [{"text": "done"}],
+        }
+    ]
 
 
 def _patch_interactive_io(monkeypatch, tmp_path):
@@ -1090,3 +1096,28 @@ async def test_model_command_persists_agent_choice(monkeypatch, tmp_path):
     }
     output = "\n".join(str(message) for message in console.messages)
     assert "saved as the coder default" in output
+
+
+def test_cli_keeps_logs_quiet_unless_asked(monkeypatch):
+    """The terminal belongs to the conversation, not to info-level logging."""
+    from vikram.cli import _cli_log_level
+
+    monkeypatch.delenv("VIKRAM_LOG_LEVEL", raising=False)
+    assert _cli_log_level(SimpleNamespace(log_level="INFO")) == "WARNING"
+
+    monkeypatch.setenv("VIKRAM_LOG_LEVEL", "DEBUG")
+    assert _cli_log_level(SimpleNamespace(log_level="DEBUG")) == "DEBUG"
+
+
+def test_cli_json_output_is_not_polluted_by_logs(monkeypatch, capsys):
+    """`vikram exec --json` must stay pipeable into jq."""
+    from vikram.cli import main
+
+    calls = patch_cli_dependencies(monkeypatch)
+    monkeypatch.delenv("VIKRAM_LOG_LEVEL", raising=False)
+
+    main(["exec", "--json", "ping"])
+
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {"agent": "Vikram", "output": "reply: ping"}
+    assert calls == ["ping"]

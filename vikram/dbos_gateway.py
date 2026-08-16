@@ -16,6 +16,12 @@ from vikram.gateway import (
     make_reply_requested_event,
 )
 from vikram.logging import get_logger, safe_database_url, safe_metadata, thread_hash
+from vikram.observability import (
+    extract_trace_context,
+    get_tracer,
+    record_span_exception,
+    set_span_attributes,
+)
 from vikram.settings import VikramSettings
 from vikram.telegram import TelegramAdapter
 from vikram.telegram_config import load_telegram_config
@@ -116,36 +122,53 @@ async def process_inbound_message_event(event_dict: dict[str, Any]) -> dict[str,
         prompt_length=len(message.prompt),
         **safe_metadata(message.metadata),
     )
-    log.info("dbos_inbound_workflow_started")
-    settings = VikramSettings()
-    store = ThreadStore(settings.vikram_db_path)
-    try:
-        reply = await ConversationService(settings=settings, store=store).send_message(
-            message
+    # Continue the trace of whichever request enqueued this event, so a Telegram
+    # webhook and the answer it eventually produces share one trace.
+    parent = extract_trace_context(event.get_attributes())
+    with get_tracer().start_as_current_span(
+        "vikram.process_inbound_message", context=parent
+    ) as span:
+        set_span_attributes(
+            span,
+            {
+                "vikram.interface": message.interface,
+                "vikram.thread_hash": thread_hash(
+                    message.interface, message.external_thread_id
+                ),
+                "vikram.agent": message.agent_name,
+            },
         )
-    except Exception as exc:
-        log.exception(
-            "dbos_inbound_workflow_failed",
-            error_type=type(exc).__name__,
-        )
-        delivered = await _send_processing_failure_reply(message)
-        log.info(
-            "dbos_processing_failure_reply_attempted",
-            delivered=delivered,
-        )
-        raise
-    reply_event = make_reply_requested_event(message, reply)
-    if reply.interface == "telegram" or reply.interface.startswith("telegram:"):
-        handle = await OUTBOUND_QUEUE.enqueue_async(
-            deliver_reply_event,
-            cloud_event_to_dict(reply_event),
-        )
-        log.info(
-            "dbos_outbound_enqueued",
-            outbound_workflow_id=handle.workflow_id,
-            output_length=len(reply.output),
-        )
-    log.info("dbos_inbound_workflow_succeeded", output_length=len(reply.output))
+        log.info("dbos_inbound_workflow_started")
+        settings = VikramSettings()
+        store = ThreadStore(settings.vikram_db_path)
+        try:
+            reply = await ConversationService(
+                settings=settings, store=store
+            ).send_message(message)
+        except Exception as exc:
+            record_span_exception(span, exc)
+            log.exception(
+                "dbos_inbound_workflow_failed",
+                error_type=type(exc).__name__,
+            )
+            delivered = await _send_processing_failure_reply(message)
+            log.info(
+                "dbos_processing_failure_reply_attempted",
+                delivered=delivered,
+            )
+            raise
+        reply_event = make_reply_requested_event(message, reply)
+        if reply.interface == "telegram" or reply.interface.startswith("telegram:"):
+            handle = await OUTBOUND_QUEUE.enqueue_async(
+                deliver_reply_event,
+                cloud_event_to_dict(reply_event),
+            )
+            log.info(
+                "dbos_outbound_enqueued",
+                outbound_workflow_id=handle.workflow_id,
+                output_length=len(reply.output),
+            )
+        log.info("dbos_inbound_workflow_succeeded", output_length=len(reply.output))
     return {
         "agent": reply.agent_name,
         "output": reply.output,
@@ -167,30 +190,41 @@ async def deliver_reply_event(event_dict: dict[str, Any]) -> dict[str, Any]:
             reason="unsupported_interface",
         )
         return {"delivered": False, "reason": "unsupported interface"}
-    logger.info(
-        "dbos_reply_delivery_started",
-        interface=data["interface"],
-        thread_hash=thread_hash(
-            str(data["interface"]), str(data["external_thread_id"])
-        ),
-        agent=data.get("agent_name"),
-        output_length=len(str(data["output"])),
-        **safe_metadata(data.get("metadata")),
-    )
-    await send_telegram_reply(
-        bot_name,
-        int(data["external_thread_id"]),
-        str(data["output"]),
-        reply_to_message_id=_reply_to_message_id(data.get("metadata")),
-    )
-    logger.info(
-        "dbos_reply_delivery_succeeded",
+    log = logger.bind(
         interface=data["interface"],
         thread_hash=thread_hash(
             str(data["interface"]), str(data["external_thread_id"])
         ),
         **safe_metadata(data.get("metadata")),
     )
+    parent = extract_trace_context(event.get_attributes())
+    with get_tracer().start_as_current_span(
+        "vikram.deliver_reply", context=parent
+    ) as span:
+        set_span_attributes(
+            span,
+            {
+                "vikram.interface": str(data["interface"]),
+                "vikram.telegram_bot": bot_name,
+            },
+        )
+        log.info(
+            "dbos_reply_delivery_started",
+            agent=data.get("agent_name"),
+            output_length=len(str(data["output"])),
+        )
+        try:
+            await send_telegram_reply(
+                bot_name,
+                int(data["external_thread_id"]),
+                str(data["output"]),
+                reply_to_message_id=_reply_to_message_id(data.get("metadata")),
+            )
+        except Exception as exc:
+            record_span_exception(span, exc)
+            log.exception("dbos_reply_delivery_failed")
+            raise
+        log.info("dbos_reply_delivery_succeeded")
     return {"delivered": True}
 
 

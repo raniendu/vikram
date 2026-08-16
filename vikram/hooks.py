@@ -62,7 +62,6 @@ logger = get_logger(__name__)
 HookEvent = Literal["PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop"]
 HookTransport = Literal["command", "python"]
 
-TOOL_EVENTS: tuple[HookEvent, ...] = ("PreToolUse", "PostToolUse")
 DEFAULT_HOOK_TIMEOUT = 30.0
 # Exit code an external hook uses to block the action (stderr is the reason).
 BLOCK_EXIT_CODE = 2
@@ -402,6 +401,12 @@ class HookToolset(WrapperToolset[Any]):
                 tool_name=name,
             )
             if decision.blocked:
+                logger.warning(
+                    "hook_blocked_tool_call",
+                    agent=self.agent_name,
+                    hook_event="PreToolUse",
+                    tool_name=name,
+                )
                 raise ModelRetry(decision.reason or f"A hook blocked {name}.")
 
         result = await super().call_tool(name, tool_args, ctx, tool)
@@ -420,7 +425,20 @@ class HookToolset(WrapperToolset[Any]):
                 tool_name=name,
             )
             if decision.blocked:
+                logger.warning(
+                    "hook_rejected_tool_result",
+                    agent=self.agent_name,
+                    hook_event="PostToolUse",
+                    tool_name=name,
+                )
                 raise ModelRetry(decision.reason or f"A hook rejected {name}'s result.")
             if decision.context and isinstance(result, str):
+                logger.info(
+                    "hook_added_tool_result_context",
+                    agent=self.agent_name,
+                    hook_event="PostToolUse",
+                    tool_name=name,
+                    context_length=len(decision.context),
+                )
                 return f"{result}\n\n{decision.context}"
         return result

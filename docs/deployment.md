@@ -81,16 +81,63 @@ VIKRAM_TELEGRAM_ALLOWED_CHAT_IDS=123456789
 VIKRAM_TELEGRAM_BOT_USERNAME=VikramBot
 ```
 
+## Health And Readiness
+
+Two probes, with different jobs:
+
+- `GET /healthz` — liveness. Always `{"status": "ok"}` when the process is
+  serving; it touches no dependencies. Use it for container liveness checks.
+- `GET /readyz` — readiness. Exercises model config, the thread store, and the
+  default agent, and answers `503` with a per-check breakdown when any is
+  broken. Use it as the deploy gate and load-balancer readiness check.
+
+```bash
+curl -s http://localhost:8000/readyz | jq
+```
+
+```json
+{
+  "status": "ready",
+  "version": "0.1.0",
+  "environment": "local",
+  "default_agent": "vikram",
+  "checks": {
+    "model_config": "ok",
+    "thread_store": "ok",
+    "default_agent": "ok"
+  }
+}
+```
+
 ## Logs And Traces
 
-Logs are structured JSON on stdout. Chat and thread IDs are hashed and prompt
-content is not logged by default.
+Logs are structured JSON, one object per line. Chat and thread IDs are hashed,
+prompt and response bodies are logged only as lengths, and command execution is
+logged by executable name and argument count rather than the command string, so
+credentials passed as flags never reach the logs.
 
-OpenLIT/OpenTelemetry tracing is opt-in:
+Server surfaces log to stdout. The CLI and ACP log to **stderr** instead,
+because their stdout carries the product: chat output and `exec --json` payloads
+for the CLI, and the JSON-RPC stream for ACP. The CLI also stays at `WARNING`
+unless `VIKRAM_LOG_LEVEL` is set explicitly, so the interactive session is not
+interleaved with info-level logging.
+
+Every HTTP request gets an `x-request-id` (generated, or taken from an inbound
+header of the same name) that is echoed back in the response and bound to every
+log line emitted while handling that request. Quote it when reporting an issue.
+
+OpenLIT/OpenTelemetry tracing is opt-in and applies to every surface — HTTP,
+CLI, and ACP:
 
 ```env
 VIKRAM_OBSERVABILITY_ENABLED=true
 VIKRAM_OTLP_ENDPOINT=http://localhost:4318
 ```
+
+When enabled, an inbound HTTP request and the DBOS workflow that eventually
+answers it share a single trace: the W3C `traceparent` rides along as a
+CloudEvents distributed-tracing attribute across the queue boundary. Log lines
+emitted inside a span also carry `trace_id` and `span_id`, so logs and traces
+join up.
 
 Message-content capture is disabled by default and forced off in production.
