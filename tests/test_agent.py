@@ -4,9 +4,9 @@ import pytest
 from pydantic_ai import Agent, Tool
 from pydantic_ai.capabilities import HandleDeferredToolCalls
 from pydantic_ai.models.ollama import OllamaModel
-from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.models.test import TestModel
 
+from tests.conftest import find_log_event
 from vikram.agent import VikramAgent, _approval_handler, build_agent
 from vikram.delegation import DelegatedApprovalRequired, make_delegate_to_agent_tool
 from vikram.hooks import HookSet
@@ -875,3 +875,46 @@ def test_build_agent_attaches_mcp_servers_as_toolsets(monkeypatch, tmp_path):
 
     assert [client.id for client in agent.mcp_clients] == ["github"]
     assert agent.mcp_clients[0].config["env"] == {"TOKEN": "tok"}
+
+
+def test_build_agent_logs_its_full_inventory(monkeypatch, tmp_path, log_events):
+    """One log line should answer "what was this agent actually wired with?"."""
+    build_agent(
+        settings=clean_settings(
+            monkeypatch,
+            tmp_path,
+            VIKRAM_MODEL_PROVIDER="ollama",
+            VIKRAM_MODEL="test-model",
+        )
+    )
+
+    built = find_log_event(log_events, "agent_built")
+    assert built["agent"] == "Vikram"
+    assert built["surface"] == "cli"
+    assert built["model"] == "test-model"
+    assert "web_search" in built["tools"]
+    assert built["command_policy_deny_rules"] > 0
+    assert built["system_prompt_length"] > 0
+    # The prompt itself must never be logged, only its size.
+    assert "system_prompt" not in built
+
+
+def test_build_agent_logs_missing_tools_before_failing(
+    monkeypatch, tmp_path, log_events
+):
+    (tmp_path / "system_prompt.md").write_text("PROMPT", encoding="utf-8")
+    spec = AgentSpec(
+        name="Broken",
+        description="Spec with a missing tool",
+        system_prompt=tmp_path / "system_prompt.md",
+        tools=["not_a_real_tool"],
+        agent_dir=tmp_path,
+        shared_dir=tmp_path / "shared",
+    )
+
+    with pytest.raises(RuntimeError):
+        build_agent(spec=spec, settings=clean_settings(monkeypatch, tmp_path))
+
+    failure = find_log_event(log_events, "agent_tools_unresolved")
+    assert failure["missing_tools"] == ["not_a_real_tool"]
+    assert failure["log_level"] == "error"

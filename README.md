@@ -25,7 +25,9 @@ coding tools for the CLI-only `coder` agent.
   (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`) to observe, augment,
   or block what the agent does, via `[[hooks]]`.
 - Runtime state: local SQLite for thread history and DBOS workflow state.
-- Observability: structured JSON logs and optional OpenLIT/OpenTelemetry traces.
+- Observability: structured JSON logs with per-request correlation ids,
+  `/healthz` plus a dependency-checking `/readyz`, and optional
+  OpenLIT/OpenTelemetry traces that follow a message across the DBOS queue.
 
 ## Quick Start
 
@@ -226,12 +228,18 @@ Endpoints:
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/healthz` | Liveness check |
+| `GET` | `/healthz` | Liveness check (no dependency work) |
+| `GET` | `/readyz` | Readiness: model config, thread store, default agent |
 | `POST` | `/chat` | Stateless one-shot run |
 | `POST` | `/threads/{interface}/{thread}/messages` | Queue a durable threaded run |
 | `GET` | `/events/{workflow_id}` | Read DBOS workflow status |
 | `POST` | `/telegram/webhook` | Default Telegram bot webhook |
 | `POST` | `/telegram/{bot_name}/webhook` | Named Telegram bot webhook |
+
+Every response carries an `x-request-id` header, echoing the inbound one when
+present. That id is attached to every log line emitted while handling the
+request. See [docs/deployment.md](docs/deployment.md) for logging and tracing
+details.
 
 Thread history and Telegram dedupe state default to `.vikram/vikram.sqlite3`.
 DBOS workflow state defaults to `.vikram/dbos.sqlite3`.

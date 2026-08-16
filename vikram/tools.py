@@ -5,6 +5,7 @@ import fnmatch
 import os
 import re
 import shlex
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -14,7 +15,10 @@ from pydantic_ai import RunContext, Tool
 from pydantic_ai.exceptions import ApprovalRequired
 
 from vikram.command_policy import POLICY_FILENAME, CommandPolicy, load_command_policy
+from vikram.logging import get_logger
 from vikram.settings import VikramSettings
+
+logger = get_logger(__name__)
 
 MAX_FILE_LINES = 200
 MAX_GLOB_MATCHES = 200
@@ -105,15 +109,27 @@ async def web_search(query: str) -> str:
     Args:
         query: A concise natural-language search query, ideally 3-10 words.
     """
+    log = logger.bind(tool="web_search", query_length=len(query))
     try:
         client = _parallel_client()
     except RuntimeError as e:
+        log.warning("tool_web_search_unconfigured")
         return str(e)
 
-    response = await client.search(
-        search_queries=[query],
-        objective=query,
-        mode="basic",
+    start = time.perf_counter()
+    try:
+        response = await client.search(
+            search_queries=[query],
+            objective=query,
+            mode="basic",
+        )
+    except Exception:
+        log.exception("tool_web_search_failed", duration_ms=_elapsed_ms(start))
+        raise
+    log.info(
+        "tool_web_search_succeeded",
+        duration_ms=_elapsed_ms(start),
+        result_count=len(response.results or []),
     )
     if not response.results:
         return f"No results for: {query}"
@@ -124,6 +140,10 @@ async def web_search(query: str) -> str:
         excerpt = "\n".join(r.excerpts) if r.excerpts else ""
         blocks.append(f"## {title}\n{r.url}\n\n{excerpt}".rstrip())
     return "\n\n---\n\n".join(blocks)
+
+
+def _elapsed_ms(start: float) -> float:
+    return round((time.perf_counter() - start) * 1000, 2)
 
 
 def _workspace_root() -> Path:
@@ -195,7 +215,15 @@ def _iter_workspace_files(root: Path) -> list[Path]:
     return sorted(files)
 
 
-def _refusal(message: str) -> str:
+def _refusal(message: str, *, tool: str, reason: str) -> str:
+    """Refuse a tool call and record it.
+
+    Refusals are the security-relevant edge of the coding tools (workspace
+    escapes, sensitive paths, denied commands), so every one is logged with a
+    stable ``reason`` code that is safe to alert on. The human-readable
+    ``message`` is what the model sees.
+    """
+    logger.warning("tool_call_refused", tool=tool, reason=reason)
     return f"Refusing: {message}"
 
 
@@ -217,9 +245,17 @@ async def read_file(
     """
     resolved = _resolve_workspace_path(path)
     if resolved is None:
-        return _refusal("path escapes the workspace.")
+        return _refusal(
+            "path escapes the workspace.",
+            tool="read_file",
+            reason="path_escapes_workspace",
+        )
     if _is_sensitive_path(resolved):
-        return _refusal("sensitive paths cannot be read.")
+        return _refusal(
+            "sensitive paths cannot be read.",
+            tool="read_file",
+            reason="sensitive_path",
+        )
     if not resolved.exists():
         return f"File not found: {_relative_path(resolved)}"
     if not resolved.is_file():
@@ -269,7 +305,11 @@ async def glob(pattern: str, max_matches: int = MAX_GLOB_MATCHES) -> str:
     if max_matches < 1:
         return "max_matches must be at least 1."
     if Path(pattern).expanduser().is_absolute() or ".." in Path(pattern).parts:
-        return _refusal("glob patterns must stay inside the workspace.")
+        return _refusal(
+            "glob patterns must stay inside the workspace.",
+            tool="glob",
+            reason="path_escapes_workspace",
+        )
 
     root = _workspace_root()
     matches: list[str] = []
@@ -317,9 +357,17 @@ async def grep(
     """
     resolved = _resolve_workspace_path(path)
     if resolved is None:
-        return _refusal("path escapes the workspace.")
+        return _refusal(
+            "path escapes the workspace.",
+            tool="grep",
+            reason="path_escapes_workspace",
+        )
     if _is_sensitive_path(resolved):
-        return _refusal("sensitive paths cannot be searched.")
+        return _refusal(
+            "sensitive paths cannot be searched.",
+            tool="grep",
+            reason="sensitive_path",
+        )
     if max_matches < 1:
         return "max_matches must be at least 1."
     try:
@@ -371,16 +419,35 @@ async def write_file(path: str, content: str) -> str:
     """
     resolved = _resolve_workspace_path(path)
     if resolved is None:
-        return _refusal("path escapes the workspace.")
+        return _refusal(
+            "path escapes the workspace.",
+            tool="write_file",
+            reason="path_escapes_workspace",
+        )
     if _is_sensitive_path(resolved):
-        return _refusal("sensitive paths cannot be written.")
+        return _refusal(
+            "sensitive paths cannot be written.",
+            tool="write_file",
+            reason="sensitive_path",
+        )
     if resolved.exists() and resolved.is_dir():
         return f"Not a file: {_relative_path(resolved)}"
+    existed = resolved.is_file()
     try:
         resolved.parent.mkdir(parents=True, exist_ok=True)
         resolved.write_text(content, encoding="utf-8")
     except OSError as exc:
+        logger.exception(
+            "tool_write_file_failed", tool="write_file", path=_relative_path(resolved)
+        )
         return f"Could not write {_relative_path(resolved)}: {exc}"
+    logger.info(
+        "tool_write_file_succeeded",
+        tool="write_file",
+        path=_relative_path(resolved),
+        content_length=len(content),
+        overwrote_existing=existed,
+    )
     return f"Wrote {_relative_path(resolved)} ({len(content)} characters)."
 
 
@@ -404,9 +471,17 @@ async def edit_file(
     """
     resolved = _resolve_workspace_path(path)
     if resolved is None:
-        return _refusal("path escapes the workspace.")
+        return _refusal(
+            "path escapes the workspace.",
+            tool="edit_file",
+            reason="path_escapes_workspace",
+        )
     if _is_sensitive_path(resolved):
-        return _refusal("sensitive paths cannot be edited.")
+        return _refusal(
+            "sensitive paths cannot be edited.",
+            tool="edit_file",
+            reason="sensitive_path",
+        )
     if not resolved.exists():
         return f"File not found: {_relative_path(resolved)}"
     if not resolved.is_file():
@@ -438,8 +513,18 @@ async def edit_file(
     try:
         resolved.write_text(updated, encoding="utf-8")
     except OSError as exc:
+        logger.exception(
+            "tool_edit_file_failed", tool="edit_file", path=_relative_path(resolved)
+        )
         return f"Could not write {_relative_path(resolved)}: {exc}"
     replaced = count if replace_all else 1
+    logger.info(
+        "tool_edit_file_succeeded",
+        tool="edit_file",
+        path=_relative_path(resolved),
+        replacements=replaced,
+        replace_all=replace_all,
+    )
     return f"Updated {_relative_path(resolved)} ({replaced} replacement)."
 
 
@@ -472,17 +557,32 @@ async def inspect_command(
     except ValueError as exc:
         return f"Invalid command: {exc}"
     if not argv:
-        return _refusal("no command was provided.")
+        return _refusal(
+            "no command was provided.", tool="inspect_command", reason="empty_command"
+        )
     decision, reason = _policy().classify(argv, command)
     if decision == "deny":
-        return _refusal(reason or "this command is not allowed.")
+        return _refusal(
+            reason or "this command is not allowed.",
+            tool="inspect_command",
+            reason="policy_denied",
+        )
     if decision != "auto":
         executable = Path(argv[0]).name
+        logger.info(
+            "tool_command_rejected",
+            tool="inspect_command",
+            executable=executable,
+            decision=decision,
+            reason="not_read_only",
+        )
         return (
             f"inspect_command only runs read-only commands; "
             f"use run_command for {executable}."
         )
-    return await _execute_command(command, argv, timeout_seconds, max_output_chars)
+    return await _execute_command(
+        command, argv, timeout_seconds, max_output_chars, tool="inspect_command"
+    )
 
 
 async def run_command(
@@ -511,13 +611,26 @@ async def run_command(
     except ValueError as exc:
         return f"Invalid command: {exc}"
     if not argv:
-        return _refusal("no command was provided.")
+        return _refusal(
+            "no command was provided.", tool="run_command", reason="empty_command"
+        )
     decision, reason = _policy().classify(argv, command)
     if decision == "deny":
-        return _refusal(reason or "this command is not allowed.")
+        return _refusal(
+            reason or "this command is not allowed.",
+            tool="run_command",
+            reason="policy_denied",
+        )
     if decision == "approve" and not ctx.tool_call_approved:
+        logger.info(
+            "tool_command_approval_requested",
+            tool="run_command",
+            executable=Path(argv[0]).name,
+        )
         raise ApprovalRequired()
-    return await _execute_command(command, argv, timeout_seconds, max_output_chars)
+    return await _execute_command(
+        command, argv, timeout_seconds, max_output_chars, tool="run_command"
+    )
 
 
 async def _execute_command(
@@ -525,11 +638,24 @@ async def _execute_command(
     argv: list[str],
     timeout_seconds: int,
     max_output_chars: int,
+    *,
+    tool: str,
 ) -> str:
     if timeout_seconds < 1:
         return "timeout_seconds must be at least 1."
     if max_output_chars < 1:
         return "max_output_chars must be at least 1."
+
+    # Only the executable and argument count are logged. The full command may
+    # carry credentials (tokens passed as flags), so it stays out of the logs.
+    log = logger.bind(
+        tool=tool,
+        executable=Path(argv[0]).name,
+        argument_count=len(argv) - 1,
+        timeout_seconds=timeout_seconds,
+    )
+    log.info("tool_command_started")
+    start = time.perf_counter()
 
     try:
         process = await asyncio.create_subprocess_exec(
@@ -539,8 +665,10 @@ async def _execute_command(
             stderr=asyncio.subprocess.PIPE,
         )
     except FileNotFoundError:
+        log.warning("tool_command_not_found", duration_ms=_elapsed_ms(start))
         return f"Command not found: {argv[0]}"
     except OSError as exc:
+        log.exception("tool_command_unstartable", duration_ms=_elapsed_ms(start))
         return f"Could not run {command}: {exc}"
 
     try:
@@ -552,6 +680,7 @@ async def _execute_command(
         stdout_bytes, stderr_bytes = await process.communicate()
         stdout = stdout_bytes.decode("utf-8", errors="replace")
         stderr = stderr_bytes.decode("utf-8", errors="replace")
+        log.warning("tool_command_timed_out", duration_ms=_elapsed_ms(start))
         return _truncate_output(
             f"$ {command}\nTimed out after {timeout_seconds}s.\n"
             f"stdout:\n{stdout}\nstderr:\n{stderr}".rstrip(),
@@ -560,6 +689,13 @@ async def _execute_command(
 
     stdout = stdout_bytes.decode("utf-8", errors="replace").strip()
     stderr = stderr_bytes.decode("utf-8", errors="replace").strip()
+    log.info(
+        "tool_command_finished",
+        duration_ms=_elapsed_ms(start),
+        exit_code=process.returncode,
+        stdout_length=len(stdout),
+        stderr_length=len(stderr),
+    )
     sections = [f"$ {command}", f"exit code: {process.returncode}"]
     if stdout:
         sections.append(f"stdout:\n{stdout}")

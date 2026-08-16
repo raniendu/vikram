@@ -25,8 +25,12 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel
 from pydantic_ai import Tool
 
+from vikram.logging import get_logger
+
 if TYPE_CHECKING:
     from vikram.spec import AgentSpec
+
+logger = get_logger(__name__)
 
 SKILL_FILENAME = "SKILL.md"
 # Cap on bundled resources listed for a single skill, to bound tool output.
@@ -223,8 +227,24 @@ def make_load_skill_tool(skills: list[Skill]) -> Tool[None]:
         """
         skill = index.get(name)
         if skill is None:
+            # Worth a warning: the model reaching for a skill that does not
+            # exist usually means the instruction block and the spec disagree.
+            logger.warning(
+                "skill_load_failed",
+                tool="load_skill",
+                requested_skill=name,
+                available_skills=sorted(index),
+            )
             available = ", ".join(sorted(index)) or "(none)"
             return f"Unknown skill {name!r}. Available skills: {available}."
-        return render_skill(skill)
+        rendered = render_skill(skill)
+        logger.info(
+            "skill_loaded",
+            tool="load_skill",
+            skill=skill.name,
+            resource_count=len(skill.resources),
+            instructions_length=len(rendered),
+        )
+        return rendered
 
     return Tool(load_skill_tool, name="load_skill")

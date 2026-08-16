@@ -7,7 +7,7 @@ from typing import Any
 import acp
 import pytest
 
-from vikram.acp import VikramAcpAgent, _Session, _tool_result_from_event
+from vikram.acp import VikramAcpAgent, _Session
 
 
 class FakeClient:
@@ -106,31 +106,6 @@ async def test_prompt_streams_text_and_tool_calls():
     assert "AgentMessageChunk" in update_types
     # History is retained for the next turn.
     assert session.messages
-
-
-def test_tool_result_extracts_compatibility_message_event():
-    result = _tool_result_from_event(
-        {
-            "message": {
-                "role": "user",
-                "content": [
-                    {
-                        "toolResult": {
-                            "toolUseId": "call-1",
-                            "status": "success",
-                            "content": [{"text": "done"}],
-                        }
-                    }
-                ],
-            }
-        }
-    )
-
-    assert result == {
-        "toolUseId": "call-1",
-        "status": "success",
-        "content": [{"text": "done"}],
-    }
 
 
 async def test_stream_event_reports_all_concurrent_tool_results():

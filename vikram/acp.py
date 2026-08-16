@@ -19,14 +19,16 @@ import json
 import os
 import re
 import sys
+import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from hashlib import sha256
 from typing import TYPE_CHECKING, Any
 
 import acp
 
-from vikram.streaming import tool_result_from_event as _tool_result_from_event
+from vikram.logging import get_logger
 from vikram.streaming import tool_results_from_event as _tool_results_from_event
 from vikram.streaming import tool_use_from_event as _tool_use_from_event
 
@@ -47,6 +49,17 @@ _TOOL_KINDS: dict[str, str] = {
 }
 
 _MAX_TOOL_BODY_CHARS = 4_000
+
+logger = get_logger(__name__)
+
+
+def _session_hash(session_id: str) -> str:
+    """Short stable handle for a session, so logs correlate without the raw id."""
+    return sha256(session_id.encode("utf-8")).hexdigest()[:12]
+
+
+def _elapsed_ms(start: float) -> float:
+    return round((time.perf_counter() - start) * 1000, 2)
 
 
 def _tool_kind(tool_name: str | None) -> str:
@@ -177,6 +190,12 @@ class VikramAcpAgent(acp.Agent):
             approval_ask=approval_ask,
         )
         self._sessions[session_id] = _Session(agent=agent, cwd=cwd or os.getcwd())
+        logger.info(
+            "acp_session_created",
+            agent=self._agent_name,
+            session_hash=_session_hash(session_id),
+            session_count=len(self._sessions),
+        )
         return acp.NewSessionResponse(session_id=session_id)
 
     async def prompt(
@@ -206,19 +225,43 @@ class VikramAcpAgent(acp.Agent):
     async def cancel(self, session_id: str, **_: Any) -> None:
         session = self._sessions.get(session_id)
         if session and session.task is not None and not session.task.done():
+            logger.info(
+                "acp_turn_cancelled",
+                agent=self._agent_name,
+                session_hash=_session_hash(session_id),
+            )
             session.task.cancel()
 
     # Turn execution -------------------------------------------------------
     async def _run_turn(self, session_id: str, session: _Session, prompt: str) -> str:
-        async for event in session.agent.stream_events(
-            prompt,
-            message_history=session.messages,
-            conversation_id=f"acp:{session_id}",
-        ):
-            if isinstance(event, dict) and "vikram_result" in event:
-                session.messages = list(event["vikram_result"].all_messages())
-                continue
-            await self._stream_event(session_id, event)
+        log = logger.bind(
+            agent=self._agent_name,
+            session_hash=_session_hash(session_id),
+            prompt_length=len(prompt),
+        )
+        log.info("acp_turn_started")
+        start = time.perf_counter()
+        try:
+            async for event in session.agent.stream_events(
+                prompt,
+                message_history=session.messages,
+                conversation_id=f"acp:{session_id}",
+            ):
+                if isinstance(event, dict) and "vikram_result" in event:
+                    session.messages = list(event["vikram_result"].all_messages())
+                    continue
+                await self._stream_event(session_id, event)
+        except asyncio.CancelledError:
+            log.info("acp_turn_aborted", duration_ms=_elapsed_ms(start))
+            raise
+        except Exception:
+            log.exception("acp_turn_failed", duration_ms=_elapsed_ms(start))
+            raise
+        log.info(
+            "acp_turn_succeeded",
+            duration_ms=_elapsed_ms(start),
+            message_count=len(session.messages),
+        )
         return "end_turn"
 
     async def _stream_event(self, session_id: str, event: Any) -> None:
@@ -287,9 +330,15 @@ class VikramAcpAgent(acp.Agent):
         response = await self._client.request_permission(
             options=options, session_id=session_id, tool_call=tool_call
         )
-        return (
-            "yes" if getattr(response.outcome, "option_id", None) == "allow" else "no"
+        approved = getattr(response.outcome, "option_id", None) == "allow"
+        logger.info(
+            "acp_tool_permission_resolved",
+            agent=self._agent_name,
+            session_hash=_session_hash(session_id),
+            tool_name=tool_name,
+            approved=approved,
         )
+        return "yes" if approved else "no"
 
     # Helpers --------------------------------------------------------------
     async def _notify(self, session_id: str, update: Any) -> None:
@@ -334,11 +383,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    from vikram.logging import configure_logging
+    from vikram.observability import init_observability
     from vikram.settings import VikramSettings
 
     args = build_parser().parse_args(list(argv) if argv is not None else sys.argv[1:])
     settings = VikramSettings()
+    # stdout carries the JSON-RPC stream the editor parses, so logs must go to
+    # stderr; a single stray log line on stdout breaks the ACP connection.
+    configure_logging(settings.log_level, stream=sys.stderr)
+    init_observability(settings)
     agent = VikramAcpAgent(settings=settings, agent_name=args.agent)
+    logger.info("acp_starting", agent=args.agent, model=settings.model)
     asyncio.run(acp.run_agent(agent))
 
 

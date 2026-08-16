@@ -33,8 +33,3 @@ def tool_results_from_event(event: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(result, dict):
             results.append(result)
     return results
-
-
-def tool_result_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
-    results = tool_results_from_event(event)
-    return results[0] if results else None

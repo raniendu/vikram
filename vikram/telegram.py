@@ -234,7 +234,14 @@ class TelegramAdapter:
                     json={"chat_id": chat_id, "action": action},
                 )
                 response.raise_for_status()
-            except httpx.HTTPError:
+            except httpx.HTTPError as exc:
+                # Re-raised without the cause so the bot token in the httpx
+                # request URL never reaches a traceback; the type is logged.
+                log.warning(
+                    "telegram_chat_action_failed",
+                    transport="telegram_api",
+                    error_type=type(exc).__name__,
+                )
                 raise RuntimeError("Telegram sendChatAction request failed") from None
         log.info("telegram_chat_action_succeeded", transport="telegram_api")
 
@@ -376,7 +383,14 @@ class TelegramAdapter:
                     json={"chat_id": chat_id, "user_id": user_id},
                 )
                 response.raise_for_status()
-            except httpx.HTTPError:
+            except httpx.HTTPError as exc:
+                # See send_chat_action: the cause is dropped to keep the bot
+                # token out of tracebacks.
+                logger.warning(
+                    "telegram_get_chat_member_failed",
+                    chat_hash=chat_hash(chat_id),
+                    error_type=type(exc).__name__,
+                )
                 raise RuntimeError("Telegram getChatMember request failed") from None
         payload = response.json()
         if not isinstance(payload, dict) or payload.get("ok") is not True:
