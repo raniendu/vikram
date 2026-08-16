@@ -118,7 +118,7 @@ def test_load_config_flattens_agent_overrides(tmp_path):
                 "",
                 "[agents.coder]",
                 'provider = "ollama"',
-                'model = "qwen3.6:35b-mlx"',
+                'model = "qwen3.8:27b-mlx"',
                 "",
             ]
         ),
@@ -128,7 +128,7 @@ def test_load_config_flattens_agent_overrides(tmp_path):
     flat = load_config(config_file)
 
     assert flat["agent_overrides"] == {
-        "coder": {"provider": "ollama", "model": "qwen3.6:35b-mlx"}
+        "coder": {"provider": "ollama", "model": "qwen3.8:27b-mlx"}
     }
 
 
@@ -143,7 +143,7 @@ def test_write_agent_model_merges_into_existing_config(tmp_path):
     )
 
     write_agent_model(
-        "coder", provider="ollama", model="qwen3.6:35b-mlx", path=config_file
+        "coder", provider="ollama", model="qwen3.8:27b-mlx", path=config_file
     )
 
     data = tomllib.loads(config_file.read_text(encoding="utf-8"))
@@ -151,7 +151,7 @@ def test_write_agent_model_merges_into_existing_config(tmp_path):
     assert data["providers"]["ollama"] == {"model": "gemma4:26b-a4b-it-qat"}
     assert data["agents"]["coder"] == {
         "provider": "ollama",
-        "model": "qwen3.6:35b-mlx",
+        "model": "qwen3.8:27b-mlx",
     }
 
 
