@@ -151,7 +151,7 @@ subagents and can call `delegate_to_agent` with a self-contained prompt when a
 specialized agent should do the work. In the interactive CLI, that delegation is
 shown as a normal tool call before the subagent runs.
 
-The checked-in `coder` spec defaults to local Ollama with `qwen3.6:35b-mlx`,
+The checked-in `coder` spec defaults to local Ollama with `qwen3.8:27b-mlx`,
 which is an MLX text-only model suited to Apple silicon. The `vikram`
 orchestrator defaults to local Ollama with `gemma4:26b-a4b-it-qat`. These
 spec pins hold even when your config sets a different global default; switch
