@@ -35,3 +35,6 @@ credentials.json
 
 # Local Vikram runtime state
 .vikram/
+
+# Stray local DBOS/state dirs from ad-hoc runs
+/tmp/
