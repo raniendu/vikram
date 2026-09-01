@@ -7,7 +7,7 @@ from pydantic_ai import Tool
 
 from vikram.logging import get_logger
 from vikram.settings import VikramSettings
-from vikram.spec import AgentSurfaceError, ensure_surface_allowed, load_spec
+from vikram.spec import AgentSurfaceError, ensure_surface_allowed
 from vikram.tools import ToolEntry
 
 logger = get_logger(__name__)
@@ -35,13 +35,27 @@ def discover_subagents(
     orchestrator_name: str,
     surface: str,
 ) -> list[SubagentInfo]:
-    """List checked-in agents the orchestrator can delegate to."""
+    """List agents the orchestrator can delegate to, from every spec root.
+
+    Skips agents whose spec will not parse. This assembles part of the
+    orchestrator's system prompt, so raising here would mean a single malformed
+    spec breaks *every* agent's build on every surface -- a real prospect once
+    agents are authored in an editor rather than by hand.
+    """
+    from vikram.specstore import list_agents, load_agent
+
     subagents: list[SubagentInfo] = []
-    for spec_path in sorted(settings.spec_root.glob("*/agent.toml")):
-        agent_name = spec_path.parent.name
-        if agent_name == orchestrator_name:
+    for summary in list_agents(settings):
+        if summary.id == orchestrator_name:
             continue
-        spec = load_spec(agent_name, settings.spec_root)
+        if summary.error is not None:
+            logger.warning(
+                "subagent_skipped_unreadable_spec",
+                agent=summary.id,
+                error=summary.error,
+            )
+            continue
+        spec = load_agent(summary.id, settings)
         unavailable_reason = None
         try:
             ensure_surface_allowed(spec, surface)
@@ -49,7 +63,7 @@ def discover_subagents(
             unavailable_reason = str(exc)
         subagents.append(
             SubagentInfo(
-                name=agent_name,
+                name=summary.id,
                 display_name=spec.name,
                 description=spec.description,
                 cli_only=spec.cli_only,
@@ -130,7 +144,9 @@ def make_delegate_to_agent_tool(
                 f"Available subagents: {available or '(none)'}."
             )
 
-        target_spec = load_spec(requested_name, settings.spec_root)
+        from vikram.specstore import load_agent
+
+        target_spec = load_agent(requested_name, settings)
 
         try:
             ensure_surface_allowed(target_spec, surface)

@@ -294,3 +294,51 @@ def test_emitted_file_round_trips_and_keeps_header(tmp_path):
             "ollama-cloud": {"model": "gpt-oss:120b", "api_key": "cloud-key"}
         },
     }
+
+
+def test_delete_agent_model_removes_only_that_agent(tmp_path):
+    from vikram.config import delete_agent_model, load_config_raw, write_agent_model
+
+    config_file = tmp_path / "config.toml"
+    write_agent_model("coder", provider="ollama", model="a", path=config_file)
+    write_agent_model("vikram", provider="ollama", model="b", path=config_file)
+
+    delete_agent_model("coder", path=config_file)
+
+    data = load_config_raw(config_file)
+    assert "coder" not in data["agents"]
+    assert data["agents"]["vikram"] == {"provider": "ollama", "model": "b"}
+
+
+def test_delete_agent_model_drops_the_empty_table(tmp_path):
+    from vikram.config import delete_agent_model, load_config_raw, write_agent_model
+
+    config_file = tmp_path / "config.toml"
+    write_agent_model("coder", provider="ollama", model="a", path=config_file)
+
+    delete_agent_model("coder", path=config_file)
+
+    assert "agents" not in load_config_raw(config_file)
+
+
+def test_delete_agent_model_is_a_no_op_when_absent(tmp_path):
+    from vikram.config import delete_agent_model
+
+    config_file = tmp_path / "config.toml"
+
+    delete_agent_model("coder", path=config_file)
+
+    assert not config_file.exists()
+
+
+def test_delete_agent_model_restores_the_spec_pin(tmp_path, monkeypatch):
+    """Clearing an override is what makes an agent follow its spec again."""
+    from vikram.config import delete_agent_model, load_config, write_agent_model
+
+    config_file = tmp_path / "config.toml"
+    write_agent_model("coder", provider="ollama", model="override", path=config_file)
+    assert load_config(config_file)["agent_overrides"]["coder"]["model"] == "override"
+
+    delete_agent_model("coder", path=config_file)
+
+    assert load_config(config_file).get("agent_overrides", {}) == {}

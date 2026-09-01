@@ -169,7 +169,7 @@ class VikramAcpAgent(acp.Agent):
         **_: Any,
     ) -> acp.NewSessionResponse:
         from vikram.agent import build_agent
-        from vikram.spec import load_spec
+        from vikram.specstore import load_agent
 
         # The coder tools resolve paths against the process cwd (see
         # vikram.tools._workspace_root). Editors launch one agent process per
@@ -178,7 +178,7 @@ class VikramAcpAgent(acp.Agent):
         if cwd:
             os.chdir(cwd)
         session_id = uuid.uuid4().hex
-        spec = load_spec(self._agent_name, self._settings.spec_root)
+        spec = load_agent(self._agent_name, self._settings)
 
         async def approval_ask(prompt: str) -> str:
             return await self._request_permission_from_hitl_prompt(session_id, prompt)

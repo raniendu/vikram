@@ -21,7 +21,8 @@ from vikram.observability import (
     set_span_attributes,
 )
 from vikram.settings import VikramSettings, resolve_model_selection
-from vikram.spec import AgentSurfaceError, ensure_surface_allowed, load_spec
+from vikram.spec import AgentSurfaceError, ensure_surface_allowed
+from vikram.specstore import load_agent
 from vikram.telegram import TelegramAdapter
 from vikram.telegram_config import TelegramConfig, load_telegram_config
 
@@ -68,7 +69,7 @@ def _get_settings() -> VikramSettings:
 
 def _load_http_spec(name: str):
     settings = _get_settings()
-    spec = load_spec(name, settings.spec_root)
+    spec = load_agent(name, settings)
     ensure_surface_allowed(spec, "http")
     return spec
 

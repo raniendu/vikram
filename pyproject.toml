@@ -19,6 +19,7 @@ dependencies = [
     "rich>=14.2.0",
     "structlog>=25.5.0",
     "telegramify-markdown>=1.1.5",
+    "tomlkit>=0.13",
     "uvicorn[standard]>=0.46.0",
 ]
 

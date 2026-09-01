@@ -17,7 +17,8 @@ from vikram.agent import build_agent
 from vikram.logging import get_logger, safe_metadata, thread_hash
 from vikram.observability import inject_trace_context
 from vikram.settings import VikramSettings
-from vikram.spec import ensure_surface_allowed, load_spec
+from vikram.spec import ensure_surface_allowed
+from vikram.specstore import load_agent
 
 logger = get_logger(__name__)
 RUNTIME_HISTORY_VERSION = "pydantic-ai-v2"
@@ -368,7 +369,7 @@ class ConversationService:
         if self._agent_factory is not None:
             return self._agent_factory(name)
         if name not in self._agent_cache:
-            spec = load_spec(name, self.settings.spec_root)
+            spec = load_agent(name, self.settings)
             ensure_surface_allowed(spec, "threaded")
             self._agent_cache[name] = build_agent(
                 spec=spec, settings=self.settings, surface="threaded"

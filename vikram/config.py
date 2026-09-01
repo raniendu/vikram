@@ -320,6 +320,34 @@ def write_agent_model(
     )
 
 
+def delete_agent_model(agent_id: str, path: Path | None = None) -> Path:
+    """Remove ``[agents.<agent_id>]`` so the spec pin applies again.
+
+    ``merge_write_config`` deep-merges and therefore cannot clear a key, so
+    resetting an agent to its spec default needs its own read-pop-write.
+    """
+    path = path or config_path()
+    existing = migrate_v1(load_config_raw(path))
+    agents = existing.get("agents")
+    if not isinstance(agents, dict) or agent_id not in agents:
+        return path
+
+    del agents[agent_id]
+    if not agents:
+        del existing["agents"]
+
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    existing["config_version"] = CONFIG_VERSION
+    tmp_path = path.with_name(path.name + ".tmp")
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as file:
+        file.write(_FILE_HEADER)
+        file.write(_emit_toml(existing))
+    os.replace(tmp_path, path)
+    os.chmod(path, 0o600)
+    return path
+
+
 def _build_parser() -> argparse.ArgumentParser:
     return argparse.ArgumentParser(
         prog="vikram configure",

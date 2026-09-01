@@ -46,7 +46,7 @@ from vikram.settings import (
     resolve_agent_model_selection,
 )
 from vikram.skills import discover_skills, make_load_skill_tool, skills_instructions
-from vikram.spec import AgentSpec, load_spec
+from vikram.spec import AgentSpec
 from vikram.tools import TOOL_REGISTRY, ToolEntry, set_command_policy
 
 logger = get_logger(__name__)
@@ -265,7 +265,10 @@ def build_agent(
     apply_command_policy: bool = True,
 ) -> VikramAgent:
     settings = settings or VikramSettings()
-    spec = spec or load_spec(settings.default_agent, settings.spec_root)
+    if spec is None:
+        from vikram.specstore import load_agent
+
+        spec = load_agent(settings.default_agent, settings)
     settings = _settings_with_spec_model(settings, spec)
     tools = _resolve_tools(
         spec,

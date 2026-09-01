@@ -48,7 +48,7 @@ async def test_new_session_chdirs_and_registers(monkeypatch, tmp_path):
     agent = _make_agent()
     sentinel = object()
     monkeypatch.setattr("vikram.agent.build_agent", lambda **_: sentinel)
-    monkeypatch.setattr("vikram.spec.load_spec", lambda *a, **k: object())
+    monkeypatch.setattr("vikram.specstore.load_agent", lambda *a, **k: object())
 
     response = await agent.new_session(cwd=str(tmp_path))
 

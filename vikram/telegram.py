@@ -11,7 +11,8 @@ import telegramify_markdown
 from vikram.gateway import InboundMessage, MessageEnqueuer, ThreadStore
 from vikram.logging import chat_hash, get_logger
 from vikram.settings import VikramSettings
-from vikram.spec import AgentSurfaceError, ensure_surface_allowed, load_spec
+from vikram.spec import AgentSurfaceError, ensure_surface_allowed
+from vikram.specstore import load_agent
 from vikram.telegram_config import (
     LEGACY_BOT_NAME,
     TelegramBotConfig,
@@ -294,7 +295,7 @@ class TelegramAdapter:
                 )
                 return TelegramWebhookResult(status="handled")
             try:
-                spec = load_spec(agent_name, self.settings.spec_root)
+                spec = load_agent(agent_name, self.settings)
                 ensure_surface_allowed(spec, "telegram")
             except FileNotFoundError:
                 await self.send_message(

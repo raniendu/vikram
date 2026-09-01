@@ -25,7 +25,16 @@ class AgentSurfaceError(RuntimeError):
     """Raised when a spec is loaded on a surface it explicitly disallows."""
 
 
-class AgentSpec(BaseModel):
+class AgentSpecDraft(BaseModel):
+    """Everything that lives in ``agent.toml``.
+
+    Split out from :class:`AgentSpec` so editors have a model covering exactly
+    the writable fields -- ``agent_dir``/``shared_dir`` are resolved at load
+    time and are not part of the file. ``model_json_schema()`` on this class is
+    what drives the desktop app's editor form, which is why the field set must
+    stay identical to the file's key set.
+    """
+
     name: str
     description: str
     system_prompt: Path
@@ -43,6 +52,8 @@ class AgentSpec(BaseModel):
     command_policy: Path = Path(POLICY_FILENAME)
     command_policy_override: dict[str, Any] = {}
 
+
+class AgentSpec(AgentSpecDraft):
     agent_dir: Path
     shared_dir: Path
 
@@ -67,13 +78,22 @@ class AgentSpec(BaseModel):
         )
 
 
-def load_spec(name: str, spec_root: Path) -> AgentSpec:
+def load_spec(
+    name: str, spec_root: Path, *, shared_root: Path | None = None
+) -> AgentSpec:
+    """Load ``<spec_root>/<name>/agent.toml``.
+
+    ``shared_root`` overrides where ``shared_context_files``, ``shared_skills``
+    and ``command_policy`` resolve from. User-created agents live outside the
+    shipped spec tree but still use its ``shared/`` directory, so they pass it
+    explicitly; every other caller gets the historical behaviour.
+    """
     spec_path = spec_root / name / "agent.toml"
     data = tomllib.loads(spec_path.read_text())
     return AgentSpec(
         **data,
         agent_dir=spec_path.parent,
-        shared_dir=spec_root / SHARED_DIR_NAME,
+        shared_dir=shared_root or (spec_root / SHARED_DIR_NAME),
     )
 
 

@@ -366,7 +366,7 @@ def _run(
     from vikram.logging import configure_logging
     from vikram.observability import init_observability
     from vikram.settings import VikramSettings
-    from vikram.spec import load_spec
+    from vikram.specstore import load_agent
 
     old_cwd = Path.cwd()
     try:
@@ -385,7 +385,7 @@ def _run(
         # go to stderr and stay quiet unless VIKRAM_LOG_LEVEL asks otherwise.
         configure_logging(_cli_log_level(settings), stream=sys.stderr)
         init_observability(settings)
-        spec = load_spec(settings.default_agent, settings.spec_root)
+        spec = load_agent(settings.default_agent, settings)
         agent = build_agent(spec=spec, settings=settings, approve_all=args.approve_all)
 
         if prompt is not None:
