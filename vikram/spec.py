@@ -13,6 +13,13 @@ from vikram.providers import ModelProvider
 
 SHARED_DIR_NAME = "shared"
 
+# Surfaces that run on the user's own machine, driven by someone already at the
+# keyboard. ACP has always built cli_only agents directly without consulting
+# ensure_surface_allowed, so "cli_only" has in practice meant "not reachable
+# over the network" -- these constants make that existing rule explicit.
+LOCAL_SURFACES = frozenset({"cli", "acp", "gui"})
+NETWORK_SURFACES = frozenset({"http", "threaded", "telegram"})
+
 
 class AgentSurfaceError(RuntimeError):
     """Raised when a spec is loaded on a surface it explicitly disallows."""
@@ -71,7 +78,7 @@ def load_spec(name: str, spec_root: Path) -> AgentSpec:
 
 
 def ensure_surface_allowed(spec: AgentSpec, surface: str) -> None:
-    if spec.cli_only and surface != "cli":
+    if spec.cli_only and surface not in LOCAL_SURFACES:
         raise AgentSurfaceError(
-            f"Agent {spec.name} is CLI-only and cannot run on {surface}."
+            f"Agent {spec.name} is local-only and cannot run on {surface}."
         )

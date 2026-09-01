@@ -5,6 +5,7 @@ import inspect
 import json
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic_ai import (
@@ -56,6 +57,28 @@ class AgentToolError(RuntimeError):
 
 
 ApprovalAsk = Callable[[str], str | Awaitable[str]]
+
+
+@dataclass(frozen=True)
+class ApprovalRequest:
+    """A tool call awaiting human approval.
+
+    ``__str__`` reproduces the legacy prompt verbatim so ``approval_ask``
+    callers keep seeing the string they always did.
+    """
+
+    tool_name: str
+    tool_call_id: str
+    args: dict[str, Any]
+
+    def __str__(self) -> str:
+        return (
+            f'Tool "{self.tool_name}" requires human approval. Input: '
+            f"{json.dumps(self.args, default=str)}"
+        )
+
+
+ApprovalRequestAsk = Callable[[ApprovalRequest], str | Awaitable[str]]
 
 
 class VikramAgent:
@@ -238,6 +261,8 @@ def build_agent(
     enable_delegation: bool = True,
     approve_all: bool = False,
     approval_ask: ApprovalAsk | None = None,
+    approval_request: ApprovalRequestAsk | None = None,
+    apply_command_policy: bool = True,
 ) -> VikramAgent:
     settings = settings or VikramSettings()
     spec = spec or load_spec(settings.default_agent, settings.spec_root)
@@ -249,7 +274,11 @@ def build_agent(
         enable_delegation=enable_delegation,
     )
     command_policy = spec.load_command_policy()
-    set_command_policy(command_policy)
+    # Skipped by validation/preview callers: set_command_policy writes a
+    # module-level global, so building agent B would otherwise swap the
+    # policy out from under a concurrently running agent A.
+    if apply_command_policy:
+        set_command_policy(command_policy)
 
     skills = discover_skills(spec)
     instructions: list[str] = [spec.instructions, agent_identity(spec.name)]
@@ -291,6 +320,7 @@ def build_agent(
                 surface=surface,
                 approve_all=approve_all,
                 approval_ask=approval_ask,
+                approval_request=approval_request,
             ),
             id="vikram-human-approval",
         )
@@ -345,6 +375,7 @@ def _approval_handler(
     surface: str,
     approve_all: bool,
     approval_ask: ApprovalAsk | None,
+    approval_request: ApprovalRequestAsk | None = None,
 ) -> Callable[[RunContext[None], DeferredToolRequests], Awaitable[DeferredToolResults]]:
     async def handle(
         _: RunContext[None], requests: DeferredToolRequests
@@ -354,11 +385,17 @@ def _approval_handler(
 
         approvals: dict[str, bool | ToolDenied] = {}
         for call in requests.approvals:
-            prompt = (
-                f'Tool "{call.tool_name}" requires human approval. Input: '
-                f"{json.dumps(call.args_as_dict(), default=str)}"
+            request = ApprovalRequest(
+                tool_name=call.tool_name,
+                tool_call_id=call.tool_call_id,
+                args=call.args_as_dict(),
             )
-            if approval_ask is not None:
+            prompt = str(request)
+            if approval_request is not None:
+                answer = approval_request(request)
+                if inspect.isawaitable(answer):
+                    answer = await answer
+            elif approval_ask is not None:
                 answer = approval_ask(prompt)
                 if inspect.isawaitable(answer):
                     answer = await answer

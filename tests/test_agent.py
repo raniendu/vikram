@@ -793,7 +793,7 @@ async def test_delegate_to_agent_rejects_cli_only_agent_on_http_surface(
     result = await tool.function("coder", "Implement a code change.")
 
     assert "Cannot delegate to 'coder'" in result
-    assert "CLI-only" in result
+    assert "local-only" in result
 
 
 async def test_delegate_to_agent_refuses_self_delegation(monkeypatch, tmp_path):
@@ -918,3 +918,93 @@ def test_build_agent_logs_missing_tools_before_failing(
     failure = find_log_event(log_events, "agent_tools_unresolved")
     assert failure["missing_tools"] == ["not_a_real_tool"]
     assert failure["log_level"] == "error"
+
+
+async def test_apply_command_policy_false_leaves_the_global_untouched(
+    monkeypatch, tmp_path
+):
+    """Validation/preview builds must not swap a running agent's policy.
+
+    set_command_policy writes a module-level global, so building agent B for a
+    dry run would otherwise reconfigure agent A mid-run_command.
+    """
+    from vikram import tools
+
+    settings = clean_settings(
+        monkeypatch,
+        tmp_path,
+        VIKRAM_MODEL_PROVIDER="ollama",
+        VIKRAM_MODEL="test-model",
+    )
+    spec = load_spec("coder", settings.spec_root)
+
+    build_agent(spec=spec, settings=settings)
+    active = tools._ACTIVE_POLICY
+    assert active is not None
+
+    sentinel = object()
+    monkeypatch.setattr(tools, "_ACTIVE_POLICY", sentinel)
+    build_agent(spec=spec, settings=settings, apply_command_policy=False)
+    assert tools._ACTIVE_POLICY is sentinel
+
+    build_agent(spec=spec, settings=settings)
+    assert tools._ACTIVE_POLICY is not sentinel
+
+
+async def test_approval_request_is_preferred_over_approval_ask():
+    seen = []
+
+    def structured(request):
+        seen.append(request)
+        return "yes"
+
+    def legacy(prompt):  # pragma: no cover - must not be reached
+        raise AssertionError("approval_ask should not be called")
+
+    handler = _approval_handler(
+        surface="gui",
+        approve_all=False,
+        approval_ask=legacy,
+        approval_request=structured,
+    )
+    requests = SimpleNamespace(
+        approvals=[
+            SimpleNamespace(
+                tool_name="write_file",
+                tool_call_id="call-1",
+                args_as_dict=lambda: {"path": "a.txt"},
+            )
+        ],
+        build_results=lambda approvals, calls: approvals,
+    )
+
+    approvals = await handler(None, requests)
+
+    assert approvals == {"call-1": True}
+    assert seen[0].tool_name == "write_file"
+    assert seen[0].args == {"path": "a.txt"}
+
+
+async def test_approval_ask_still_receives_the_legacy_string():
+    prompts = []
+
+    handler = _approval_handler(
+        surface="gui",
+        approve_all=False,
+        approval_ask=lambda prompt: prompts.append(prompt) or "n",
+    )
+    requests = SimpleNamespace(
+        approvals=[
+            SimpleNamespace(
+                tool_name="edit_file",
+                tool_call_id="call-2",
+                args_as_dict=lambda: {"path": "b.txt"},
+            )
+        ],
+        build_results=lambda approvals, calls: approvals,
+    )
+
+    approvals = await handler(None, requests)
+
+    assert approvals == {"call-2": False}
+    assert prompts[0].startswith('Tool "edit_file" requires human approval. Input: ')
