@@ -21,10 +21,13 @@ from pathlib import Path
 API_BIN_ENV = "VIKRAM_API_BIN"
 APP_ENV = "VIKRAM_GUI_APP"
 
-# Where a built bundle is likely to be, in preference order.
+BUNDLE_NAME = "Vikram Studio"
+
+# Installed locations, in preference order. The checkout's build output is
+# checked after these; see find_bundle.
 BUNDLE_CANDIDATES = (
-    "~/Applications/Vikram Studio.app",
-    "/Applications/Vikram Studio.app",
+    f"~/Applications/{BUNDLE_NAME}.app",
+    f"/Applications/{BUNDLE_NAME}.app",
 )
 
 
@@ -49,7 +52,33 @@ def find_api_binary() -> Path | None:
     return None
 
 
+def studio_log_path() -> Path:
+    """Where the detached app's output goes, so it stays readable."""
+    state_dir = os.environ.get("VIKRAM_STATE_DIR")
+    root = Path(state_dir) if state_dir else Path.home() / ".vikram"
+    return root / "studio.log"
+
+
+def bundle_build_output() -> Path:
+    """Where `npm run tauri build` leaves the app inside a checkout."""
+    return (
+        repo_gui_dir()
+        / "src-tauri"
+        / "target"
+        / "release"
+        / "bundle"
+        / "macos"
+        / f"{BUNDLE_NAME}.app"
+    )
+
+
 def find_bundle() -> Path | None:
+    """Locate the app, preferring an installed copy over a fresh build.
+
+    The checkout's build output counts: having just built it there is the
+    normal case when working on the app, and requiring a copy into
+    ~/Applications first is friction with no purpose.
+    """
     explicit = os.environ.get(APP_ENV)
     if explicit and Path(explicit).exists():
         return Path(explicit)
@@ -57,11 +86,31 @@ def find_bundle() -> Path | None:
         path = Path(candidate).expanduser()
         if path.exists():
             return path
-    return None
+    built = bundle_build_output()
+    return built if built.exists() else None
 
 
 def repo_gui_dir() -> Path:
-    return Path(__file__).resolve().parent.parent / "gui"
+    """The ``gui/`` sources, from a checkout or from the recorded install.
+
+    Mirrors how ``settings._resolve_spec_root`` finds ``spec/``: a checkout is
+    a sibling of the package, and an installed tool falls back to the
+    ``source_dir`` recorded in install.toml.
+    """
+    package_relative = Path(__file__).resolve().parent.parent / "gui"
+    if package_relative.is_dir():
+        return package_relative
+    try:
+        from vikram.update import load_metadata
+
+        source_dir = load_metadata().get("source_dir")
+    except Exception:
+        source_dir = None
+    if source_dir:
+        candidate = Path(str(source_dir)) / "gui"
+        if candidate.is_dir():
+            return candidate
+    return package_relative
 
 
 def _bundle_executable(bundle: Path) -> Path | None:
@@ -115,9 +164,13 @@ def run(argv: Sequence[str] | None = None) -> int:
     bundle = find_bundle()
     if bundle is None:
         print(
-            "Vikram Studio is not installed.\n"
-            "Build it with:  cd gui && npm install && npm run tauri build\n"
-            "Or run from source:  vikram gui --dev",
+            "Vikram Studio is not built yet.\n"
+            "\n"
+            "  Build it:      cd gui && npm install && npm run tauri build\n"
+            "  Or run live:   vikram gui --dev\n"
+            "\n"
+            f"Looked in: {', '.join(BUNDLE_CANDIDATES)}, "
+            f"and {bundle_build_output()}",
             file=sys.stderr,
         )
         return 1
@@ -127,9 +180,30 @@ def run(argv: Sequence[str] | None = None) -> int:
         print(f"No executable inside {bundle}.", file=sys.stderr)
         return 1
 
-    subprocess.Popen([str(executable)], env=env)
+    # Detach: the app outlives this command, and leaving it attached to the
+    # terminal both spams the shell with sidecar logs and keeps any process
+    # capturing our output waiting on a pipe that never closes.
+    log_path = studio_log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "ab") as log:
+        subprocess.Popen(
+            [str(executable)],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
+            start_new_session=True,
+        )
     print(f"Opened {bundle}")
+    print(f"Logs: {log_path}", file=sys.stderr)
     return 0
 
 
-__all__ = ["find_api_binary", "find_bundle", "repo_gui_dir", "run"]
+__all__ = [
+    "bundle_build_output",
+    "studio_log_path",
+    "find_api_binary",
+    "find_bundle",
+    "repo_gui_dir",
+    "run",
+]

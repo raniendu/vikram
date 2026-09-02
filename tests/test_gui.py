@@ -76,10 +76,11 @@ def test_run_passes_the_resolved_path_to_the_app(monkeypatch, tmp_path):
     monkeypatch.setattr(gui, "find_api_binary", lambda: binary)
     monkeypatch.setattr(gui, "find_bundle", lambda: bundle)
     launched: dict = {}
+    monkeypatch.setenv("VIKRAM_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setattr(
         gui.subprocess,
         "Popen",
-        lambda cmd, env=None: launched.update(cmd=cmd, env=env),
+        lambda cmd, **kw: launched.update(cmd=cmd, env=kw.get("env")),
     )
 
     assert gui.run([]) == 0
@@ -171,3 +172,66 @@ def test_gui_is_listed_as_a_command():
     from vikram.cli import COMMANDS
 
     assert "gui" in COMMANDS
+
+
+def test_launch_detaches_so_the_shell_returns(monkeypatch, tmp_path):
+    """An attached child spams the terminal and blocks anything piping us."""
+    binary = tmp_path / "vikram-api"
+    binary.write_text("#!/bin/sh\n")
+    bundle = tmp_path / "Vikram Studio.app"
+    executable = bundle / "Contents" / "MacOS" / "vikram-studio"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\n")
+    executable.chmod(0o755)
+
+    monkeypatch.setattr(gui, "find_api_binary", lambda: binary)
+    monkeypatch.setattr(gui, "find_bundle", lambda: bundle)
+    monkeypatch.setenv("VIKRAM_STATE_DIR", str(tmp_path / "state"))
+    seen: dict = {}
+    monkeypatch.setattr(gui.subprocess, "Popen", lambda cmd, **kw: seen.update(kw))
+
+    assert gui.run([]) == 0
+    assert seen["start_new_session"] is True
+    assert seen["stdin"] is gui.subprocess.DEVNULL
+    assert seen["stdout"] is seen["stderr"]  # both into the log file
+    assert (tmp_path / "state" / "studio.log").exists()
+
+
+def test_finds_a_bundle_built_in_the_checkout(monkeypatch, tmp_path):
+    """Having just run `npm run tauri build` is the normal case."""
+    gui_dir = tmp_path / "gui"
+    built = (
+        gui_dir
+        / "src-tauri"
+        / "target"
+        / "release"
+        / "bundle"
+        / "macos"
+        / "Vikram Studio.app"
+    )
+    built.mkdir(parents=True)
+    monkeypatch.setattr(gui, "repo_gui_dir", lambda: gui_dir)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(gui, "BUNDLE_CANDIDATES", ("~/Applications/Nope.app",))
+
+    assert gui.find_bundle() == built
+
+
+def test_an_installed_bundle_wins_over_the_checkout_build(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    installed = home / "Applications" / "Vikram Studio.app"
+    installed.mkdir(parents=True)
+    gui_dir = tmp_path / "gui"
+    (
+        gui_dir
+        / "src-tauri"
+        / "target"
+        / "release"
+        / "bundle"
+        / "macos"
+        / "Vikram Studio.app"
+    ).mkdir(parents=True)
+    monkeypatch.setattr(gui, "repo_gui_dir", lambda: gui_dir)
+    monkeypatch.setenv("HOME", str(home))
+
+    assert gui.find_bundle() == installed

@@ -13,12 +13,20 @@ uv tool install --force --reinstall-package vikram --python 3.13 --from . vikram
 # 2. Build the app once
 cd gui && npm install && npm run tauri build && cd ..
 
-# 3. Install it
-cp -R "gui/src-tauri/target/release/bundle/macos/Vikram Studio.app" ~/Applications/
-
-# 4. Open it
+# 3. Open it
 vikram gui
 ```
+
+`vikram gui` finds the app in `~/Applications`, `/Applications`, or the
+checkout's own build output — so step 2 is enough to run it. Copy it into
+`~/Applications` when you want it in Spotlight:
+
+```bash
+cp -R "gui/src-tauri/target/release/bundle/macos/Vikram Studio.app" ~/Applications/
+```
+
+The app is detached from your shell, so the command returns immediately. Its
+output goes to `~/.vikram/studio.log`.
 
 `--reinstall-package` is deliberate: without it uv reuses a cached wheel for
 `vikram==0.1.0` and the upgrade silently no-ops.
