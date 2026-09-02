@@ -22,12 +22,7 @@ from typing import Literal
 from vikram.config import config_dir
 from vikram.logging import get_logger
 from vikram.settings import VikramSettings, resolve_agent_model_selection
-from vikram.spec import (
-    SHARED_DIR_NAME,
-    AgentSpec,
-    AgentSpecDraft,
-    load_spec,
-)
+from vikram.spec import SHARED_DIR_NAME, AgentSpec, AgentSpecDraft, load_spec
 from vikram.spec_io import (
     SpecWriteError,
     read_agent_toml,
