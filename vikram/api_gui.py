@@ -591,6 +591,71 @@ async def post_cancel(session_id: str) -> None:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+# --- MCP test ----------------------------------------------------------
+
+
+@router.post("/mcp/test")
+async def post_mcp_test(spec: MCPServerSpec) -> dict[str, Any]:
+    """Start the server and list its tools.
+
+    Unlike /mcp/validate this actually enters the toolset, which is what
+    catches a command that exists but does not speak MCP.
+    """
+    import asyncio
+
+    try:
+        client = build_mcp_server(spec)
+    except MCPConfigError as exc:
+        return {
+            "ok": False,
+            "error": str(exc),
+            "tools": [],
+            "server": _redact_mcp(spec),
+        }
+
+    try:
+        async with asyncio.timeout(spec.timeout + 10):
+            async with client.raw:
+                tools = await client.raw.get_tools()
+                names = sorted(tools)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "tools": [],
+            "server": _redact_mcp(spec),
+        }
+    return {"ok": True, "error": None, "tools": names, "server": _redact_mcp(spec)}
+
+
+# --- playground --------------------------------------------------------
+
+
+class PlaygroundRunRequest(BaseModel):
+    agent_id: str
+    workspace: str
+    prompt: str = Field(min_length=1)
+    columns: list[dict[str, str]] = Field(min_length=2, max_length=4)
+
+
+@router.post("/playground/runs", status_code=201)
+async def post_playground_run(request: PlaygroundRunRequest) -> dict[str, Any]:
+    """Open a comparison: one agent, 2-4 models, one shared worker."""
+    models = [f"{c['provider']}/{c['model']}" for c in request.columns]
+    try:
+        session = await _registry.create(
+            agent_id=request.agent_id,
+            workspace=Path(request.workspace),
+            models=models,
+        )
+    except (SessionError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    turn_id = await session.prompt(request.prompt)
+    info = _session_info(session)
+    info["turn_id"] = turn_id
+    return info
+
+
 async def shutdown_sessions() -> None:
     """Reap every worker. Wired to the app's lifespan."""
     await _registry.close_all()

@@ -3,9 +3,10 @@ import { AgentSummary, listAgents } from "../api/client";
 
 interface Props {
   onChat: (agent: AgentSummary) => void;
+  onEdit: (agentId: string) => void;
 }
 
-export function AgentList({ onChat }: Props) {
+export function AgentList({ onChat, onEdit }: Props) {
   const [agents, setAgents] = useState<AgentSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -58,6 +59,9 @@ export function AgentList({ onChat }: Props) {
             <div className="card-actions">
               <button disabled={!!agent.error} onClick={() => onChat(agent)}>
                 Chat
+              </button>
+              <button className="secondary" onClick={() => onEdit(agent.id)}>
+                Edit
               </button>
             </div>
           </article>

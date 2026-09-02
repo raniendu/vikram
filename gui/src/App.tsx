@@ -2,15 +2,26 @@ import { useEffect, useState } from "react";
 import { AgentSummary, SidecarError, connect } from "./api/client";
 import { AgentList } from "./screens/AgentList";
 import { Chat } from "./screens/Chat";
+import { AgentEditor } from "./screens/AgentEditor";
 import { Doctor } from "./screens/Doctor";
+import { Playground } from "./screens/Playground";
+import { Settings } from "./screens/Settings";
 
-type Tab = "agents" | "doctor";
+type Tab = "agents" | "playground" | "settings" | "doctor";
+
+const TABS: [Tab, string][] = [
+  ["agents", "Agents"],
+  ["playground", "Playground"],
+  ["settings", "Settings"],
+  ["doctor", "Doctor"],
+];
 
 export function App() {
   const [ready, setReady] = useState(false);
   const [failure, setFailure] = useState<SidecarError | null>(null);
   const [tab, setTab] = useState<Tab>("agents");
   const [chatting, setChatting] = useState<AgentSummary | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
 
   useEffect(() => {
     connect()
@@ -52,23 +63,33 @@ export function App() {
     );
   }
 
+  if (editing) {
+    return (
+      <main className="app">
+        <AgentEditor agentId={editing} onBack={() => setEditing(null)} />
+      </main>
+    );
+  }
+
   return (
     <main className="app">
       <nav className="tabs">
-        <button
-          className={tab === "agents" ? "active" : ""}
-          onClick={() => setTab("agents")}
-        >
-          Agents
-        </button>
-        <button
-          className={tab === "doctor" ? "active" : ""}
-          onClick={() => setTab("doctor")}
-        >
-          Doctor
-        </button>
+        {TABS.map(([key, label]) => (
+          <button
+            key={key}
+            className={tab === key ? "active" : ""}
+            onClick={() => setTab(key)}
+          >
+            {label}
+          </button>
+        ))}
       </nav>
-      {tab === "agents" ? <AgentList onChat={setChatting} /> : <Doctor />}
+      {tab === "agents" && (
+        <AgentList onChat={setChatting} onEdit={setEditing} />
+      )}
+      {tab === "playground" && <Playground />}
+      {tab === "settings" && <Settings />}
+      {tab === "doctor" && <Doctor />}
     </main>
   );
 }

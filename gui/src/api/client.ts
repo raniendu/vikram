@@ -139,3 +139,128 @@ export const answerApproval = (
 
 export const cancelTurn = (sessionId: string) =>
   api.post<void>(`/v1/sessions/${sessionId}/cancel`);
+
+// --- editor, playground, settings --------------------------------------
+
+export interface ToolInfo {
+  name: string;
+  description: string;
+  requires_approval: boolean;
+  sequential: boolean;
+}
+
+export interface ProviderInfo {
+  id: string;
+  display_name: string;
+  needs_api_key: boolean;
+  api_key_env: string | null;
+  prompt_base_url: boolean;
+  base_url_hint: string | null;
+  default_base_url: string | null;
+  suggested_model: string | null;
+  configured_model: string | null;
+  has_credential: boolean;
+  base_url: string | null;
+}
+
+export interface ValidationIssue {
+  field: string | null;
+  severity: "error" | "warning";
+  message: string;
+  fix: string | null;
+}
+
+export interface ValidationReport {
+  ok: boolean;
+  issues: ValidationIssue[];
+  system_prompt: string | null;
+  tool_names: string[];
+  approval_tool_names: string[];
+  model_config: Record<string, unknown> | null;
+}
+
+export interface AgentDetail {
+  summary: AgentSummary;
+  draft: Record<string, any>;
+  system_prompt: string;
+  source_toml: string;
+  path: string;
+}
+
+export interface ConfigView {
+  path: string;
+  default_provider: string | null;
+  top_level_model: string | null;
+  providers: Record<
+    string,
+    { model: string | null; base_url: string | null; has_api_key: boolean }
+  >;
+  agents: Record<string, { provider: string; model: string }>;
+}
+
+export interface ColumnMetrics {
+  column_id: string;
+  provider: string;
+  model: string;
+  ttft_ms: number | null;
+  total_ms: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  tool_calls: number;
+  output: string;
+  error: string | null;
+}
+
+export const getAgent = (id: string) => api.get<AgentDetail>(`/v1/agents/${id}`);
+
+export const saveAgent = (
+  id: string,
+  draft: Record<string, any>,
+  systemPrompt: string,
+) =>
+  api.put<AgentDetail>(`/v1/agents/${id}`, {
+    draft,
+    system_prompt: systemPrompt,
+  });
+
+export const validateDraft = (draft: Record<string, any>, agentId?: string) =>
+  api.post<ValidationReport>("/v1/agents/validate", {
+    draft,
+    agent_id: agentId ?? null,
+  });
+
+export const listTools = () =>
+  api.get<{ tools: ToolInfo[] }>("/v1/tools").then((r) => r.tools);
+
+export const listProviders = () =>
+  api
+    .get<{ providers: ProviderInfo[] }>("/v1/providers")
+    .then((r) => r.providers);
+
+export const testMcp = (server: Record<string, unknown>) =>
+  api.post<{ ok: boolean; error: string | null; tools: string[] }>(
+    "/v1/mcp/test",
+    server,
+  );
+
+export const getConfig = () => api.get<ConfigView>("/v1/config");
+
+export const saveProvider = (id: string, values: Record<string, string>) =>
+  api.put<ConfigView>(`/v1/config/providers/${id}`, values);
+
+export const setDefaultProvider = (provider: string) =>
+  api.put<ConfigView>("/v1/config/default-provider", { provider });
+
+export const startComparison = (
+  agentId: string,
+  workspace: string,
+  prompt: string,
+  columns: { provider: string; model: string }[],
+) =>
+  api.post<SessionInfo & { turn_id: string }>("/v1/playground/runs", {
+    agent_id: agentId,
+    workspace,
+    prompt,
+    columns,
+  });

@@ -30,6 +30,10 @@ EventType = Literal[
     "turn.finished",
     "turn.failed",
     "turn.cancelled",
+    # Playground fan-out: one per column, alongside the shared turn.* events.
+    "column.finished",
+    "column.failed",
+    "column.cancelled",
     "session.ready",
     "session.closed",
     "heartbeat",

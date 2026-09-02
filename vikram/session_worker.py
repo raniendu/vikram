@@ -291,6 +291,78 @@ class SessionWorker:
                 return
 
 
+class PlaygroundWorker(SessionWorker):
+    """Runs one prompt against several models inside a single process.
+
+    Safe because the agent and the workspace are constant across columns, so
+    the process-global command policy and cwd are identical for all of them --
+    see vikram/playground.py.
+    """
+
+    def __init__(self, *, columns: list[Any], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.columns = columns
+        self.agents: list[Any] = []
+
+    async def start(self) -> None:
+        from vikram.playground import build_column_agents
+        from vikram.settings import VikramSettings
+        from vikram.spec import ensure_surface_allowed
+        from vikram.specstore import load_agent
+
+        os.chdir(self.workspace)
+        settings = VikramSettings()
+        spec = load_agent(self.agent_id, settings)
+        ensure_surface_allowed(spec, "gui")
+        self.agents = build_column_agents(spec, settings, self.columns)
+        # The first agent stands in for shared facts (tools, prompt); models
+        # differ per column and are reported alongside each column.
+        self.agent = self.agents[0]
+
+    async def ready_event(self) -> Event:
+        return self._event(
+            "session.ready",
+            {
+                "agent_id": self.agent_id,
+                "name": self.agent.name,
+                "workspace": os.getcwd(),
+                "columns": [
+                    {"column_id": c.id, "provider": c.provider, "model": c.model}
+                    for c in self.columns
+                ],
+                "tool_names": list(self.agent.tool_names),
+                "approval_tool_names": list(self.agent.approval_tool_names),
+                "approvals_disabled": bool(self.agent.approval_tool_names),
+            },
+        )
+
+    async def run_turn(self, turn_id: str, prompt: str) -> None:
+        from vikram.playground import run_comparison
+
+        async def emit(type_: str, payload: dict[str, Any], column_id: str) -> None:
+            await self.emit(
+                self._event(type_, payload, turn_id=turn_id, column_id=column_id)
+            )
+
+        await self.emit(
+            self._event("turn.started", {"prompt_length": len(prompt)}, turn_id=turn_id)
+        )
+        try:
+            metrics = await run_comparison(self.agents, self.columns, prompt, emit=emit)
+        except asyncio.CancelledError:
+            await self.emit(self._event("turn.cancelled", {}, turn_id=turn_id))
+            raise
+        from dataclasses import asdict as _asdict
+
+        await self.emit(
+            self._event(
+                "turn.finished",
+                {"columns": [_asdict(m) for m in metrics]},
+                turn_id=turn_id,
+            )
+        )
+
+
 def _ms(started: float) -> float:
     return round((time.perf_counter() - started) * 1000, 2)
 
@@ -330,6 +402,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--session-id", required=True)
     parser.add_argument("--agent", required=True)
     parser.add_argument("--workspace", required=True)
+    parser.add_argument(
+        "--models",
+        default=None,
+        help="Comma-separated provider/model pairs; enables playground mode.",
+    )
     args = parser.parse_args(argv)
 
     # stdout is the protocol.
@@ -345,9 +422,39 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    worker = SessionWorker(
-        session_id=args.session_id, agent_id=args.agent, workspace=workspace
-    )
+    if args.models:
+        from vikram.playground import ColumnSpec, PlaygroundError, validate_columns
+
+        columns = []
+        for entry in args.models.split(","):
+            provider, _, model = entry.strip().partition("/")
+            if not provider or not model:
+                print(
+                    json.dumps(
+                        {
+                            "type": "session.failed",
+                            "error": f"Malformed column {entry!r}; expected provider/model.",
+                        }
+                    ),
+                    flush=True,
+                )
+                return 1
+            columns.append(ColumnSpec(provider=provider, model=model))
+        try:
+            validate_columns(columns)
+        except PlaygroundError as exc:
+            print(json.dumps({"type": "session.failed", "error": str(exc)}), flush=True)
+            return 1
+        worker: SessionWorker = PlaygroundWorker(
+            session_id=args.session_id,
+            agent_id=args.agent,
+            workspace=workspace,
+            columns=columns,
+        )
+    else:
+        worker = SessionWorker(
+            session_id=args.session_id, agent_id=args.agent, workspace=workspace
+        )
     try:
         asyncio.run(worker.serve())
     except KeyboardInterrupt:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from vikram.events import Event, map_stream_event
 
 
@@ -95,3 +97,20 @@ def test_event_is_json_serialisable():
     event = _map({"data": "hi"})
 
     assert event.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "event_type", ["column.finished", "column.failed", "column.cancelled"]
+)
+def test_playground_column_events_are_valid_types(event_type):
+    """The Literal union gates construction: a missing name fails at runtime."""
+    event = Event(
+        type=event_type,
+        seq=1,
+        session_id="s1",
+        column_id="ollama/m",
+        payload={"model": "m"},
+    )
+
+    assert event.type == event_type
+    assert event.column_id == "ollama/m"
