@@ -85,7 +85,6 @@ if [ -z "$source_dir" ]; then
 
     warn "Installed from github archive (no .git directory present in $source_dir)."
   fi
-fi
 else
   bold "Using existing checkout at $source_dir"
 fi
@@ -147,7 +146,47 @@ else
   bin_dir="$HOME/.local/bin"
 fi
 
-# 5. Configure the local model ----------------------------------------------
+# 5. Optionally build the desktop app ---------------------------------------
+#
+# The Tauri bundle is deliberately not in the wheel (tests/test_packaging.py
+# pins force-include to spec/ alone), so it can only come from a build here.
+# It needs Node and Rust, which a CLI-only install has no reason to carry --
+# hence opt-in rather than assumed.
+
+build_gui="${VIKRAM_INSTALL_GUI:-}"
+
+if [ -z "$build_gui" ]; then
+  if ! command -v npm >/dev/null 2>&1 || ! command -v cargo >/dev/null 2>&1; then
+    build_gui=no
+  elif [ -t 0 ]; then
+    bold "Desktop app"
+    info "Vikram Studio is a GUI for creating agents and comparing models."
+    info "Building it takes a few minutes (Rust compile)."
+    printf 'Build the desktop app now? [y/N] '
+    read -r gui_answer
+    case "${gui_answer:-n}" in y|Y|yes|YES) build_gui=yes ;; *) build_gui=no ;; esac
+  else
+    build_gui=no
+  fi
+fi
+
+case "$build_gui" in
+  y|Y|yes|YES|1|true)
+    bold "Building Vikram Studio"
+    if "$bin_dir/vikram" gui --build; then
+      gui_built=yes
+    else
+      gui_built=no
+      warn "Desktop app build failed. The CLI is installed and working."
+      warn "Retry later with: $bin_dir/vikram gui --build"
+    fi
+    ;;
+  *)
+    gui_built=no
+    ;;
+esac
+
+# 6. Configure the local model ----------------------------------------------
 
 config_file="$meta_dir/config.toml"
 bold "Model configuration"
@@ -181,10 +220,15 @@ else
   warn "No interactive stdin; run before first chat: $bin_dir/vikram configure"
 fi
 
-# 6. Post-install summary ---------------------------------------------------
+# 7. Post-install summary ---------------------------------------------------
 
 bold "Installed."
 info "Binaries:    $bin_dir/vikram, $bin_dir/vikram-api"
+if [ "$gui_built" = yes ]; then
+  info "Desktop app: $HOME/Applications/Vikram Studio.app  (open with: vikram gui)"
+else
+  info "Desktop app: not built  (build it with: $bin_dir/vikram gui --build)"
+fi
 info "Spec root:   $spec_root"
 info "Source tree: $source_dir"
 info "Metadata:    $meta_file"
@@ -220,4 +264,5 @@ info "vikram --once --prompt 'say pong'"
 
 bold "Updating later:"
 info "vikram update           # fast-forward + reinstall from $source_dir"
+info "                        # rebuilds the desktop app if one is installed"
 info "vikram update --check   # show what would change"

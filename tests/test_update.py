@@ -418,3 +418,52 @@ def test_run_full_update_propagates_uv_failure(
     rc = update_module.run(["--source", str(source)])
     assert rc == 7
     assert "uv tool install failed" in capsys.readouterr().err
+
+
+# --- desktop app refresh ------------------------------------------------
+#
+# find_bundle prefers ~/Applications over the checkout build, so an update
+# that leaves the old bundle alone means the stale app keeps launching.
+
+
+def test_update_rebuilds_an_installed_desktop_app(monkeypatch):
+    from vikram import gui
+
+    monkeypatch.setattr(gui, "find_bundle", lambda: Path("/Applications/x.app"))
+    monkeypatch.setattr(gui, "missing_build_tools", lambda: [])
+    built: list = []
+    monkeypatch.setattr(gui, "build_bundle", lambda: built.append(True) or 0)
+
+    update_module._refresh_desktop_app(json_mode=False, skip=False)
+
+    assert built == [True]
+
+
+def test_update_leaves_a_cli_only_install_alone(monkeypatch):
+    """No bundle installed means no surprise multi-minute Rust build."""
+    from vikram import gui
+
+    monkeypatch.setattr(gui, "find_bundle", lambda: None)
+    monkeypatch.setattr(gui, "build_bundle", lambda: pytest.fail("should not build"))
+
+    update_module._refresh_desktop_app(json_mode=False, skip=False)
+
+
+def test_update_warns_when_the_toolchain_went_away(monkeypatch, capsys):
+    from vikram import gui
+
+    monkeypatch.setattr(gui, "find_bundle", lambda: Path("/Applications/x.app"))
+    monkeypatch.setattr(gui, "missing_build_tools", lambda: ["cargo"])
+    monkeypatch.setattr(gui, "build_bundle", lambda: pytest.fail("should not build"))
+
+    update_module._refresh_desktop_app(json_mode=False, skip=False)
+
+    assert "older than the CLI" in capsys.readouterr().err
+
+
+def test_no_gui_skips_the_rebuild(monkeypatch):
+    from vikram import gui
+
+    monkeypatch.setattr(gui, "find_bundle", lambda: pytest.fail("should not even look"))
+
+    update_module._refresh_desktop_app(json_mode=False, skip=True)
