@@ -14,10 +14,9 @@ import { StreamEvent, streamSession } from "../api/events";
 import { Dot, Eyebrow } from "../components/primitives";
 
 interface Props {
-  /** Set when opening a fresh session from the agent list. */
+  /** Set when starting a fresh session from the agent list; null on the
+      Sessions tab, where the rail is the whole navigation. */
   agent: AgentSummary | null;
-  /** Set when resuming one picked from the sessions list. */
-  resumeSessionId: string | null;
   onBack: () => void;
 }
 
@@ -34,9 +33,9 @@ type Entry =
   | { kind: "tool"; name: string; status?: string; detail?: string }
   | { kind: "note"; text: string };
 
-export function Chat({ agent, resumeSessionId, onBack }: Props) {
+export function Chat({ agent, onBack }: Props) {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
-  const [current, setCurrent] = useState<string | null>(resumeSessionId);
+  const [current, setCurrent] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState<string | null>(null);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [approval, setApproval] = useState<Approval | null>(null);
@@ -45,22 +44,33 @@ export function Chat({ agent, resumeSessionId, onBack }: Props) {
   const [draft, setDraft] = useState("");
   const scroller = useRef<HTMLDivElement>(null);
   const stream = useRef<{ close: () => void } | null>(null);
+  const answered = useRef<Set<string>>(new Set());
 
   async function refreshSessions() {
     try {
-      setSessions((await listSessions()).sessions);
+      const live = (await listSessions()).sessions;
+      setSessions(live);
+      return live;
     } catch {
       /* the rail simply stays as it was */
+      return null;
     }
   }
 
   useEffect(() => {
-    refreshSessions();
+    // Arriving on the Sessions tab with no session chosen: open whichever one
+    // is asking for something, else the most recently active.
+    refreshSessions().then((live) => {
+      if (agent || current || !live) return;
+      const pick = live.find((s) => s.state === "needs") ?? live[0];
+      if (pick) setCurrent(pick.session_id);
+    });
     const id = setInterval(refreshSessions, 3000);
     return () => {
       clearInterval(id);
       stream.current?.close();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -77,6 +87,17 @@ export function Chat({ agent, resumeSessionId, onBack }: Props) {
     stream.current = streamSession(current, handleEvent, (e) => setError(String(e)));
     return () => stream.current?.close();
   }, [current]);
+
+  // An approval raised before this view attached is not in the replay backlog,
+  // so the stream alone would leave it invisible and unanswerable. The session
+  // summary carries it, so adopt it on arrival — but never re-adopt one this
+  // view has already answered, since the summary poll lags the answer by up to
+  // its interval and would put the card straight back.
+  useEffect(() => {
+    if (!current || approval) return;
+    const pending = sessions.find((s) => s.session_id === current)?.pending_approval;
+    if (pending && !answered.current.has(pending.approval_id)) setApproval(pending);
+  }, [current, sessions, approval]);
 
   function handleEvent(event: StreamEvent) {
     const p = event.payload;
@@ -106,6 +127,7 @@ export function Chat({ agent, resumeSessionId, onBack }: Props) {
         if (!p.auto) setApproval(p as Approval);
         return;
       case "approval.resolved":
+        if (p.approval_id) answered.current.add(p.approval_id);
         setApproval(null);
         return setEntries((prev) => [
           ...prev,
@@ -172,11 +194,35 @@ export function Chat({ agent, resumeSessionId, onBack }: Props) {
 
   async function decide(decision: "allow" | "deny") {
     if (!current || !approval) return;
-    await answerApproval(current, approval.approval_id, decision, approval.tool_name);
+    answered.current.add(approval.approval_id);
     setApproval(null);
+    await answerApproval(current, approval.approval_id, decision, approval.tool_name);
+    refreshSessions();
   }
 
-  // Choosing a folder, before any session exists.
+  if (!current && !agent) {
+    return (
+      <div className="screen">
+        <h1 className="page">Sessions</h1>
+        <p className="lede">
+          Every session is one agent in one folder, in its own process. The same
+          agent can run in several folders at once — the folder is what tells them
+          apart.
+        </p>
+        <div className="rule" />
+        <p className="muted" style={{ paddingTop: 26 }}>
+          Nothing running. Pick an agent and choose a folder to start one.
+        </p>
+        <div style={{ marginTop: 18 }}>
+          <button className="btn" onClick={onBack}>
+            Go to agents
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Choosing a folder, before this session exists.
   if (!current) {
     return (
       <div className="screen">
@@ -242,10 +288,16 @@ export function Chat({ agent, resumeSessionId, onBack }: Props) {
                   title={s.workspace}
                 >
                   <Dot live={s.state !== "idle"} />
-                  <span className="name">{basename(s.workspace)}</span>
-                  <span className="grow" />
+                  <span className="rail-item-text">
+                    <span className="name">{basename(s.workspace)}</span>
+                    <span className="rail-item-sub">
+                      {s.state === "needs"
+                        ? "Waiting on you"
+                        : s.activity || formatAgo(s.elapsed_ms)}
+                    </span>
+                  </span>
                   {s.state === "needs" && (
-                    <span className="eyebrow accent" style={{ fontSize: 10 }}>!</span>
+                    <span className="eyebrow accent" style={{ fontSize: 11 }}>!</span>
                   )}
                 </button>
               ))}
@@ -293,6 +345,12 @@ export function Chat({ agent, resumeSessionId, onBack }: Props) {
                 {active && active.turns > 0
                   ? "Rejoined this session. Earlier turns are not replayed — send a prompt to carry on."
                   : "Send a prompt to start."}
+              </p>
+            )}
+
+            {entries.length === 0 && approval && (
+              <p className="muted">
+                Rejoined this session. It is waiting on the call below.
               </p>
             )}
 
@@ -425,6 +483,14 @@ function groupByAgent(sessions: SessionInfo[]): [string, SessionInfo[]][] {
     map.set(s.agent_name, list);
   }
   return [...map.entries()];
+}
+
+export function formatAgo(ms: number) {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  return `${Math.floor(m / 60)}h ${m % 60}m ago`;
 }
 
 function basename(path: string) {

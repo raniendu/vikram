@@ -6,7 +6,6 @@ import { AgentList } from "./screens/AgentList";
 import { Chat } from "./screens/Chat";
 import { Doctor } from "./screens/Doctor";
 import { Playground } from "./screens/Playground";
-import { Sessions } from "./screens/Sessions";
 import { Settings } from "./screens/Settings";
 
 type Tab = "agents" | "sessions" | "playground" | "settings" | "doctor";
@@ -26,7 +25,6 @@ export function App() {
   const [failure, setFailure] = useState<SidecarError | null>(null);
   const [tab, setTab] = useState<Tab>("agents");
   const [chatting, setChatting] = useState<AgentSummary | null>(null);
-  const [resuming, setResuming] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [waiting, setWaiting] = useState(0);
   const [dark, setDark] = useState(false);
@@ -103,11 +101,10 @@ export function App() {
         {TABS.map(([key, label]) => (
           <button
             key={key}
-            className={tab === key && !chatting && !editing && !resuming ? "active" : ""}
+            className={tab === key && !chatting && !editing ? "active" : ""}
             onClick={() => {
               setChatting(null);
               setEditing(null);
-              setResuming(null);
               setTab(key);
             }}
           >
@@ -122,18 +119,12 @@ export function App() {
     </header>
   );
 
-  if (chatting || resuming) {
+  // Opening a session from the agent list, with a folder still to pick.
+  if (chatting) {
     return (
       <main className="app">
         {masthead}
-        <Chat
-          agent={chatting}
-          resumeSessionId={resuming}
-          onBack={() => {
-            setChatting(null);
-            setResuming(null);
-          }}
-        />
+        <Chat agent={chatting} onBack={() => setChatting(null)} />
       </main>
     );
   }
@@ -151,7 +142,7 @@ export function App() {
     <main className="app">
       {masthead}
       {tab === "agents" && <AgentList onChat={setChatting} onEdit={setEditing} />}
-      {tab === "sessions" && <Sessions onOpen={setResuming} />}
+      {tab === "sessions" && <Chat agent={null} onBack={() => setTab("agents")} />}
       {tab === "playground" && <Playground />}
       {tab === "settings" && <Settings />}
       {tab === "doctor" && <Doctor />}
