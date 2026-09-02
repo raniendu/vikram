@@ -424,6 +424,138 @@ def _prompt_provider_section(
     return section
 
 
+def installed_models(provider_id: str, base_url: str | None) -> set[str] | None:
+    """Models the provider actually has, or None when it cannot be asked.
+
+    Only Ollama is asked: it is local, answers instantly, and is the provider
+    whose models a user routinely deletes out from under a pinned spec.
+    """
+    if provider_id not in {"ollama", "ollama-cloud"} or not base_url:
+        return None
+    root = base_url.rstrip("/")
+    if root.endswith("/v1"):
+        root = root[: -len("/v1")]
+    try:
+        import httpx
+
+        response = httpx.get(f"{root}/api/tags", timeout=2.0)
+        response.raise_for_status()
+        return {m["name"] for m in response.json().get("models", [])}
+    except Exception:
+        return None
+
+
+def _agent_model_rows(path: Path | None) -> list[dict[str, Any]]:
+    """Each agent with the model it would actually use, and whether it exists.
+
+    Providers and agents are configured separately, and a spec pin beats the
+    provider default -- so an install can finish happily and still leave an
+    agent pointing at a model that is gone.
+    """
+    try:
+        from vikram.settings import VikramSettings, resolve_agent_model_selection
+        from vikram.specstore import list_agents
+
+        settings = VikramSettings()
+        rows = []
+        catalogue: dict[str, set[str] | None] = {}
+        for summary in list_agents(settings):
+            if summary.error:
+                continue
+            provider, model = resolve_agent_model_selection(
+                settings,
+                agent_id=summary.id,
+                spec_provider=summary.spec_provider,
+                spec_model=summary.spec_model,
+            )
+            if provider is None or model is None:
+                rows.append(
+                    {"id": summary.id, "provider": provider, "model": model, "ok": None}
+                )
+                continue
+            if provider not in catalogue:
+                entry = PROVIDERS.get(provider)
+                base_url = (
+                    getattr(settings, entry.base_url_field, None)
+                    if entry and entry.base_url_field
+                    else None
+                ) or (entry.default_base_url if entry else None)
+                catalogue[provider] = installed_models(provider, base_url)
+            available = catalogue[provider]
+            rows.append(
+                {
+                    "id": summary.id,
+                    "provider": provider,
+                    "model": model,
+                    "ok": None if available is None else model in available,
+                }
+            )
+        return rows
+    except Exception:
+        return []
+
+
+def _configure_agents(
+    *,
+    input_fn: Callable[[str], str],
+    output_fn: Callable[[str], None],
+    path: Path | None,
+) -> bool:
+    """Show each agent's resolved model and offer to override any of them."""
+    rows = _agent_model_rows(path)
+    if not rows:
+        return False
+
+    output_fn("")
+    output_fn("Agents and the model each would use:")
+    for row in rows:
+        if row["model"] is None:
+            note = "  (no model resolves)"
+        elif row["ok"] is False:
+            note = "  (NOT INSTALLED)"
+        else:
+            note = ""
+        output_fn(f"  {row['id']:<16} {row['provider']}/{row['model']}{note}")
+
+    missing = [r for r in rows if r["ok"] is False or r["model"] is None]
+    if missing:
+        output_fn("")
+        output_fn(
+            "An agent's own pin beats the default above, so the ones marked "
+            "will fail until you change them."
+        )
+
+    wrote = False
+    while True:
+        try:
+            choice = input_fn(
+                "Agent to pin to a different model (name, blank to finish): "
+            ).strip()
+        except (EOFError, StopIteration):
+            # An input source that has run out ends the loop, exactly as EOF
+            # does — this step runs last, so a caller scripting only the
+            # provider answers must not crash here.
+            choice = ""
+        if not choice:
+            break
+        row = next((r for r in rows if r["id"] == choice), None)
+        if row is None:
+            output_fn(f"Unknown agent: {choice!r}")
+            continue
+        try:
+            model = input_fn(f"Model for {choice} [{row['model'] or ''}]: ").strip()
+        except (EOFError, StopIteration):
+            model = ""
+        if not model:
+            continue
+        provider = row["provider"] or "ollama"
+        write_agent_model(choice, provider=provider, model=model, path=path)
+        row["model"], row["ok"] = model, None
+        output_fn(f"{choice} pinned to {provider}/{model}.")
+        wrote = True
+    return wrote
+
+
 def configure_interactive(
     *,
     input_fn: Callable[[str], str] | None = None,
@@ -510,11 +642,17 @@ def configure_interactive(
                     break
                 output_fn(f"Choose one of: {', '.join(configured)}")
 
-    if not updated and default_provider == previous_default:
-        return None
+    written: Path | None = None
+    if updated or default_provider != previous_default:
+        updates: dict[str, Any] = {"providers": updated} if updated else {}
+        written = merge_write_config(
+            updates, default_provider=default_provider, path=path
+        )
 
-    updates: dict[str, Any] = {"providers": updated} if updated else {}
-    return merge_write_config(updates, default_provider=default_provider, path=path)
+    # Providers alone are not enough: a spec pin overrides them per agent.
+    if _configure_agents(input_fn=input_fn, output_fn=output_fn, path=path):
+        written = path or config_path()
+    return written
 
 
 def run_configure(argv: Sequence[str] | None = None) -> int:

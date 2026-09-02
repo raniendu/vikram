@@ -159,7 +159,7 @@ def test_coder_spec_defaults_to_qwen_mlx(monkeypatch, tmp_path):
     assert agent.runtime == "pydantic-ai"
     assert isinstance(agent.model, OllamaModel)
     assert agent.model_config["provider"] == "ollama"
-    assert agent.model_config["model"] == "qwen3.8:27b-mlx"
+    assert agent.model_config["model"] == "ornith:35b"
 
 
 def test_environment_overrides_coder_spec_model(monkeypatch, tmp_path):
@@ -534,7 +534,7 @@ def test_coder_spec_pin_beats_config_global_default(monkeypatch, tmp_path):
     agent = build_agent(spec=spec, settings=settings)
 
     assert agent.model_config["provider"] == "ollama"
-    assert agent.model_config["model"] == "qwen3.8:27b-mlx"
+    assert agent.model_config["model"] == "ornith:35b"
 
 
 def test_agent_override_beats_spec_pin(monkeypatch, tmp_path):
