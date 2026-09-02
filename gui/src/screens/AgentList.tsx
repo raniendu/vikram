@@ -37,8 +37,8 @@ export function AgentList({ onChat, onEdit }: Props) {
         <div>
           <h1 className="page">Agents</h1>
           <p className="lede">
-            Composed from tools, MCP servers and skills. Built-ins ship with Vikram
-            and stay read-only — editing one keeps your copy separate.
+            Built-ins ship with Vikram and stay read-only — editing one keeps your
+            copy separate.
           </p>
         </div>
       </div>
@@ -59,45 +59,38 @@ export function AgentList({ onChat, onEdit }: Props) {
 
       <Rule />
 
-      {/* Rows with a metadata rail, following the list anatomy on the site —
-          not bordered cards. */}
+      {/* One line per agent: name, model, what it does, what it can reach. */}
       {shown.map((agent) => (
         <div key={agent.id} className="list-row agents">
-          <div>
-            <Eyebrow>{agent.root === "user" ? "Yours" : "Built-in"}</Eyebrow>
-            <div className="mono" style={{ fontSize: 12.5, marginTop: 9 }}>
-              {agent.resolved_model ?? "—"}
-            </div>
+          <div className="row" style={{ gap: 7 }}>
+            <button className="row-title" onClick={() => onChat(agent)}>
+              {agent.name}
+            </button>
+            <Eyebrow style={{ fontSize: 9 }}>
+              {agent.root === "user" ? "Yours" : "Built-in"}
+            </Eyebrow>
           </div>
 
-          <div>
-            <h2 className="row-title">{agent.name}</h2>
-            {agent.error ? (
-              <p className="row-body error">Spec will not load: {agent.error}</p>
-            ) : (
-              <p className="row-body">{agent.description || "No description."}</p>
-            )}
-            <div className="row-actions">
-              <button className="link" disabled={!!agent.error} onClick={() => onChat(agent)}>
-                Open session →
-              </button>
-              <button className="btn quiet" onClick={() => onEdit(agent.id)}>
-                Edit
-              </button>
-            </div>
-          </div>
+          <span className="mono truncate" style={{ fontSize: 11.5, color: "var(--muted)" }}>
+            {agent.resolved_model ?? "—"}
+          </span>
+
+          {agent.error ? (
+            <p className="row-body error">Spec will not load: {agent.error}</p>
+          ) : (
+            <p className="row-body">{agent.description || "No description."}</p>
+          )}
 
           <div className="row-rail">
-            {agent.cli_only && <Eyebrow>Local only</Eyebrow>}
-            <Eyebrow>
+            {agent.cli_only && (
+              <Eyebrow className="accent" style={{ fontSize: 9 }}>Local only</Eyebrow>
+            )}
+            <Eyebrow style={{ fontSize: 9 }}>
               {agent.tools.length === 1 ? "1 tool" : `${agent.tools.length} tools`}
             </Eyebrow>
-            {agent.mcp_server_count > 0 && (
-              <Eyebrow>
-                {agent.mcp_server_count === 1 ? "1 MCP" : `${agent.mcp_server_count} MCP`}
-              </Eyebrow>
-            )}
-            {agent.shadows && <Eyebrow>Shadows built-in</Eyebrow>}
+            <button className="eyebrow" style={{ fontSize: 9 }} onClick={() => onEdit(agent.id)}>
+              Edit
+            </button>
           </div>
         </div>
       ))}

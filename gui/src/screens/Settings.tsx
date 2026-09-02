@@ -97,7 +97,7 @@ function ProviderRow({
     apiKey !== "";
 
   return (
-    <div className="list-row" style={{ gridTemplateColumns: "232px minmax(0, 1fr) 150px" }}>
+    <div className="list-row providers">
       <div>
         <div style={{ fontSize: 16.8, fontWeight: 500 }}>{provider.display_name}</div>
         {provider.api_key_env && (
@@ -105,7 +105,7 @@ function ProviderRow({
         )}
       </div>
 
-      <div className="fields" style={{ gap: 12 }}>
+      <div className="row" style={{ gap: 8 }}>
         <input
           value={model}
           placeholder={provider.suggested_model ?? "model"}

@@ -13,7 +13,6 @@ import { Eyebrow } from "../components/primitives";
 
 interface Props {
   agentId: string;
-  onBack: () => void;
 }
 
 type Section = "identity" | "prompt" | "tools" | "model" | "mcp" | "raw";
@@ -27,7 +26,7 @@ const SECTIONS: [Section, string][] = [
   ["raw", "Raw TOML"],
 ];
 
-export function AgentEditor({ agentId, onBack }: Props) {
+export function AgentEditor({ agentId }: Props) {
   const [detail, setDetail] = useState<AgentDetail | null>(null);
   const [draft, setDraft] = useState<Record<string, any> | null>(null);
   const [prompt, setPrompt] = useState("");
@@ -85,9 +84,6 @@ export function AgentEditor({ agentId, onBack }: Props) {
   return (
     <div className="editor">
       <header className="session-head">
-        <button className="btn quiet" onClick={onBack}>
-          ← Agents
-        </button>
         <div>
           <strong>{detail.summary.name}</strong>{" "}
           <span className="muted">{agentId}</span>

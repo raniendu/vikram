@@ -1,32 +1,34 @@
-import { useEffect, useState } from "react";
-import { AgentSummary, SidecarError, connect, listSessions } from "./api/client";
-import { ThemeToggle } from "./components/primitives";
+import { useCallback, useEffect, useState } from "react";
+import {
+  AgentSummary,
+  SessionInfo,
+  SidecarError,
+  connect,
+  listSessions,
+} from "./api/client";
+import { Rail, View } from "./components/Rail";
 import { AgentEditor } from "./screens/AgentEditor";
 import { AgentList } from "./screens/AgentList";
 import { Chat } from "./screens/Chat";
 import { Doctor } from "./screens/Doctor";
+import { NewSession } from "./screens/NewSession";
 import { Playground } from "./screens/Playground";
 import { Settings } from "./screens/Settings";
 
-type Tab = "agents" | "sessions" | "playground" | "settings" | "doctor";
-
-const TABS: [Tab, string][] = [
-  ["agents", "Agents"],
-  ["sessions", "Sessions"],
-  ["playground", "Playground"],
-  ["settings", "Settings"],
-  ["doctor", "Doctor"],
-];
-
 const THEME_KEY = "vikram.theme";
+
+/** What fills the pane beside the rail. */
+type Pane =
+  | { kind: "view"; view: View }
+  | { kind: "session"; sessionId: string }
+  | { kind: "new"; agent: AgentSummary | null }
+  | { kind: "edit"; agentId: string };
 
 export function App() {
   const [ready, setReady] = useState(false);
   const [failure, setFailure] = useState<SidecarError | null>(null);
-  const [tab, setTab] = useState<Tab>("agents");
-  const [chatting, setChatting] = useState<AgentSummary | null>(null);
-  const [editing, setEditing] = useState<string | null>(null);
-  const [waiting, setWaiting] = useState(0);
+  const [pane, setPane] = useState<Pane>({ kind: "view", view: "agents" });
+  const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [dark, setDark] = useState(false);
 
   useEffect(() => {
@@ -53,23 +55,24 @@ export function App() {
       .catch((e) => setFailure(e as SidecarError));
   }, []);
 
-  // The masthead carries the count so a session parked on an approval is
-  // visible from any screen — the 300s timeout runs whether you are looking
-  // at that session or not.
+  // Sessions live here rather than in Chat: the rail shows them on every
+  // screen, so no single screen can own them.
+  const refreshSessions = useCallback(async () => {
+    try {
+      const live = (await listSessions()).sessions;
+      setSessions(live);
+      return live;
+    } catch {
+      return null;
+    }
+  }, []);
+
   useEffect(() => {
     if (!ready) return;
-    let alive = true;
-    const poll = () =>
-      listSessions()
-        .then((p) => alive && setWaiting(p.waiting))
-        .catch(() => {});
-    poll();
-    const id = setInterval(poll, 3000);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, [ready]);
+    refreshSessions();
+    const id = setInterval(refreshSessions, 3000);
+    return () => clearInterval(id);
+  }, [ready, refreshSessions]);
 
   if (failure) {
     return (
@@ -94,58 +97,55 @@ export function App() {
     );
   }
 
-  const masthead = (
-    <header className="masthead">
-      <div className="wordmark">Vikram Studio</div>
-      <nav className="tabs">
-        {TABS.map(([key, label]) => (
-          <button
-            key={key}
-            className={tab === key && !chatting && !editing ? "active" : ""}
-            onClick={() => {
-              setChatting(null);
-              setEditing(null);
-              setTab(key);
-            }}
-          >
-            {label}
-            {key === "sessions" && waiting > 0 && (
-              <span className="tab-count">{waiting}</span>
-            )}
-          </button>
-        ))}
-      </nav>
-      <ThemeToggle dark={dark} onToggle={() => setDark(!dark)} />
-    </header>
-  );
-
-  // Opening a session from the agent list, with a folder still to pick.
-  if (chatting) {
-    return (
-      <main className="app">
-        {masthead}
-        <Chat agent={chatting} onBack={() => setChatting(null)} />
-      </main>
-    );
-  }
-
-  if (editing) {
-    return (
-      <main className="app">
-        {masthead}
-        <AgentEditor agentId={editing} onBack={() => setEditing(null)} />
-      </main>
-    );
-  }
-
   return (
     <main className="app">
-      {masthead}
-      {tab === "agents" && <AgentList onChat={setChatting} onEdit={setEditing} />}
-      {tab === "sessions" && <Chat agent={null} onBack={() => setTab("agents")} />}
-      {tab === "playground" && <Playground />}
-      {tab === "settings" && <Settings />}
-      {tab === "doctor" && <Doctor />}
+      <Rail
+        view={pane.kind === "view" ? pane.view : null}
+        sessions={sessions}
+        currentSession={pane.kind === "session" ? pane.sessionId : null}
+        dark={dark}
+        onView={(view) => setPane({ kind: "view", view })}
+        onSession={(sessionId) => setPane({ kind: "session", sessionId })}
+        onNewSession={() => setPane({ kind: "new", agent: null })}
+        onToggleTheme={() => setDark(!dark)}
+      />
+
+      {pane.kind === "view" && pane.view === "agents" && (
+        <AgentList
+          onChat={(agent) => setPane({ kind: "new", agent })}
+          onEdit={(agentId) => setPane({ kind: "edit", agentId })}
+        />
+      )}
+      {pane.kind === "view" && pane.view === "playground" && <Playground />}
+      {pane.kind === "view" && pane.view === "settings" && <Settings />}
+      {pane.kind === "view" && pane.view === "doctor" && <Doctor />}
+
+      {pane.kind === "session" && (
+        <Chat
+          key={pane.sessionId}
+          sessionId={pane.sessionId}
+          session={sessions.find((s) => s.session_id === pane.sessionId) ?? null}
+          onEnded={() => {
+            refreshSessions();
+            setPane({ kind: "view", view: "agents" });
+          }}
+        />
+      )}
+
+      {pane.kind === "new" && (
+        <NewSession
+          agent={pane.agent}
+          onCancel={() => setPane({ kind: "view", view: "agents" })}
+          onStarted={async (sessionId) => {
+            await refreshSessions();
+            setPane({ kind: "session", sessionId });
+          }}
+        />
+      )}
+
+      {pane.kind === "edit" && (
+        <AgentEditor agentId={pane.agentId} />
+      )}
     </main>
   );
 }
