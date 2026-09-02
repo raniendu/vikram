@@ -118,7 +118,7 @@ def test_load_config_flattens_agent_overrides(tmp_path):
                 "",
                 "[agents.coder]",
                 'provider = "ollama"',
-                'model = "qwen3.8:27b-mlx"',
+                'model = "ornith:35b"',
                 "",
             ]
         ),
@@ -128,7 +128,7 @@ def test_load_config_flattens_agent_overrides(tmp_path):
     flat = load_config(config_file)
 
     assert flat["agent_overrides"] == {
-        "coder": {"provider": "ollama", "model": "qwen3.8:27b-mlx"}
+        "coder": {"provider": "ollama", "model": "ornith:35b"}
     }
 
 
@@ -142,16 +142,14 @@ def test_write_agent_model_merges_into_existing_config(tmp_path):
         path=config_file,
     )
 
-    write_agent_model(
-        "coder", provider="ollama", model="qwen3.8:27b-mlx", path=config_file
-    )
+    write_agent_model("coder", provider="ollama", model="ornith:35b", path=config_file)
 
     data = tomllib.loads(config_file.read_text(encoding="utf-8"))
     assert data["default_provider"] == "ollama"
     assert data["providers"]["ollama"] == {"model": "gemma4:26b-a4b-it-qat"}
     assert data["agents"]["coder"] == {
         "provider": "ollama",
-        "model": "qwen3.8:27b-mlx",
+        "model": "ornith:35b",
     }
 
 
@@ -294,3 +292,153 @@ def test_emitted_file_round_trips_and_keeps_header(tmp_path):
             "ollama-cloud": {"model": "gpt-oss:120b", "api_key": "cloud-key"}
         },
     }
+
+
+def test_delete_agent_model_removes_only_that_agent(tmp_path):
+    from vikram.config import delete_agent_model, load_config_raw, write_agent_model
+
+    config_file = tmp_path / "config.toml"
+    write_agent_model("coder", provider="ollama", model="a", path=config_file)
+    write_agent_model("vikram", provider="ollama", model="b", path=config_file)
+
+    delete_agent_model("coder", path=config_file)
+
+    data = load_config_raw(config_file)
+    assert "coder" not in data["agents"]
+    assert data["agents"]["vikram"] == {"provider": "ollama", "model": "b"}
+
+
+def test_delete_agent_model_drops_the_empty_table(tmp_path):
+    from vikram.config import delete_agent_model, load_config_raw, write_agent_model
+
+    config_file = tmp_path / "config.toml"
+    write_agent_model("coder", provider="ollama", model="a", path=config_file)
+
+    delete_agent_model("coder", path=config_file)
+
+    assert "agents" not in load_config_raw(config_file)
+
+
+def test_delete_agent_model_is_a_no_op_when_absent(tmp_path):
+    from vikram.config import delete_agent_model
+
+    config_file = tmp_path / "config.toml"
+
+    delete_agent_model("coder", path=config_file)
+
+    assert not config_file.exists()
+
+
+def test_delete_agent_model_restores_the_spec_pin(tmp_path, monkeypatch):
+    """Clearing an override is what makes an agent follow its spec again."""
+    from vikram.config import delete_agent_model, load_config, write_agent_model
+
+    config_file = tmp_path / "config.toml"
+    write_agent_model("coder", provider="ollama", model="override", path=config_file)
+    assert load_config(config_file)["agent_overrides"]["coder"]["model"] == "override"
+
+    delete_agent_model("coder", path=config_file)
+
+    assert load_config(config_file).get("agent_overrides", {}) == {}
+
+
+# --- configure covers agents, not just providers ------------------------
+#
+# A spec pin beats the provider default, so configuring providers alone can
+# leave an agent pointed at a model that is gone — which is exactly how an
+# install finishes happily and the first chat 404s.
+
+
+def test_installed_models_is_only_probed_for_ollama():
+    from vikram.config import installed_models
+
+    assert installed_models("anthropic", "https://api.anthropic.com") is None
+    assert installed_models("openai", None) is None
+    assert installed_models("ollama", None) is None
+
+
+def test_installed_models_survives_an_unreachable_provider():
+    from vikram.config import installed_models
+
+    # Nothing listening: a probe failure must not break configure.
+    assert installed_models("ollama", "http://127.0.0.1:9/v1") is None
+
+
+def test_installed_models_strips_the_v1_suffix(monkeypatch):
+    from vikram.config import installed_models
+
+    seen = {}
+
+    class _Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"models": [{"name": "a:1b"}, {"name": "b:2b"}]}
+
+    def fake_get(url, timeout=None):
+        seen["url"] = url
+        return _Response()
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    assert installed_models("ollama", "http://localhost:11434/v1") == {"a:1b", "b:2b"}
+    # /api/tags lives on the root, not under the OpenAI-compatible /v1 path.
+    assert seen["url"] == "http://localhost:11434/api/tags"
+
+
+def test_configure_lists_each_agent_with_its_resolved_model(tmp_path, monkeypatch):
+    from vikram.config import configure_interactive
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    out: list[str] = []
+    answers = iter(["", ""])
+
+    configure_interactive(
+        input_fn=lambda _p: next(answers, ""),
+        secret_input_fn=lambda _p: "",
+        output_fn=out.append,
+        path=tmp_path / "config.toml",
+    )
+
+    text = "\n".join(out)
+    assert "Agents and the model each would use:" in text
+    assert "coder" in text
+    assert "vikram" in text
+
+
+def test_configure_pins_an_agent_and_writes_it(tmp_path, monkeypatch):
+    from vikram.config import configure_interactive, load_config_raw
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    target = tmp_path / "config.toml"
+    # skip providers, then pin coder, then finish
+    answers = iter(["", "coder", "some-other:8b", ""])
+
+    configure_interactive(
+        input_fn=lambda _p: next(answers, ""),
+        secret_input_fn=lambda _p: "",
+        output_fn=lambda _m: None,
+        path=target,
+    )
+
+    assert load_config_raw(target)["agents"]["coder"]["model"] == "some-other:8b"
+
+
+def test_configure_rejects_an_unknown_agent(tmp_path, monkeypatch):
+    from vikram.config import configure_interactive
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    out: list[str] = []
+    answers = iter(["", "nope", ""])
+
+    configure_interactive(
+        input_fn=lambda _p: next(answers, ""),
+        secret_input_fn=lambda _p: "",
+        output_fn=out.append,
+        path=tmp_path / "config.toml",
+    )
+
+    assert any("Unknown agent" in line for line in out)

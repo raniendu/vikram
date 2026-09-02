@@ -153,7 +153,14 @@ subagents and can call `delegate_to_agent` with a self-contained prompt when a
 specialized agent should do the work. In the interactive CLI, that delegation is
 shown as a normal tool call before the subagent runs.
 
-The checked-in `coder` spec defaults to local Ollama with `qwen3.8:27b-mlx`,
+## Desktop app
+
+`vikram gui` opens Vikram Studio: build agents from tools, MCP servers and
+skills; run them against a workspace with native approval dialogs; and compare
+one agent across 2-4 models side by side. See [docs/desktop_app.md](docs/desktop_app.md)
+for install and build steps.
+
+The checked-in `coder` spec defaults to local Ollama with `ornith:35b`,
 which is an MLX text-only model suited to Apple silicon. The `vikram`
 orchestrator defaults to local Ollama with `gemma4:26b-a4b-it-qat`. These
 spec pins hold even when your config sets a different global default; switch

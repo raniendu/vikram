@@ -35,3 +35,14 @@ credentials.json
 
 # Local Vikram runtime state
 .vikram/
+
+# Stray local DBOS/state dirs from ad-hoc runs
+/tmp/
+
+# Desktop app build artifacts
+gui/node_modules/
+gui/dist/
+gui/src-tauri/target/
+gui/src-tauri/gen/
+gui/openapi.json
+gui/src/api/schema.gen.ts

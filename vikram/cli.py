@@ -27,6 +27,7 @@ COMMANDS = {
     "exec": "Run one task non-interactively",
     "configure": "Configure model providers (alias: setup)",
     "doctor": "Check configuration and workspace health",
+    "gui": "Open the Vikram Studio desktop app",
     "update": "Check for or install Vikram updates",
 }
 
@@ -303,6 +304,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         from vikram.doctor import run as run_doctor
 
         sys.exit(run_doctor(raw_args[1:]))
+    if raw_args and raw_args[0] == "gui":
+        from vikram.gui import run as run_gui
+
+        sys.exit(run_gui(raw_args[1:]))
     if raw_args and not raw_args[0].startswith("-"):
         parser = build_parser()
         command = raw_args[0]
@@ -354,6 +359,31 @@ def _read_exec_prompt(value: str | None, parser: argparse.ArgumentParser) -> str
     return prompt
 
 
+def _model_error_message(exc: Exception, settings: Any) -> str | None:
+    """A one-line explanation for a provider rejecting the model, or None.
+
+    A model that is merely absent from the provider is an ordinary, expected
+    failure -- often a spec pinning something that has since been deleted --
+    and a stack trace is the wrong way to say so.
+    """
+    from vikram.settings import resolve_model_selection
+
+    status = getattr(exc, "status_code", None)
+    model = getattr(exc, "model_name", None)
+    if status != 404 or not model:
+        return None
+
+    provider, _ = resolve_model_selection(settings)
+    lines = [f"Model {model!r} is not available from provider {provider!r}."]
+    if provider == "ollama":
+        lines.append("Installed models:  ollama list")
+    lines.append(
+        f"Change it with:    vikram --agent {settings.default_agent} -m <model>"
+    )
+    lines.append("Or persist it in the agent's spec, or with `vikram configure`.")
+    return "\n".join(lines)
+
+
 def _run(
     args: argparse.Namespace,
     *,
@@ -366,7 +396,7 @@ def _run(
     from vikram.logging import configure_logging
     from vikram.observability import init_observability
     from vikram.settings import VikramSettings
-    from vikram.spec import load_spec
+    from vikram.specstore import load_agent
 
     old_cwd = Path.cwd()
     try:
@@ -385,11 +415,18 @@ def _run(
         # go to stderr and stay quiet unless VIKRAM_LOG_LEVEL asks otherwise.
         configure_logging(_cli_log_level(settings), stream=sys.stderr)
         init_observability(settings)
-        spec = load_spec(settings.default_agent, settings.spec_root)
+        spec = load_agent(settings.default_agent, settings)
         agent = build_agent(spec=spec, settings=settings, approve_all=args.approve_all)
 
         if prompt is not None:
-            result = agent.run_sync(prompt)
+            try:
+                result = agent.run_sync(prompt)
+            except Exception as exc:
+                message = _model_error_message(exc, settings)
+                if message is None:
+                    raise
+                print(message, file=sys.stderr)
+                raise SystemExit(1) from None
             output = str(result.output)
             if output_last_message is not None:
                 output_last_message.expanduser().write_text(output, encoding="utf-8")
@@ -1116,11 +1153,15 @@ def _context_percent(result: Any, settings: "VikramSettings" | None) -> int | No
     if settings is None:
         return None
     context_window = settings.context_window_tokens
-    usage_fn = getattr(result, "usage", None)
-    if context_window <= 0 or not callable(usage_fn):
+    if context_window <= 0:
         return None
     try:
-        usage = usage_fn()
+        # `usage` is a property in current pydantic-ai and was a method in
+        # earlier ones. Requiring a callable made this silently return None,
+        # which switched the prompt's context indicator off entirely.
+        usage = getattr(result, "usage", None)
+        if callable(usage):
+            usage = usage()
         input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
     except Exception:
         return None

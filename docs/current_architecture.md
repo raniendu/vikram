@@ -5,6 +5,7 @@ Vikram is a standalone Python app built around spec-defined Pydantic AI agents.
 ```mermaid
 flowchart LR
     cli[CLI / ACP] --> factory[build_agent]
+    gui[Desktop app] --> worker[session worker] --> factory
     http[FastAPI] --> factory
     http --> dispatch[DBOS EventDispatcher]
     telegram[Telegram webhook] --> dispatch

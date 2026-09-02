@@ -47,7 +47,7 @@ def collect_diagnostics(
 ) -> list[Diagnostic]:
     from vikram.config import config_path
     from vikram.settings import VikramSettings
-    from vikram.spec import load_spec
+    from vikram.specstore import load_agent
 
     cwd = (cwd or Path.cwd()).resolve()
     config_file = config_file or config_path()
@@ -72,7 +72,7 @@ def collect_diagnostics(
     if settings.spec_root.is_dir():
         diagnostics.append(Diagnostic("Spec root", "ok", str(settings.spec_root)))
         try:
-            spec = load_spec(selected_agent, settings.spec_root)
+            spec = load_agent(selected_agent, settings)
         except Exception as exc:
             diagnostics.append(
                 Diagnostic(

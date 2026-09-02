@@ -76,5 +76,11 @@ events unless `configure_logging` has already run.
 
 Do not commit secrets, populated `.env` files, Telegram tokens, webhook secrets,
 chat IDs from real deployments, private keys, or local state. Logs and tests
-should avoid raw prompt text, bot tokens, and private identifiers. The `coder`
-agent must remain CLI-only.
+should avoid raw prompt text, bot tokens, and private identifiers.
+
+The `coder` agent must remain **local-only**: reachable from surfaces driven by
+someone at this machine's keyboard (`cli`, `acp`, `gui` — see `LOCAL_SURFACES`
+in `vikram/spec.py`), and never from a network surface (`http`, `threaded`,
+`telegram`). It has file-write and shell tools, so exposing it over the network
+would hand those to any caller. `vikram-api` is a deployment target that
+`Dockerfile` serves on `0.0.0.0`; keep it that way.

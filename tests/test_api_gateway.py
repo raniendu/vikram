@@ -71,7 +71,7 @@ def test_thread_message_endpoint_rejects_cli_only_agent(monkeypatch, tmp_path):
         )
 
     assert response.status_code == 403
-    assert "CLI-only" in response.json()["detail"]
+    assert "local-only" in response.json()["detail"]
     assert dispatcher.messages == []
 
 

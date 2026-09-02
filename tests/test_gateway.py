@@ -165,7 +165,7 @@ async def test_conversation_service_rejects_cli_only_agent(tmp_path):
         store=store,
     )
 
-    with pytest.raises(RuntimeError, match="CLI-only"):
+    with pytest.raises(RuntimeError, match="local-only"):
         await service.send_message(
             InboundMessage(
                 interface="telegram",

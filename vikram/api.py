@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import argparse
+import json
+import os
+import sys
 import time
 import uuid
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
@@ -21,7 +26,8 @@ from vikram.observability import (
     set_span_attributes,
 )
 from vikram.settings import VikramSettings, resolve_model_selection
-from vikram.spec import AgentSurfaceError, ensure_surface_allowed, load_spec
+from vikram.spec import AgentSurfaceError, ensure_surface_allowed
+from vikram.specstore import load_agent
 from vikram.telegram import TelegramAdapter
 from vikram.telegram_config import TelegramConfig, load_telegram_config
 
@@ -68,7 +74,7 @@ def _get_settings() -> VikramSettings:
 
 def _load_http_spec(name: str):
     settings = _get_settings()
-    spec = load_spec(name, settings.spec_root)
+    spec = load_agent(name, settings)
     ensure_surface_allowed(spec, "http")
     return spec
 
@@ -117,10 +123,15 @@ def _get_telegram_adapter(bot_name: str) -> TelegramAdapter:
     return _telegram_adapters[bot_name]
 
 
+# Set by run() in GUI mode. stdout is the desktop shell's handshake channel,
+# so every log line must go to stderr or it corrupts the port announcement.
+_log_stream: Any | None = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = _get_settings()
-    configure_logging(settings.log_level)
+    configure_logging(settings.log_level, stream=_log_stream)
     init_observability(settings)
     model_provider, model = resolve_model_selection(settings)
     logger.info(
@@ -136,6 +147,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         logger.info("api_stopping")
+        # Reap any session workers before the loop closes; each kills its own
+        # process group, so run_command children and MCP servers go with it.
+        from vikram.api_gui import shutdown_sessions
+
+        await shutdown_sessions()
         _agents.clear()
         global _store, _dispatcher, _telegram_config
         _store = None
@@ -395,10 +411,152 @@ async def _handle_telegram_webhook(
     }
 
 
-def run() -> None:
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def mount_gui(target: FastAPI, *, origins: list[str] | None = None) -> None:
+    """Attach the desktop app's router.
+
+    Never called on a default ``vikram-api``. These endpoints reach the agent
+    store and shell-capable sessions, and ``Dockerfile`` serves this app on
+    ``0.0.0.0``, so mounting is opt-in and every route requires a bearer token.
+    """
+    from fastapi.middleware.cors import CORSMiddleware
+
+    from vikram.api_gui import allowed_origins, router
+
+    # Idempotent: a second mount would fail once the app has started serving,
+    # and would double-register every route.
+    if any(str(route.path).startswith("/v1") for route in target.routes):
+        logger.debug("gui_router_already_mounted")
+        return
+
+    target.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins if origins is not None else allowed_origins(),
+        allow_methods=["*"],
+        allow_headers=["authorization", "content-type"],
+    )
+    target.include_router(router)
+    logger.info("gui_router_mounted", routes=len(router.routes))
+
+
+def _build_run_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="vikram-api", description="Run the Vikram HTTP API."
+    )
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="0 picks a free port, reported on stdout as JSON.",
+    )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Mount the desktop app's router. Requires VIKRAM_GUI_TOKEN and a "
+        "loopback host.",
+    )
+    parser.add_argument("--log-level", default="info")
+    parser.add_argument(
+        "--parent-pid",
+        type=int,
+        default=None,
+        help="Exit when this process is gone. Used by the desktop shell so a "
+        "crashed window cannot leave the API running unattended.",
+    )
+    return parser
+
+
+def run(argv: Sequence[str] | None = None) -> None:
+    import socket
+
     import uvicorn
 
-    uvicorn.run("vikram.api:app", host="127.0.0.1", port=8000, reload=False)
+    from vikram.api_gui import GUI_TOKEN_ENV, gui_enabled
+
+    args = _build_run_parser().parse_args(list(argv) if argv is not None else None)
+    enable_gui = args.gui or gui_enabled()
+
+    if enable_gui:
+        # Before anything can emit a log line: structlog's default writes to
+        # stdout, which is where the desktop shell reads the port from.
+        global _log_stream
+        _log_stream = sys.stderr
+        configure_logging(args.log_level.upper(), stream=sys.stderr)
+
+        if args.host not in LOOPBACK_HOSTS:
+            raise SystemExit(
+                f"Refusing to serve the GUI router on {args.host}. "
+                "It reaches the agent store and shell tools; bind 127.0.0.1."
+            )
+        if not os.environ.get(GUI_TOKEN_ENV):
+            raise SystemExit(
+                f"Refusing to start: --gui requires {GUI_TOKEN_ENV} to be set."
+            )
+        mount_gui(app)
+
+    # Bind before serving so the chosen port is known with no race: the desktop
+    # shell reads it from this line rather than polling for the server.
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((args.host, args.port))
+    bound_port = sock.getsockname()[1]
+    print(
+        json.dumps(
+            {
+                "vikram_api_ready": True,
+                "host": args.host,
+                "port": bound_port,
+                "pid": os.getpid(),
+                "gui": enable_gui,
+            }
+        ),
+        flush=True,
+    )
+
+    # The desktop shell passes its pid by environment; the flag stays for
+    # anyone driving vikram-api directly.
+    parent_pid = args.parent_pid or _int_or_none(
+        os.environ.get("VIKRAM_GUI_PARENT_PID")
+    )
+    if parent_pid:
+        _watch_parent(parent_pid)
+
+    server = uvicorn.Server(
+        uvicorn.Config(app, log_level=args.log_level, access_log=False)
+    )
+    server.run(sockets=[sock])
+
+
+def _int_or_none(value: str | None) -> int | None:
+    try:
+        return int(value) if value else None
+    except ValueError:
+        return None
+
+
+def _watch_parent(parent_pid: int, *, interval: float = 2.0) -> None:
+    """Terminate when ``parent_pid`` disappears.
+
+    Without this, a crashed desktop shell would leave a shell-capable HTTP
+    server listening with nobody watching it.
+    """
+    import signal
+    import threading
+
+    def watch() -> None:
+        while True:
+            time.sleep(interval)
+            try:
+                os.kill(parent_pid, 0)
+            except OSError:
+                logger.warning("gui_parent_gone", parent_pid=parent_pid)
+                os.kill(os.getpid(), signal.SIGTERM)
+                return
+
+    threading.Thread(target=watch, daemon=True, name="parent-watchdog").start()
 
 
 if __name__ == "__main__":
