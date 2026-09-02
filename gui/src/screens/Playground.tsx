@@ -117,16 +117,18 @@ export function Playground() {
 
   return (
     <div className="stack">
-      <header className="screen-head">
-        <h1>Playground</h1>
-        <p className="muted">
+      <header>
+        <h1 className="page">Playground</h1>
+        <p className="lede">
           One agent, one prompt, {columns.length} models side by side.
           Approval-gated tools are disabled here so the columns cannot fight
           over the workspace.
         </p>
       </header>
 
-      <div className="row wrap">
+      <div className="rule" />
+
+      <div className="row wrap" style={{ paddingTop: 22 }}>
         <select value={agentId} onChange={(e) => setAgentId(e.target.value)}>
           {agents
             .filter((a) => !a.error)
@@ -137,7 +139,7 @@ export function Playground() {
             ))}
         </select>
         <button
-          className="secondary"
+          className="btn secondary"
           onClick={async () => {
             const chosen = await open({ directory: true, multiple: false });
             if (typeof chosen === "string") setWorkspace(chosen);
@@ -168,7 +170,7 @@ export function Playground() {
             />
             {columns.length > 2 && (
               <button
-                className="link"
+                className="btn quiet"
                 onClick={() => setColumns(columns.filter((_, j) => j !== i))}
               >
                 ✕
@@ -178,7 +180,7 @@ export function Playground() {
         ))}
         {columns.length < MAX && (
           <button
-            className="secondary"
+            className="btn secondary"
             onClick={() =>
               setColumns([
                 ...columns,
@@ -204,7 +206,7 @@ export function Playground() {
         onChange={(e) => setPrompt(e.target.value)}
       />
       <div>
-        <button disabled={!ready || running} onClick={run}>
+        <button className="btn" disabled={!ready || running} onClick={run}>
           {running ? "Running…" : "Compare"}
         </button>
       </div>
@@ -216,7 +218,7 @@ export function Playground() {
           {columns.map((column, i) => (
             <article key={i} className="column">
               <header>
-                <code>{column.model || "—"}</code>
+                <span className="mono small">{column.model || "—"}</span>
                 {column.metrics && (
                   <div className="metrics">
                     <span title="time to first token">

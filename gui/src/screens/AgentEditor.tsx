@@ -9,6 +9,7 @@ import {
   testMcp,
   validateDraft,
 } from "../api/client";
+import { Eyebrow } from "../components/primitives";
 
 interface Props {
   agentId: string;
@@ -83,30 +84,30 @@ export function AgentEditor({ agentId, onBack }: Props) {
 
   return (
     <div className="editor">
-      <header className="chat-head">
-        <button className="link" onClick={onBack}>
+      <header className="session-head">
+        <button className="btn quiet" onClick={onBack}>
           ← Agents
         </button>
         <div>
           <strong>{detail.summary.name}</strong>{" "}
           <span className="muted">{agentId}</span>
           {detail.summary.root === "builtin" && (
-            <span className="badge" style={{ marginLeft: 8 }}>
+            <span className="eyebrow" style={{ marginLeft: 10 }}>
               editing creates your own copy
             </span>
           )}
         </div>
         <div className="row">
-          {status && <span className="muted small">{status}</span>}
-          <button className="secondary" onClick={validate}>
+          {status && <Eyebrow>{status}</Eyebrow>}
+          <button className="btn secondary" onClick={validate}>
             Validate
           </button>
-          <button onClick={save}>Save</button>
+          <button className="btn" onClick={save}>Save</button>
         </div>
       </header>
 
       <div className="editor-body">
-        <nav className="side">
+        <nav className="editor-rail">
           {SECTIONS.map(([key, label]) => (
             <button
               key={key}
@@ -165,18 +166,18 @@ export function AgentEditor({ agentId, onBack }: Props) {
                     Assembled prompt ({report.system_prompt.length} chars) — what
                     the model actually sees
                   </summary>
-                  <pre className="assembled">{report.system_prompt}</pre>
+                  <pre className="source">{report.system_prompt}</pre>
                 </details>
               )}
             </Fields>
           )}
 
           {section === "tools" && (
-            <div className="tool-grid">
+            <div>
               {tools.map((tool) => {
                 const on = (draft.tools ?? []).includes(tool.name);
                 return (
-                  <label key={tool.name} className="tool">
+                  <label key={tool.name} className="tool-row">
                     <input
                       type="checkbox"
                       checked={on}
@@ -255,7 +256,7 @@ export function AgentEditor({ agentId, onBack }: Props) {
                 label="agent.toml"
                 hint="Read-only here. The escape hatch is your editor; comments are preserved on save."
               >
-                <pre className="assembled">{detail.source_toml}</pre>
+                <pre className="source">{detail.source_toml}</pre>
               </Field>
             </Fields>
           )}
@@ -308,8 +309,8 @@ function Field({
 }) {
   return (
     <label className="field">
-      <span className="field-label">{label}</span>
-      {hint && <span className="muted small">{hint}</span>}
+      <span className="eyebrow">{label}</span>
+      {hint && <span className="field-hint">{hint}</span>}
       {children}
     </label>
   );

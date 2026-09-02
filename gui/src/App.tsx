@@ -1,27 +1,53 @@
 import { useEffect, useState } from "react";
-import { AgentSummary, SidecarError, connect } from "./api/client";
+import { AgentSummary, SidecarError, connect, listSessions } from "./api/client";
+import { ThemeToggle } from "./components/primitives";
+import { AgentEditor } from "./screens/AgentEditor";
 import { AgentList } from "./screens/AgentList";
 import { Chat } from "./screens/Chat";
-import { AgentEditor } from "./screens/AgentEditor";
 import { Doctor } from "./screens/Doctor";
 import { Playground } from "./screens/Playground";
+import { Sessions } from "./screens/Sessions";
 import { Settings } from "./screens/Settings";
 
-type Tab = "agents" | "playground" | "settings" | "doctor";
+type Tab = "agents" | "sessions" | "playground" | "settings" | "doctor";
 
 const TABS: [Tab, string][] = [
   ["agents", "Agents"],
+  ["sessions", "Sessions"],
   ["playground", "Playground"],
   ["settings", "Settings"],
   ["doctor", "Doctor"],
 ];
+
+const THEME_KEY = "vikram.theme";
 
 export function App() {
   const [ready, setReady] = useState(false);
   const [failure, setFailure] = useState<SidecarError | null>(null);
   const [tab, setTab] = useState<Tab>("agents");
   const [chatting, setChatting] = useState<AgentSummary | null>(null);
+  const [resuming, setResuming] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
+  const [waiting, setWaiting] = useState(0);
+  const [dark, setDark] = useState(false);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(THEME_KEY);
+      if (stored) setDark(stored === "dark");
+    } catch {
+      /* private window, or site data blocked */
+    }
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+    try {
+      localStorage.setItem(THEME_KEY, dark ? "dark" : "light");
+    } catch {
+      /* nothing to do; the choice just will not persist */
+    }
+  }, [dark]);
 
   useEffect(() => {
     connect()
@@ -29,18 +55,33 @@ export function App() {
       .catch((e) => setFailure(e as SidecarError));
   }, []);
 
-  // A named failure beats a spinner that never resolves — the usual cause is
-  // a Finder launch, which inherits no login PATH and so cannot see
-  // ~/.local/bin/vikram-api.
+  // The masthead carries the count so a session parked on an approval is
+  // visible from any screen — the 300s timeout runs whether you are looking
+  // at that session or not.
+  useEffect(() => {
+    if (!ready) return;
+    let alive = true;
+    const poll = () =>
+      listSessions()
+        .then((p) => alive && setWaiting(p.waiting))
+        .catch(() => {});
+    poll();
+    const id = setInterval(poll, 3000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [ready]);
+
   if (failure) {
     return (
       <main className="boot">
-        <h1>Can't start Vikram</h1>
+        <h1>Can’t start Vikram</h1>
         <p className="error">{failure.message ?? String(failure)}</p>
         {failure.hint && <p className="muted">{failure.hint}</p>}
         <p className="muted small">
-          Launching from a terminal with <code>vikram gui</code> passes the
-          right path through.
+          Launching from a terminal with <span className="mono">vikram gui</span>{" "}
+          passes the right path through.
         </p>
       </main>
     );
@@ -55,10 +96,44 @@ export function App() {
     );
   }
 
-  if (chatting) {
+  const masthead = (
+    <header className="masthead">
+      <div className="wordmark">Vikram Studio</div>
+      <nav className="tabs">
+        {TABS.map(([key, label]) => (
+          <button
+            key={key}
+            className={tab === key && !chatting && !editing && !resuming ? "active" : ""}
+            onClick={() => {
+              setChatting(null);
+              setEditing(null);
+              setResuming(null);
+              setTab(key);
+            }}
+          >
+            {label}
+            {key === "sessions" && waiting > 0 && (
+              <span className="tab-count">{waiting}</span>
+            )}
+          </button>
+        ))}
+      </nav>
+      <ThemeToggle dark={dark} onToggle={() => setDark(!dark)} />
+    </header>
+  );
+
+  if (chatting || resuming) {
     return (
       <main className="app">
-        <Chat agent={chatting} onBack={() => setChatting(null)} />
+        {masthead}
+        <Chat
+          agent={chatting}
+          resumeSessionId={resuming}
+          onBack={() => {
+            setChatting(null);
+            setResuming(null);
+          }}
+        />
       </main>
     );
   }
@@ -66,6 +141,7 @@ export function App() {
   if (editing) {
     return (
       <main className="app">
+        {masthead}
         <AgentEditor agentId={editing} onBack={() => setEditing(null)} />
       </main>
     );
@@ -73,20 +149,9 @@ export function App() {
 
   return (
     <main className="app">
-      <nav className="tabs">
-        {TABS.map(([key, label]) => (
-          <button
-            key={key}
-            className={tab === key ? "active" : ""}
-            onClick={() => setTab(key)}
-          >
-            {label}
-          </button>
-        ))}
-      </nav>
-      {tab === "agents" && (
-        <AgentList onChat={setChatting} onEdit={setEditing} />
-      )}
+      {masthead}
+      {tab === "agents" && <AgentList onChat={setChatting} onEdit={setEditing} />}
+      {tab === "sessions" && <Sessions onOpen={setResuming} />}
       {tab === "playground" && <Playground />}
       {tab === "settings" && <Settings />}
       {tab === "doctor" && <Doctor />}

@@ -14,6 +14,7 @@ import json
 import os
 import signal
 import sys
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,6 +41,14 @@ class Session:
     process: asyncio.subprocess.Process
     ready: dict[str, Any] = field(default_factory=dict)
     closed: bool = False
+    # Live state, derived from the events already flowing through the pump so
+    # a sessions list can be answered without asking the worker anything.
+    started_at: float = field(default_factory=time.time)
+    last_event_at: float = field(default_factory=time.time)
+    turns: int = 0
+    activity: str = ""
+    pending_approval: dict[str, Any] | None = None
+    running: bool = False
     _listeners: set[asyncio.Queue] = field(default_factory=set)
     _pump: asyncio.Task | None = None
     _ready_event: asyncio.Event = field(default_factory=asyncio.Event)
@@ -87,6 +96,7 @@ class Session:
             elif event.get("type") == "session.failed":
                 self._failure = str(event.get("error"))
                 self._ready_event.set()
+            self._note(event)
             self._broadcast(event)
 
         self.closed = True
@@ -94,6 +104,65 @@ class Session:
         self._broadcast(
             {"type": "session.closed", "session_id": self.id, "payload": {}}
         )
+
+    def _note(self, event: dict[str, Any]) -> None:
+        """Fold one event into the session's summary state."""
+        kind = event.get("type")
+        payload = event.get("payload") or {}
+        self.last_event_at = time.time()
+
+        if kind == "turn.started":
+            self.turns += 1
+            self.running = True
+            self.activity = "Working…"
+        elif kind == "tool.call":
+            self.activity = f"Running {payload.get('name')}"
+        elif kind == "approval.requested" and not payload.get("auto"):
+            self.pending_approval = {
+                "approval_id": payload.get("approval_id"),
+                "tool_name": payload.get("tool_name"),
+                "input": payload.get("input") or {},
+            }
+            self.activity = f"Waiting to run {payload.get('tool_name')}"
+        elif kind == "approval.resolved":
+            self.pending_approval = None
+        elif kind in {"turn.finished", "turn.failed", "turn.cancelled"}:
+            self.running = False
+            self.pending_approval = None
+            output = str(payload.get("output") or "").strip().replace("\n", " ")
+            if kind == "turn.finished":
+                self.activity = (output[:140] + "…") if len(output) > 140 else output
+            elif kind == "turn.failed":
+                self.activity = f"Failed: {payload.get('error')}"
+            else:
+                self.activity = "Cancelled"
+
+    @property
+    def state(self) -> str:
+        """One of ``needs``, ``running`` or ``idle`` — what the rail shows."""
+        if self.pending_approval is not None:
+            return "needs"
+        return "running" if self.running else "idle"
+
+    def summary(self) -> dict[str, Any]:
+        ready = self.ready.get("payload") or {}
+        return {
+            "session_id": self.id,
+            "agent_id": self.agent_id,
+            "agent_name": ready.get("name") or self.agent_id,
+            "workspace": str(self.workspace),
+            "model": (ready.get("model_config") or {}).get("model"),
+            "closed": self.closed,
+            "state": self.state,
+            "turns": self.turns,
+            "activity": self.activity,
+            "pending_approval": self.pending_approval,
+            "started_at": self.started_at,
+            "last_event_at": self.last_event_at,
+            "elapsed_ms": round((time.time() - self.last_event_at) * 1000),
+            "tool_names": ready.get("tool_names") or [],
+            "approval_tool_names": ready.get("approval_tool_names") or [],
+        }
 
     async def wait_ready(self) -> None:
         try:

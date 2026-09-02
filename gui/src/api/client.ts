@@ -107,15 +107,32 @@ export interface Diagnostic {
   fix: string | null;
 }
 
+export type SessionState = "needs" | "running" | "idle";
+
+export interface PendingApproval {
+  approval_id: string;
+  tool_name: string;
+  input: Record<string, unknown>;
+}
+
 export interface SessionInfo {
   session_id: string;
   agent_id: string;
+  agent_name: string;
   workspace: string;
+  model: string | null;
   closed: boolean;
+  state: SessionState;
+  turns: number;
+  activity: string;
+  pending_approval: PendingApproval | null;
+  started_at: number;
+  last_event_at: number;
+  elapsed_ms: number;
+  tool_names: string[];
+  approval_tool_names: string[];
   name?: string;
   model_config?: { provider: string; model: string };
-  tool_names?: string[];
-  approval_tool_names?: string[];
 }
 
 export const listAgents = () =>
@@ -127,6 +144,11 @@ export const runDoctor = (agentId?: string) =>
       "/v1/doctor" + (agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ""),
     )
     .then((r) => r.diagnostics);
+
+export const listSessions = () =>
+  api.get<{ sessions: SessionInfo[]; waiting: number; total: number }>(
+    "/v1/sessions",
+  );
 
 export const openSession = (agentId: string, workspace: string) =>
   api.post<SessionInfo>("/v1/sessions", {

@@ -6,13 +6,18 @@ import {
   answerApproval,
   cancelTurn,
   closeSession,
+  listSessions,
   openSession,
   sendPrompt,
 } from "../api/client";
 import { StreamEvent, streamSession } from "../api/events";
+import { Dot, Eyebrow } from "../components/primitives";
 
 interface Props {
-  agent: AgentSummary;
+  /** Set when opening a fresh session from the agent list. */
+  agent: AgentSummary | null;
+  /** Set when resuming one picked from the sessions list. */
+  resumeSessionId: string | null;
   onBack: () => void;
 }
 
@@ -23,55 +28,68 @@ interface Approval {
 }
 
 type Entry =
-  | { kind: "user"; text: string }
-  | { kind: "text"; text: string }
-  | { kind: "thinking"; text: string }
+  | { kind: "you"; text: string }
+  | { kind: "say"; text: string }
+  | { kind: "think"; text: string }
   | { kind: "tool"; name: string; status?: string; detail?: string }
   | { kind: "note"; text: string };
 
-export function Chat({ agent, onBack }: Props) {
+export function Chat({ agent, resumeSessionId, onBack }: Props) {
+  const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [current, setCurrent] = useState<string | null>(resumeSessionId);
   const [workspace, setWorkspace] = useState<string | null>(null);
-  const [session, setSession] = useState<SessionInfo | null>(null);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [approval, setApproval] = useState<Approval | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const scroller = useRef<HTMLDivElement>(null);
+  const stream = useRef<{ close: () => void } | null>(null);
+
+  async function refreshSessions() {
+    try {
+      setSessions((await listSessions()).sessions);
+    } catch {
+      /* the rail simply stays as it was */
+    }
+  }
+
+  useEffect(() => {
+    refreshSessions();
+    const id = setInterval(refreshSessions, 3000);
+    return () => {
+      clearInterval(id);
+      stream.current?.close();
+    };
+  }, []);
 
   useEffect(() => {
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight });
   }, [entries, approval]);
 
-  async function pickWorkspace() {
-    const chosen = await open({ directory: true, multiple: false });
-    if (typeof chosen === "string") setWorkspace(chosen);
-  }
-
-  async function start() {
-    if (!workspace) return;
-    setError(null);
-    try {
-      const info = await openSession(agent.id, workspace);
-      setSession(info);
-      streamSession(info.session_id, handleEvent, (e) => setError(String(e)));
-    } catch (e) {
-      setError(String(e));
-    }
-  }
+  // Attaching to a session replays session.ready from the backlog, so a
+  // resumed session knows what it is even though its transcript is gone.
+  useEffect(() => {
+    if (!current) return;
+    setEntries([]);
+    setApproval(null);
+    stream.current?.close();
+    stream.current = streamSession(current, handleEvent, (e) => setError(String(e)));
+    return () => stream.current?.close();
+  }, [current]);
 
   function handleEvent(event: StreamEvent) {
     const p = event.payload;
     switch (event.type) {
+      case "session.ready":
+        return;
       case "text.delta":
-        return appendStreaming("text", p.text);
+        return appendStreaming("say", p.text);
       case "thinking.delta":
-        return appendStreaming("thinking", p.text);
+        return appendStreaming("think", p.text);
       case "tool.call":
-        return setEntries((prev) => [
-          ...prev,
-          { kind: "tool", name: p.name },
-        ]);
+        setBusy(true);
+        return setEntries((prev) => [...prev, { kind: "tool", name: p.name }]);
       case "tool.result":
         return setEntries((prev) => {
           const next = [...prev];
@@ -85,7 +103,6 @@ export function Chat({ agent, onBack }: Props) {
           return next;
         });
       case "approval.requested":
-        // `auto` approvals are already granted; they are shown, not asked.
         if (!p.auto) setApproval(p as Approval);
         return;
       case "approval.resolved":
@@ -94,33 +111,30 @@ export function Chat({ agent, onBack }: Props) {
           ...prev,
           { kind: "note", text: `Approval ${p.decision}` },
         ]);
-      case "turn.finished":
+      case "turn.started":
+        return setBusy(true);
+      case "turn.finished": {
         setBusy(false);
+        refreshSessions();
+        const tokens = p.usage?.total_tokens;
         return setEntries((prev) => [
           ...prev,
           {
             kind: "note",
-            text: `Finished in ${Math.round(p.duration_ms)}ms · ${
-              p.usage?.total_tokens ?? "?"
-            } tokens`,
+            text: `${Math.round(p.duration_ms) / 1000}s${tokens ? ` · ${tokens} tokens` : ""}`,
           },
         ]);
+      }
       case "turn.failed":
         setBusy(false);
-        return setEntries((prev) => [
-          ...prev,
-          { kind: "note", text: `Failed: ${p.error}` },
-        ]);
+        return setEntries((prev) => [...prev, { kind: "note", text: `Failed: ${p.error}` }]);
       case "turn.cancelled":
         setBusy(false);
-        return setEntries((prev) => [
-          ...prev,
-          { kind: "note", text: "Cancelled" },
-        ]);
+        return setEntries((prev) => [...prev, { kind: "note", text: "Cancelled" }]);
     }
   }
 
-  function appendStreaming(kind: "text" | "thinking", text: string) {
+  function appendStreaming(kind: "say" | "think", text: string) {
     setEntries((prev) => {
       const last = prev[prev.length - 1];
       if (last && last.kind === kind) {
@@ -130,14 +144,26 @@ export function Chat({ agent, onBack }: Props) {
     });
   }
 
+  async function start() {
+    if (!agent || !workspace) return;
+    setError(null);
+    try {
+      const info = await openSession(agent.id, workspace);
+      await refreshSessions();
+      setCurrent(info.session_id);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function submit() {
-    if (!session || !draft.trim()) return;
+    if (!current || !draft.trim()) return;
     const text = draft;
     setDraft("");
-    setEntries((prev) => [...prev, { kind: "user", text }]);
+    setEntries((prev) => [...prev, { kind: "you", text }]);
     setBusy(true);
     try {
-      await sendPrompt(session.session_id, text);
+      await sendPrompt(current, text);
     } catch (e) {
       setError(String(e));
       setBusy(false);
@@ -145,131 +171,263 @@ export function Chat({ agent, onBack }: Props) {
   }
 
   async function decide(decision: "allow" | "deny") {
-    if (!session || !approval) return;
-    await answerApproval(
-      session.session_id,
-      approval.approval_id,
-      decision,
-      approval.tool_name,
-    );
+    if (!current || !approval) return;
+    await answerApproval(current, approval.approval_id, decision, approval.tool_name);
     setApproval(null);
   }
 
-  if (!session) {
+  // Choosing a folder, before any session exists.
+  if (!current) {
     return (
-      <div className="stack">
-        <button className="link" onClick={onBack}>
+      <div className="screen">
+        <button className="btn quiet" onClick={onBack}>
           ← Agents
         </button>
-        <h1>{agent.name}</h1>
-        <p className="muted">
-          Choose the folder this agent should work in. Its file and shell tools
-          are scoped to that folder.
+        <h1 className="page" style={{ marginTop: 8 }}>{agent?.name ?? "New session"}</h1>
+        <p className="lede">
+          Choose the folder this agent works in. Its file and shell tools are scoped
+          to that folder, and the session gets its own process.
         </p>
-        <div className="row">
-          <button onClick={pickWorkspace}>Choose folder…</button>
-          <code className="path">{workspace ?? "No folder chosen"}</code>
+        <div className="rule" />
+        <div className="row" style={{ marginTop: 24 }}>
+          <button
+            className="btn secondary"
+            onClick={async () => {
+              const chosen = await open({ directory: true, multiple: false });
+              if (typeof chosen === "string") setWorkspace(chosen);
+            }}
+          >
+            {workspace ? "Change folder" : "Choose folder…"}
+          </button>
+          <span className="path">{workspace ?? "No folder chosen"}</span>
         </div>
-        <div>
-          <button disabled={!workspace} onClick={start}>
+        <div style={{ marginTop: 20 }}>
+          <button className="btn" disabled={!workspace} onClick={start}>
             Start session
           </button>
         </div>
-        {error && <p className="error">{error}</p>}
+        {error && <p className="error" style={{ marginTop: 16 }}>{error}</p>}
       </div>
     );
   }
 
+  const active = sessions.find((s) => s.session_id === current);
+  const groups = groupByAgent(sessions);
+  const waiting = sessions.filter((s) => s.state === "needs").length;
+
   return (
-    <div className="chat">
-      <header className="chat-head">
-        <button className="link" onClick={onBack}>
-          ← Agents
-        </button>
-        <div>
-          <strong>{agent.name}</strong>{" "}
-          <span className="muted">
-            {session.model_config?.model} · {session.workspace}
-          </span>
+    <div className="with-rail">
+      {/* 18rem — the site's own --rail-width. Grouped by agent so a dozen
+          sessions of one agent stay a single scannable block. */}
+      <aside className="rail">
+        <div className="rail-head">
+          <Eyebrow>Sessions</Eyebrow>
+          <Eyebrow className={waiting ? "accent" : undefined}>
+            {waiting ? `${sessions.length} · ${waiting} waiting` : String(sessions.length)}
+          </Eyebrow>
         </div>
-        <button
-          className="link"
-          onClick={() => closeSession(session.session_id).then(onBack)}
-        >
-          End session
-        </button>
-      </header>
 
-      <div className="transcript" ref={scroller}>
-        {entries.map((entry, i) => (
-          <Bubble key={i} entry={entry} />
-        ))}
+        <div className="rail-list">
+          {groups.map(([agentName, items]) => (
+            <div key={agentName}>
+              <div className="rail-group">
+                <Eyebrow style={{ color: "var(--fg)" }}>{agentName}</Eyebrow>
+                <Eyebrow>{items.length}</Eyebrow>
+              </div>
+              {items.map((s) => (
+                <button
+                  key={s.session_id}
+                  className={`rail-item${s.session_id === current ? " active" : ""}`}
+                  onClick={() => setCurrent(s.session_id)}
+                  title={s.workspace}
+                >
+                  <Dot live={s.state !== "idle"} />
+                  <span className="name">{basename(s.workspace)}</span>
+                  <span className="grow" />
+                  {s.state === "needs" && (
+                    <span className="eyebrow accent" style={{ fontSize: 10 }}>!</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          ))}
+          {sessions.length === 0 && (
+            <p className="muted small rail-empty">No sessions running.</p>
+          )}
+        </div>
 
-        {approval && (
-          <div className="approval">
-            <h3>Approve {approval.tool_name}?</h3>
-            <pre>{JSON.stringify(approval.input, null, 2)}</pre>
-            <div className="row">
-              <button onClick={() => decide("allow")}>Allow</button>
-              <button className="secondary" onClick={() => decide("deny")}>
-                Deny
-              </button>
+        <div className="rail-foot">
+          <button className="btn quiet" onClick={onBack}>
+            + New session
+          </button>
+        </div>
+      </aside>
+
+      <section className="session">
+        <div className="session-head">
+          <div style={{ minWidth: 0 }}>
+            <div className="row-path" style={{ fontSize: 16 }}>
+              {active?.workspace ?? "…"}
+            </div>
+            <div className="row" style={{ gap: 15, marginTop: 4 }}>
+              <Eyebrow>{active?.agent_name ?? agent?.name ?? ""}</Eyebrow>
+              <Eyebrow>{active?.model ?? ""}</Eyebrow>
             </div>
           </div>
-        )}
-      </div>
-
-      {error && <p className="error">{error}</p>}
-
-      <form
-        className="composer"
-        onSubmit={(e) => {
-          e.preventDefault();
-          submit();
-        }}
-      >
-        <textarea
-          value={draft}
-          placeholder="Ask the agent to do something…"
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
-          }}
-        />
-        {busy ? (
           <button
-            type="button"
-            className="secondary"
-            onClick={() => cancelTurn(session.session_id)}
+            className="btn quiet"
+            onClick={async () => {
+              await closeSession(current);
+              await refreshSessions();
+              onBack();
+            }}
           >
-            Stop
+            End session
           </button>
-        ) : (
-          <button type="submit" disabled={!draft.trim()}>
-            Send
-          </button>
+        </div>
+
+        <div className="transcript" ref={scroller}>
+          <div className="turns">
+            {entries.length === 0 && !approval && (
+              <p className="muted">
+                {active && active.turns > 0
+                  ? "Rejoined this session. Earlier turns are not replayed — send a prompt to carry on."
+                  : "Send a prompt to start."}
+              </p>
+            )}
+
+            {entries.map((entry, i) => (
+              <Bubble key={i} entry={entry} agentName={active?.agent_name ?? "Agent"} />
+            ))}
+
+            {approval && (
+              <div className="approval">
+                <div className="approval-head">
+                  <Eyebrow className="accent">Approval required</Eyebrow>
+                  <span className="mono small" style={{ color: "var(--muted-2)" }}>
+                    {approval.tool_name}
+                  </span>
+                </div>
+                <div className="approval-body">
+                  <div className="approval-grid">
+                    {Object.entries(approval.input).map(([key, value]) => (
+                      <FragmentRow key={key} label={key} value={value} />
+                    ))}
+                  </div>
+                  <div className="row" style={{ marginTop: 18 }}>
+                    <button className="btn" onClick={() => decide("allow")}>
+                      Allow
+                    </button>
+                    <button className="btn secondary" onClick={() => decide("deny")}>
+                      Deny
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {error && (
+          <p className="error" style={{ padding: "0 var(--gutter)" }}>{error}</p>
         )}
-      </form>
+
+        <form
+          className="composer"
+          onSubmit={(e) => {
+            e.preventDefault();
+            submit();
+          }}
+        >
+          <div className="composer-inner">
+            <textarea
+              value={draft}
+              placeholder="Ask the agent to do something…"
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
+              }}
+            />
+            {busy ? (
+              <button
+                type="button"
+                className="btn secondary"
+                onClick={() => cancelTurn(current)}
+              >
+                Stop
+              </button>
+            ) : (
+              <button type="submit" className="btn" disabled={!draft.trim()}>
+                Send
+              </button>
+            )}
+          </div>
+        </form>
+      </section>
     </div>
   );
 }
 
-function Bubble({ entry }: { entry: Entry }) {
-  if (entry.kind === "user")
-    return <div className="bubble user">{entry.text}</div>;
-  if (entry.kind === "thinking")
-    return <div className="bubble thinking">{entry.text}</div>;
-  if (entry.kind === "note")
-    return <div className="bubble note">{entry.text}</div>;
-  if (entry.kind === "tool")
+function FragmentRow({ label, value }: { label: string; value: unknown }) {
+  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  return (
+    <>
+      <Eyebrow>{label}</Eyebrow>
+      <pre>{text}</pre>
+    </>
+  );
+}
+
+function Bubble({ entry, agentName }: { entry: Entry; agentName: string }) {
+  if (entry.kind === "you")
     return (
-      <div className="bubble tool">
-        <code>
-          {entry.status === "error" ? "✗" : entry.status ? "✓" : "→"}{" "}
-          {entry.name}
-        </code>
-        {entry.detail && <pre>{entry.detail.slice(0, 600)}</pre>}
+      <div className="turn-you">
+        <Eyebrow style={{ marginBottom: 7 }}>You</Eyebrow>
+        <p>{entry.text}</p>
       </div>
     );
-  return <div className="bubble assistant">{entry.text}</div>;
+  if (entry.kind === "think")
+    return (
+      <div className="turn-think">
+        <Eyebrow style={{ marginBottom: 7 }}>Thinking</Eyebrow>
+        <p>{entry.text}</p>
+      </div>
+    );
+  if (entry.kind === "note") return <Eyebrow>{entry.text}</Eyebrow>;
+  if (entry.kind === "tool")
+    return (
+      <div>
+        <div className="tool-head">
+          <span
+            className="mono"
+            style={{ color: entry.status === "error" ? "var(--muted-2)" : "var(--accent)" }}
+          >
+            {entry.status === "error" ? "✗" : entry.status ? "✓" : "→"}
+          </span>
+          <span className="mono small">{entry.name}</span>
+        </div>
+        {entry.detail && <pre className="tool-out">{entry.detail.slice(0, 1200)}</pre>}
+      </div>
+    );
+  return (
+    <div className="turn-say">
+      <Eyebrow style={{ marginBottom: 7 }}>{agentName}</Eyebrow>
+      <p>{entry.text}</p>
+    </div>
+  );
+}
+
+function groupByAgent(sessions: SessionInfo[]): [string, SessionInfo[]][] {
+  const map = new Map<string, SessionInfo[]>();
+  for (const s of sessions) {
+    const list = map.get(s.agent_name) ?? [];
+    list.push(s);
+    map.set(s.agent_name, list);
+  }
+  return [...map.entries()];
+}
+
+function basename(path: string) {
+  const parts = path.replace(/\/+$/, "").split("/");
+  return parts[parts.length - 1] || path;
 }

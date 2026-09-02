@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
-import { ConfigView, ProviderInfo, getConfig, listProviders, saveProvider, setDefaultProvider } from "../api/client";
+import {
+  ConfigView,
+  ProviderInfo,
+  getConfig,
+  listProviders,
+  saveProvider,
+  setDefaultProvider,
+} from "../api/client";
+import { Eyebrow, Rule } from "../components/primitives";
 
 export function Settings() {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
@@ -9,7 +17,10 @@ export function Settings() {
 
   function refresh() {
     Promise.all([listProviders(), getConfig()])
-      .then(([p, c]) => { setProviders(p); setConfig(c); })
+      .then(([p, c]) => {
+        setProviders(p);
+        setConfig(c);
+      })
       .catch((e) => setError(String(e)));
   }
   useEffect(refresh, []);
@@ -17,108 +28,127 @@ export function Settings() {
   if (error) return <p className="error">{error}</p>;
   if (!config) return <p className="muted">Loading…</p>;
 
-  async function save(id: string, values: Record<string, string>) {
-    setStatus("Saving…");
-    try {
-      await saveProvider(id, values);
-      setStatus("Saved");
-      refresh();
-    } catch (e) { setError(String(e)); setStatus(null); }
-  }
-
   return (
-    <div className="stack">
-      <header className="screen-head">
-        <h1>Settings</h1>
-        <p className="muted">
-          Written to <code>{config.path}</code>. API keys are stored there and
-          never sent back to this window.
-        </p>
-      </header>
+    <div className="screen">
+      <div className="head-row">
+        <div>
+          <h1 className="page">Settings</h1>
+          <p className="lede">
+            Written to <span className="mono">{config.path}</span>. Keys are stored
+            there and never sent back to this window.
+          </p>
+        </div>
+        <div className="row">
+          {status && <Eyebrow>{status}</Eyebrow>}
+          <select
+            value={config.default_provider ?? ""}
+            onChange={async (e) => {
+              await setDefaultProvider(e.target.value);
+              refresh();
+            }}
+          >
+            {providers.map((p) => (
+              <option key={p.id} value={p.id}>{p.display_name}</option>
+            ))}
+          </select>
+        </div>
+      </div>
 
       {config.top_level_model && (
-        <p className="warn">
-          A top-level <code>model = "{config.top_level_model}"</code> in your
-          config overrides every agent's own model. Remove it by hand unless you
-          meant it.
+        <p className="warn" style={{ marginTop: 18 }}>
+          A top-level <span className="mono">model = "{config.top_level_model}"</span>{" "}
+          in your config overrides every agent’s own model. Remove it by hand unless
+          you meant it.
         </p>
       )}
 
-      <div className="row">
-        <span className="muted">Default provider</span>
-        <select
-          value={config.default_provider ?? ""}
-          onChange={async (e) => { await setDefaultProvider(e.target.value); refresh(); }}
-        >
-          {providers.map((p) => <option key={p.id} value={p.id}>{p.display_name}</option>)}
-        </select>
-        {status && <span className="muted small">{status}</span>}
-      </div>
+      <div className="rule" />
+      <Rule />
 
-      <div className="cards">
-        {providers.map((provider) => (
-          <ProviderCard key={provider.id} provider={provider} onSave={save} />
-        ))}
-      </div>
+      {providers.map((provider) => (
+        <ProviderRow
+          key={provider.id}
+          provider={provider}
+          onSave={async (values) => {
+            setStatus("Saving…");
+            await saveProvider(provider.id, values);
+            setStatus("Saved");
+            refresh();
+          }}
+        />
+      ))}
     </div>
   );
 }
 
-function ProviderCard({
+function ProviderRow({
   provider,
   onSave,
 }: {
   provider: ProviderInfo;
-  onSave: (id: string, values: Record<string, string>) => void;
+  onSave: (values: Record<string, string>) => void;
 }) {
   const [model, setModel] = useState(provider.configured_model ?? "");
   const [baseUrl, setBaseUrl] = useState(provider.base_url ?? "");
   const [apiKey, setApiKey] = useState("");
+  const dirty =
+    model !== (provider.configured_model ?? "") ||
+    baseUrl !== (provider.base_url ?? "") ||
+    apiKey !== "";
 
   return (
-    <article className="card">
-      <div className="card-head">
-        <h2>{provider.display_name}</h2>
-        {provider.needs_api_key && (
-          <span className={`badge ${provider.has_credential ? "badge-user" : ""}`}>
-            {provider.has_credential ? "key set" : "no key"}
-          </span>
+    <div className="list-row" style={{ gridTemplateColumns: "232px minmax(0, 1fr) 150px" }}>
+      <div>
+        <div style={{ fontSize: 16.8, fontWeight: 500 }}>{provider.display_name}</div>
+        {provider.api_key_env && (
+          <Eyebrow style={{ marginTop: 5 }}>{provider.api_key_env}</Eyebrow>
         )}
       </div>
-      <label className="field">
-        <span className="field-label">Model</span>
-        <input value={model} placeholder={provider.suggested_model ?? ""} onChange={(e) => setModel(e.target.value)} />
-      </label>
-      {provider.prompt_base_url && (
-        <label className="field">
-          <span className="field-label">Base URL</span>
-          <input value={baseUrl} placeholder={provider.default_base_url ?? ""} onChange={(e) => setBaseUrl(e.target.value)} />
-        </label>
-      )}
-      {provider.needs_api_key && (
-        <label className="field">
-          <span className="field-label">API key</span>
-          <span className="muted small">
-            Leave blank to keep the stored key. Env: <code>{provider.api_key_env}</code>
-          </span>
-          <input type="password" value={apiKey} placeholder="••••••" onChange={(e) => setApiKey(e.target.value)} />
-        </label>
-      )}
-      <div className="card-actions">
+
+      <div className="fields" style={{ gap: 12 }}>
+        <input
+          value={model}
+          placeholder={provider.suggested_model ?? "model"}
+          onChange={(e) => setModel(e.target.value)}
+        />
+        {provider.prompt_base_url && (
+          <input
+            value={baseUrl}
+            placeholder={provider.default_base_url ?? "base URL"}
+            onChange={(e) => setBaseUrl(e.target.value)}
+          />
+        )}
+        {provider.needs_api_key && (
+          <input
+            type="password"
+            value={apiKey}
+            placeholder="Leave blank to keep the stored key"
+            onChange={(e) => setApiKey(e.target.value)}
+          />
+        )}
+      </div>
+
+      <div className="row-rail">
+        {provider.needs_api_key && (
+          <Eyebrow className={provider.has_credential ? "accent" : undefined}>
+            {provider.has_credential ? "Key set" : "No key"}
+          </Eyebrow>
+        )}
         <button
-          className="secondary"
+          className="btn quiet"
+          disabled={!dirty}
           onClick={() => {
             const values: Record<string, string> = {};
             if (model) values.model = model;
             if (provider.prompt_base_url && baseUrl) values.base_url = baseUrl;
             if (apiKey) values.api_key = apiKey;
-            onSave(provider.id, values);
+            onSave(values);
             setApiKey("");
           }}
         >
           Save
         </button>
       </div>
-    </article>
+    </div>
   );
 }

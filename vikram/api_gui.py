@@ -487,12 +487,10 @@ class SessionFlagsRequest(BaseModel):
 
 
 def _session_info(session: Any) -> dict[str, Any]:
+    """Full detail for one session: its summary plus what it was built with."""
     return {
-        "session_id": session.id,
-        "agent_id": session.agent_id,
-        "workspace": str(session.workspace),
-        "closed": session.closed,
         **(session.ready.get("payload") or {}),
+        **session.summary(),
     }
 
 
@@ -519,7 +517,18 @@ async def post_session(request: SessionCreateRequest) -> dict[str, Any]:
 
 @router.get("/sessions")
 async def read_sessions() -> dict[str, Any]:
-    return {"sessions": [_session_info(s) for s in _registry.list()]}
+    """Every live session, newest activity first.
+
+    Summaries only: a rail listing a dozen sessions does not need each one's
+    full tool list.
+    """
+    sessions = sorted(
+        (s.summary() for s in _registry.list()),
+        key=lambda s: s["last_event_at"],
+        reverse=True,
+    )
+    waiting = sum(1 for s in sessions if s["state"] == "needs")
+    return {"sessions": sessions, "waiting": waiting, "total": len(sessions)}
 
 
 @router.get("/sessions/{session_id}")
