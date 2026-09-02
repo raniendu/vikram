@@ -84,11 +84,21 @@ def patch_cli_dependencies(monkeypatch):
     settings_module = importlib.import_module("vikram.settings")
     spec_module = importlib.import_module("vikram.spec")
 
+    # The CLI loads through specstore, which binds load_spec at import time.
+    # Patching only vikram.spec.load_spec reaches specstore or not depending on
+    # which module imported first, so patch the seam the CLI actually calls.
+    specstore_module = importlib.import_module("vikram.specstore")
+
     monkeypatch.setattr(settings_module, "VikramSettings", FakeSettings)
     monkeypatch.setattr(
         spec_module,
         "load_spec",
-        lambda name, spec_root: SimpleNamespace(name=name.title()),
+        lambda name, spec_root, **kwargs: SimpleNamespace(name=name.title()),
+    )
+    monkeypatch.setattr(
+        specstore_module,
+        "load_agent",
+        lambda agent_id, settings: SimpleNamespace(name=agent_id.title()),
     )
     monkeypatch.setattr(
         agent_module,
@@ -218,11 +228,21 @@ def test_cli_exec_applies_model_and_directory_overrides(monkeypatch, tmp_path):
     settings_module = importlib.import_module("vikram.settings")
     spec_module = importlib.import_module("vikram.spec")
 
+    # The CLI loads through specstore, which binds load_spec at import time.
+    # Patching only vikram.spec.load_spec reaches specstore or not depending on
+    # which module imported first, so patch the seam the CLI actually calls.
+    specstore_module = importlib.import_module("vikram.specstore")
+
     monkeypatch.setattr(settings_module, "VikramSettings", FakeSettings)
     monkeypatch.setattr(
         spec_module,
         "load_spec",
-        lambda name, spec_root: SimpleNamespace(name=name.title()),
+        lambda name, spec_root, **kwargs: SimpleNamespace(name=name.title()),
+    )
+    monkeypatch.setattr(
+        specstore_module,
+        "load_agent",
+        lambda agent_id, settings: SimpleNamespace(name=agent_id.title()),
     )
 
     def build_agent(*, spec, settings, **kwargs):
@@ -1152,3 +1172,45 @@ def test_context_percent_still_accepts_usage_as_a_method():
     result = SimpleNamespace(usage=lambda: RunUsage(input_tokens=500))
 
     assert _context_percent(result, settings) == 50
+
+
+def test_missing_model_explains_itself_instead_of_raising(monkeypatch, capsys):
+    """A model the provider does not have is expected, not exceptional.
+
+    A spec can easily pin something since deleted, so it gets one actionable
+    line rather than a pydantic-ai stack trace.
+    """
+    from types import SimpleNamespace
+
+    from vikram.cli import _model_error_message
+
+    settings = SimpleNamespace(default_agent="coder")
+    monkeypatch.setattr(
+        "vikram.settings.resolve_model_selection", lambda _s: ("ollama", "gone:1b")
+    )
+    error = SimpleNamespace(status_code=404, model_name="gone:1b")
+
+    message = _model_error_message(error, settings)
+
+    assert message is not None
+    assert "gone:1b" in message
+    assert "ollama list" in message
+    assert "vikram --agent coder -m" in message
+
+
+def test_other_model_errors_are_left_alone(monkeypatch):
+    """Anything but a 404 keeps its traceback — those are worth seeing."""
+    from types import SimpleNamespace
+
+    from vikram.cli import _model_error_message
+
+    monkeypatch.setattr(
+        "vikram.settings.resolve_model_selection", lambda _s: ("ollama", "m")
+    )
+    settings = SimpleNamespace(default_agent="coder")
+
+    assert (
+        _model_error_message(SimpleNamespace(status_code=500, model_name="m"), settings)
+        is None
+    )
+    assert _model_error_message(ValueError("boom"), settings) is None

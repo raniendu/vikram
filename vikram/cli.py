@@ -359,6 +359,31 @@ def _read_exec_prompt(value: str | None, parser: argparse.ArgumentParser) -> str
     return prompt
 
 
+def _model_error_message(exc: Exception, settings: Any) -> str | None:
+    """A one-line explanation for a provider rejecting the model, or None.
+
+    A model that is merely absent from the provider is an ordinary, expected
+    failure -- often a spec pinning something that has since been deleted --
+    and a stack trace is the wrong way to say so.
+    """
+    from vikram.settings import resolve_model_selection
+
+    status = getattr(exc, "status_code", None)
+    model = getattr(exc, "model_name", None)
+    if status != 404 or not model:
+        return None
+
+    provider, _ = resolve_model_selection(settings)
+    lines = [f"Model {model!r} is not available from provider {provider!r}."]
+    if provider == "ollama":
+        lines.append("Installed models:  ollama list")
+    lines.append(
+        f"Change it with:    vikram --agent {settings.default_agent} -m <model>"
+    )
+    lines.append("Or persist it in the agent's spec, or with `vikram configure`.")
+    return "\n".join(lines)
+
+
 def _run(
     args: argparse.Namespace,
     *,
@@ -394,7 +419,14 @@ def _run(
         agent = build_agent(spec=spec, settings=settings, approve_all=args.approve_all)
 
         if prompt is not None:
-            result = agent.run_sync(prompt)
+            try:
+                result = agent.run_sync(prompt)
+            except Exception as exc:
+                message = _model_error_message(exc, settings)
+                if message is None:
+                    raise
+                print(message, file=sys.stderr)
+                raise SystemExit(1) from None
             output = str(result.output)
             if output_last_message is not None:
                 output_last_message.expanduser().write_text(output, encoding="utf-8")
