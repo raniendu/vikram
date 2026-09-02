@@ -516,13 +516,25 @@ def run(argv: Sequence[str] | None = None) -> None:
         flush=True,
     )
 
-    if args.parent_pid:
-        _watch_parent(args.parent_pid)
+    # The desktop shell passes its pid by environment; the flag stays for
+    # anyone driving vikram-api directly.
+    parent_pid = args.parent_pid or _int_or_none(
+        os.environ.get("VIKRAM_GUI_PARENT_PID")
+    )
+    if parent_pid:
+        _watch_parent(parent_pid)
 
     server = uvicorn.Server(
         uvicorn.Config(app, log_level=args.log_level, access_log=False)
     )
     server.run(sockets=[sock])
+
+
+def _int_or_none(value: str | None) -> int | None:
+    try:
+        return int(value) if value else None
+    except ValueError:
+        return None
 
 
 def _watch_parent(parent_pid: int, *, interval: float = 2.0) -> None:

@@ -27,6 +27,7 @@ COMMANDS = {
     "exec": "Run one task non-interactively",
     "configure": "Configure model providers (alias: setup)",
     "doctor": "Check configuration and workspace health",
+    "gui": "Open the Vikram Studio desktop app",
     "update": "Check for or install Vikram updates",
 }
 
@@ -303,6 +304,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         from vikram.doctor import run as run_doctor
 
         sys.exit(run_doctor(raw_args[1:]))
+    if raw_args and raw_args[0] == "gui":
+        from vikram.gui import run as run_gui
+
+        sys.exit(run_gui(raw_args[1:]))
     if raw_args and not raw_args[0].startswith("-"):
         parser = build_parser()
         command = raw_args[0]
