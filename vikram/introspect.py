@@ -26,6 +26,12 @@ from vikram.tools import TOOL_REGISTRY
 logger = get_logger(__name__)
 
 Severity = Literal["error", "warning"]
+Approval = Literal["always", "policy", "never"]
+
+# Approval for these is decided per call against the command policy, so a
+# static catalog cannot answer yes or no -- reporting "never" would contradict
+# their own docstrings.
+POLICY_APPROVAL_TOOLS = frozenset({"run_command"})
 
 
 @dataclass(frozen=True)
@@ -34,6 +40,7 @@ class ToolInfo:
     description: str
     requires_approval: bool
     sequential: bool
+    approval: Approval = "never"
 
 
 @dataclass(frozen=True)
@@ -95,21 +102,28 @@ def _entry_callable(entry: Any) -> Any:
 def tool_catalog() -> list[ToolInfo]:
     """Every tool an agent spec may name, with its approval semantics.
 
-    ``run_command`` is reported as not requiring approval because its
-    ``Tool`` wrapper does not set the flag -- approval is decided per call
-    against the command policy, which a static catalog cannot answer.
+    ``approval`` is three-valued because ``run_command`` sits between the
+    other two: its ``Tool`` wrapper sets no flag, but it raises for anything
+    the command policy classifies as needing a human.
     """
-    infos = [
-        ToolInfo(
-            name=name,
-            description=_first_paragraph(
-                getattr(_entry_callable(entry), "__doc__", "")
-            ),
-            requires_approval=bool(getattr(entry, "requires_approval", False)),
-            sequential=bool(getattr(entry, "sequential", False)),
+    infos = []
+    for name, entry in TOOL_REGISTRY.items():
+        always = bool(getattr(entry, "requires_approval", False))
+        infos.append(
+            ToolInfo(
+                name=name,
+                description=_first_paragraph(
+                    getattr(_entry_callable(entry), "__doc__", "")
+                ),
+                requires_approval=always,
+                sequential=bool(getattr(entry, "sequential", False)),
+                approval=(
+                    "always"
+                    if always
+                    else "policy" if name in POLICY_APPROVAL_TOOLS else "never"
+                ),
+            )
         )
-        for name, entry in TOOL_REGISTRY.items()
-    ]
     # delegate_to_agent is built per-agent and bypasses TOOL_REGISTRY, but a
     # spec may still name it, so the editor has to offer it.
     infos.append(
@@ -120,6 +134,7 @@ def tool_catalog() -> list[ToolInfo]:
             ),
             requires_approval=True,
             sequential=True,
+            approval="always",
         )
     )
     return sorted(infos, key=lambda info: info.name)

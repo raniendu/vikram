@@ -193,9 +193,7 @@ export function AgentEditor({ agentId, onBack }: Props) {
                     <div>
                       <div className="row">
                         <code>{tool.name}</code>
-                        {tool.requires_approval && (
-                          <span className="badge">needs approval</span>
-                        )}
+                        <ApprovalBadge tool={tool} />
                       </div>
                       <p className="muted small">{tool.description}</p>
                     </div>
@@ -276,6 +274,23 @@ export function AgentEditor({ agentId, onBack }: Props) {
       </div>
     </div>
   );
+}
+
+function ApprovalBadge({ tool }: { tool: ToolInfo }) {
+  // Falls back to the older boolean so a server that predates the
+  // three-valued field still shows the badge rather than silently dropping
+  // a security-relevant one.
+  const approval =
+    tool.approval ?? (tool.requires_approval ? "always" : "never");
+  if (approval === "always")
+    return <span className="badge">needs approval</span>;
+  if (approval === "policy")
+    return (
+      <span className="badge" title="Decided per call by the command policy">
+        approval by policy
+      </span>
+    );
+  return null;
 }
 
 function Fields({ children }: { children: React.ReactNode }) {

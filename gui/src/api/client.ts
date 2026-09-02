@@ -20,8 +20,24 @@ export interface SidecarError {
 
 let config: ApiConfig | null = null;
 
+function devConfigFromUrl(): ApiConfig | null {
+  // Dev builds only, so a shipped app can never be handed a token by URL.
+  if (!import.meta.env.DEV) return null;
+  const params = new URLSearchParams(window.location.search);
+  const base_url = params.get("api");
+  const token = params.get("token");
+  return base_url && token ? { base_url, token } : null;
+}
+
 export async function connect(): Promise<ApiConfig> {
   if (config) return config;
+  // Running in a plain browser rather than the Tauri shell: useful for
+  // frontend work, where Chrome devtools and hot reload beat the webview.
+  const fromUrl = devConfigFromUrl();
+  if (fromUrl) {
+    config = fromUrl;
+    return config;
+  }
   config = await invoke<ApiConfig>("api_config");
   return config;
 }
@@ -147,6 +163,8 @@ export interface ToolInfo {
   description: string;
   requires_approval: boolean;
   sequential: boolean;
+  /** Absent on servers predating the three-valued field. */
+  approval?: "always" | "policy" | "never";
 }
 
 export interface ProviderInfo {

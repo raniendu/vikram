@@ -433,3 +433,20 @@ def test_handshake_reports_the_bound_port_not_the_requested_one(monkeypatch, cap
     assert sockets[0].getsockname()[1] == handshake["port"]
     for sock in sockets:
         sock.close()
+
+
+def test_run_command_is_reported_as_policy_gated_not_ungated(client):
+    """Its docstring promises approval, so "never" would read as a bug.
+
+    run_command's Tool wrapper sets no requires_approval flag -- approval is
+    decided per call against the command policy -- so the catalog needs a
+    third value rather than forcing a yes/no.
+    """
+    rows = {t["name"]: t for t in client.get("/v1/tools", headers=AUTH).json()["tools"]}
+
+    assert rows["run_command"]["approval"] == "policy"
+    assert rows["write_file"]["approval"] == "always"
+    assert rows["read_file"]["approval"] == "never"
+    assert rows["delegate_to_agent"]["approval"] == "always"
+    # The old boolean stays truthful for anything that always needs approval.
+    assert rows["run_command"]["requires_approval"] is False

@@ -82,7 +82,10 @@ export function Playground() {
     if (event.type === "turn.finished") {
       setRunning(false);
       const byId = new Map<string, ColumnMetrics>(
-        (event.payload.columns ?? []).map((m: ColumnMetrics) => [m.column_id, m]),
+        (event.payload.columns ?? []).map((m: ColumnMetrics) => [
+          m.column_id,
+          m,
+        ]),
       );
       return setColumns((prev) =>
         prev.map((c) => ({
@@ -117,8 +120,9 @@ export function Playground() {
       <header className="screen-head">
         <h1>Playground</h1>
         <p className="muted">
-          One agent, one prompt, {columns.length} models side by side. Approval-gated
-          tools are disabled here so the columns cannot fight over the workspace.
+          One agent, one prompt, {columns.length} models side by side.
+          Approval-gated tools are disabled here so the columns cannot fight
+          over the workspace.
         </p>
       </header>
 
@@ -165,9 +169,7 @@ export function Playground() {
             {columns.length > 2 && (
               <button
                 className="link"
-                onClick={() =>
-                  setColumns(columns.filter((_, j) => j !== i))
-                }
+                onClick={() => setColumns(columns.filter((_, j) => j !== i))}
               >
                 ✕
               </button>
@@ -209,36 +211,38 @@ export function Playground() {
 
       {error && <p className="error">{error}</p>}
 
-      <div className="columns">
-        {columns.map((column, i) => (
-          <article key={i} className="column">
-            <header>
-              <code>{column.model || "—"}</code>
-              {column.metrics && (
-                <div className="metrics">
-                  <span title="time to first token">
-                    ttft {fmt(column.metrics.ttft_ms)}
-                  </span>
-                  <span title="total">{fmt(column.metrics.total_ms)}</span>
-                  <span title="tokens">
-                    {column.metrics.total_tokens ?? "?"} tok
-                  </span>
-                </div>
+      {(running || columns.some((c) => c.text || c.metrics)) && (
+        <div className="columns">
+          {columns.map((column, i) => (
+            <article key={i} className="column">
+              <header>
+                <code>{column.model || "—"}</code>
+                {column.metrics && (
+                  <div className="metrics">
+                    <span title="time to first token">
+                      ttft {fmt(column.metrics.ttft_ms)}
+                    </span>
+                    <span title="total">{fmt(column.metrics.total_ms)}</span>
+                    <span title="tokens">
+                      {column.metrics.total_tokens ?? "?"} tok
+                    </span>
+                  </div>
+                )}
+              </header>
+              {column.metrics?.error && (
+                <p className="error small">{column.metrics.error}</p>
               )}
-            </header>
-            {column.metrics?.error && (
-              <p className="error small">{column.metrics.error}</p>
-            )}
-            {column.thinking && (
-              <details>
-                <summary className="muted small">thinking</summary>
-                <pre className="muted small">{column.thinking}</pre>
-              </details>
-            )}
-            <div className="column-body">{column.text}</div>
-          </article>
-        ))}
-      </div>
+              {column.thinking && (
+                <details>
+                  <summary className="muted small">thinking</summary>
+                  <pre className="muted small">{column.thinking}</pre>
+                </details>
+              )}
+              <div className="column-body">{column.text}</div>
+            </article>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
