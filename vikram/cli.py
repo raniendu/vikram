@@ -1116,11 +1116,15 @@ def _context_percent(result: Any, settings: "VikramSettings" | None) -> int | No
     if settings is None:
         return None
     context_window = settings.context_window_tokens
-    usage_fn = getattr(result, "usage", None)
-    if context_window <= 0 or not callable(usage_fn):
+    if context_window <= 0:
         return None
     try:
-        usage = usage_fn()
+        # `usage` is a property in current pydantic-ai and was a method in
+        # earlier ones. Requiring a callable made this silently return None,
+        # which switched the prompt's context indicator off entirely.
+        usage = getattr(result, "usage", None)
+        if callable(usage):
+            usage = usage()
         input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
     except Exception:
         return None

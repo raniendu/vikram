@@ -18,9 +18,10 @@ import os
 import secrets
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from vikram import introspect
@@ -36,6 +37,7 @@ from vikram.hooks import HookSpec
 from vikram.logging import get_logger
 from vikram.mcp import MCPConfigError, MCPServerSpec, build_mcp_server
 from vikram.providers import PROVIDER_IDS, PROVIDERS
+from vikram.session import SessionError, SessionRegistry, sse_stream
 from vikram.settings import VikramSettings
 from vikram.spec import AgentSpecDraft
 from vikram.specstore import (
@@ -459,12 +461,148 @@ def read_doctor(
     return {"diagnostics": [asdict(item) for item in diagnostics]}
 
 
+# --- sessions ----------------------------------------------------------
+
+
+_registry = SessionRegistry()
+
+
+class SessionCreateRequest(BaseModel):
+    agent_id: str
+    workspace: str
+    approve_all: bool = False
+
+
+class PromptRequest(BaseModel):
+    prompt: str = Field(min_length=1)
+
+
+class ApprovalDecisionRequest(BaseModel):
+    decision: Literal["allow", "deny", "allow_always"]
+    tool_name: str | None = None
+
+
+class SessionFlagsRequest(BaseModel):
+    approve_all: bool
+
+
+def _session_info(session: Any) -> dict[str, Any]:
+    return {
+        "session_id": session.id,
+        "agent_id": session.agent_id,
+        "workspace": str(session.workspace),
+        "closed": session.closed,
+        **(session.ready.get("payload") or {}),
+    }
+
+
+def _session_or_404(session_id: str) -> Any:
+    try:
+        return _registry.get(session_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No session {session_id}.")
+
+
+@router.post("/sessions", status_code=201)
+async def post_session(request: SessionCreateRequest) -> dict[str, Any]:
+    """Open a session: spawns a worker, chdirs it, and warms its MCP servers."""
+    try:
+        session = await _registry.create(
+            agent_id=request.agent_id, workspace=Path(request.workspace)
+        )
+    except SessionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if request.approve_all:
+        await session.set_flags(approve_all=True)
+    return _session_info(session)
+
+
+@router.get("/sessions")
+async def read_sessions() -> dict[str, Any]:
+    return {"sessions": [_session_info(s) for s in _registry.list()]}
+
+
+@router.get("/sessions/{session_id}")
+async def read_session(session_id: str) -> dict[str, Any]:
+    return _session_info(_session_or_404(session_id))
+
+
+@router.patch("/sessions/{session_id}")
+async def patch_session(
+    session_id: str, request: SessionFlagsRequest
+) -> dict[str, Any]:
+    """Toggle approve-all live, without rebuilding the agent."""
+    session = _session_or_404(session_id)
+    await session.set_flags(approve_all=request.approve_all)
+    return _session_info(session)
+
+
+@router.delete("/sessions/{session_id}", status_code=204)
+async def delete_session(session_id: str) -> None:
+    _session_or_404(session_id)
+    await _registry.close(session_id)
+
+
+@router.post("/sessions/{session_id}/messages", status_code=202)
+async def post_message(session_id: str, request: PromptRequest) -> dict[str, str]:
+    """Start a turn. Returns immediately; output arrives on the event stream."""
+    session = _session_or_404(session_id)
+    try:
+        turn_id = await session.prompt(request.prompt)
+    except SessionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"turn_id": turn_id}
+
+
+@router.get("/sessions/{session_id}/events")
+async def read_session_events(session_id: str) -> StreamingResponse:
+    """One long-lived SSE stream per session.
+
+    Session-scoped rather than turn-scoped so an approval request can outlive
+    the HTTP call that triggered the turn.
+    """
+    session = _session_or_404(session_id)
+    return StreamingResponse(
+        sse_stream(session),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/sessions/{session_id}/approvals/{approval_id}", status_code=204)
+async def post_approval(
+    session_id: str, approval_id: str, request: ApprovalDecisionRequest
+) -> None:
+    session = _session_or_404(session_id)
+    try:
+        await session.approve(
+            approval_id, request.decision, tool_name=request.tool_name
+        )
+    except SessionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/sessions/{session_id}/cancel", status_code=204)
+async def post_cancel(session_id: str) -> None:
+    session = _session_or_404(session_id)
+    try:
+        await session.cancel()
+    except SessionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+async def shutdown_sessions() -> None:
+    """Reap every worker. Wired to the app's lifespan."""
+    await _registry.close_all()
+
+
 __all__ = [
     "DEFAULT_ALLOWED_ORIGINS",
     "GUI_ENABLED_ENV",
     "GUI_ORIGINS_ENV",
     "GUI_TOKEN_ENV",
     "allowed_origins",
+    "shutdown_sessions",
     "generate_token",
     "gui_enabled",
     "require_token",

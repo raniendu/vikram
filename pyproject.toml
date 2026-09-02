@@ -34,6 +34,7 @@ build-backend = "hatchling.build"
 vikram = "vikram.cli:main"
 vikram-api = "vikram.api:run"
 vikram-acp = "vikram.acp:main"
+vikram-session = "vikram.session_worker:main"
 
 [tool.black]
 line-length = 88

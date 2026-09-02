@@ -1121,3 +1121,34 @@ def test_cli_json_output_is_not_polluted_by_logs(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert json.loads(captured.out) == {"agent": "Vikram", "output": "reply: ping"}
     assert calls == ["ping"]
+
+
+def test_context_percent_reads_usage_as_a_property():
+    """pydantic-ai exposes `usage` as a property.
+
+    Requiring a callable made this return None for every result, silently
+    switching the prompt's context indicator off.
+    """
+    from types import SimpleNamespace
+
+    from pydantic_ai.usage import RunUsage
+
+    from vikram.cli import _context_percent
+
+    settings = SimpleNamespace(context_window_tokens=1000)
+    result = SimpleNamespace(usage=RunUsage(input_tokens=250, output_tokens=10))
+
+    assert _context_percent(result, settings) == 25
+
+
+def test_context_percent_still_accepts_usage_as_a_method():
+    from types import SimpleNamespace
+
+    from pydantic_ai.usage import RunUsage
+
+    from vikram.cli import _context_percent
+
+    settings = SimpleNamespace(context_window_tokens=1000)
+    result = SimpleNamespace(usage=lambda: RunUsage(input_tokens=500))
+
+    assert _context_percent(result, settings) == 50

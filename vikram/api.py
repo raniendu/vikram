@@ -147,6 +147,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         logger.info("api_stopping")
+        # Reap any session workers before the loop closes; each kills its own
+        # process group, so run_command children and MCP servers go with it.
+        from vikram.api_gui import shutdown_sessions
+
+        await shutdown_sessions()
         _agents.clear()
         global _store, _dispatcher, _telegram_config
         _store = None

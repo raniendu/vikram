@@ -149,34 +149,53 @@ async def test_stream_event_reports_all_concurrent_tool_results():
     ]
 
 
-async def test_hitl_prompt_permission_maps_allow_and_deny():
+async def test_permission_request_maps_allow_and_deny():
+    """The runtime's tool_call_id is forwarded, so the editor can correlate.
+
+    Previously ACP minted a fresh id here and regex-parsed the tool name out of
+    an English sentence; approvals now arrive structured.
+    """
+    from vikram.agent import ApprovalRequest
+
     agent = _make_agent()
     agent._client = FakeClient(permission_outcomes={"c1": "allow", "c2": "reject"})
-    ids = iter(["c1", "c2"])
 
-    import vikram.acp as acp_module
-
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(
-        acp_module.uuid, "uuid4", lambda: SimpleNamespace(hex=next(ids))
+    allowed = await agent._request_permission(
+        "s1",
+        ApprovalRequest(
+            tool_name="write_file",
+            tool_call_id="c1",
+            args={"path": "a.py", "content": "x"},
+        ),
     )
-    try:
-        allowed = await agent._request_permission_from_hitl_prompt(
-            "s1",
-            'Tool "write_file" requires human approval. Input: {"path": "a.py", "content": "x"}',
-        )
-        denied = await agent._request_permission_from_hitl_prompt(
-            "s1",
-            'Tool "run_command" requires human approval. Input: {"command": "ls"}',
-        )
-    finally:
-        monkeypatch.undo()
+    denied = await agent._request_permission(
+        "s1",
+        ApprovalRequest(
+            tool_name="run_command", tool_call_id="c2", args={"command": "ls"}
+        ),
+    )
 
     assert allowed == "yes"
     assert denied == "no"
-    # Both approval prompts were forwarded to the editor with the edit/execute kind.
     forwarded = {tc.tool_call_id: tc.kind for tc in agent._client.permission_requests}
     assert forwarded == {"c1": "edit", "c2": "execute"}
+
+
+async def test_permission_request_forwards_the_raw_input():
+    """A GUI or editor needs typed args to render a diff or a command box."""
+    from vikram.agent import ApprovalRequest
+
+    agent = _make_agent()
+    agent._client = FakeClient(permission_outcomes={"c9": "allow"})
+
+    await agent._request_permission(
+        "s1",
+        ApprovalRequest(
+            tool_name="write_file", tool_call_id="c9", args={"path": "a.py"}
+        ),
+    )
+
+    assert agent._client.permission_requests[0].raw_input == {"path": "a.py"}
 
 
 def test_parser_defaults_to_coder():

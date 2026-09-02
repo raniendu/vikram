@@ -17,7 +17,6 @@ import argparse
 import asyncio
 import json
 import os
-import re
 import sys
 import time
 import uuid
@@ -168,7 +167,7 @@ class VikramAcpAgent(acp.Agent):
         mcp_servers: Any | None = None,
         **_: Any,
     ) -> acp.NewSessionResponse:
-        from vikram.agent import build_agent
+        from vikram.agent import ApprovalRequest, build_agent
         from vikram.specstore import load_agent
 
         # The coder tools resolve paths against the process cwd (see
@@ -180,14 +179,14 @@ class VikramAcpAgent(acp.Agent):
         session_id = uuid.uuid4().hex
         spec = load_agent(self._agent_name, self._settings)
 
-        async def approval_ask(prompt: str) -> str:
-            return await self._request_permission_from_hitl_prompt(session_id, prompt)
+        async def approval_request(request: ApprovalRequest) -> str:
+            return await self._request_permission(session_id, request)
 
         agent = build_agent(
             spec=spec,
             settings=self._settings,
             surface="acp",
-            approval_ask=approval_ask,
+            approval_request=approval_request,
         )
         self._sessions[session_id] = _Session(agent=agent, cwd=cwd or os.getcwd())
         logger.info(
@@ -307,10 +306,10 @@ class VikramAcpAgent(acp.Agent):
                 ),
             )
 
-    async def _request_permission_from_hitl_prompt(
-        self, session_id: str, prompt: str
+    async def _request_permission(
+        self, session_id: str, request: ApprovalRequest
     ) -> str:
-        tool_name, raw_input = _parse_hitl_prompt(prompt)
+        tool_name, raw_input = request.tool_name, request.args
         options = [
             acp.schema.PermissionOption(
                 option_id="allow", name="Allow", kind="allow_once"
@@ -320,7 +319,7 @@ class VikramAcpAgent(acp.Agent):
             ),
         ]
         tool_call = acp.schema.ToolCallUpdate(
-            tool_call_id=uuid.uuid4().hex,
+            tool_call_id=request.tool_call_id,
             title=_render_call({"name": tool_name, "input": raw_input}),
             kind=_tool_kind(tool_name),
             status="pending",
@@ -353,23 +352,6 @@ class VikramAcpAgent(acp.Agent):
             if isinstance(text, str):
                 parts.append(text)
         return "\n".join(parts)
-
-
-_HITL_PROMPT = re.compile(
-    r'^Tool "(?P<name>[^"]+)" requires human approval\. Input: (?P<input>.*)$'
-)
-
-
-def _parse_hitl_prompt(prompt: str) -> tuple[str, Any]:
-    match = _HITL_PROMPT.match(prompt.strip())
-    if match is None:
-        return "?", {"prompt": prompt}
-    raw_input = match.group("input")
-    try:
-        parsed_input = json.loads(raw_input)
-    except json.JSONDecodeError:
-        parsed_input = {"input": raw_input}
-    return match.group("name"), parsed_input
 
 
 def build_parser() -> argparse.ArgumentParser:
