@@ -20,6 +20,10 @@ from pathlib import Path
 
 API_BIN_ENV = "VIKRAM_API_BIN"
 APP_ENV = "VIKRAM_GUI_APP"
+# The shell that ran `vikram gui` is standing in a folder, and that folder
+# is almost always the one the first session wants. Passing it through
+# turns the first run from "open a dialog and navigate" into "press Start".
+LAUNCH_DIR_ENV = "VIKRAM_LAUNCH_DIR"
 
 BUNDLE_NAME = "Vikram Studio"
 
@@ -216,7 +220,7 @@ def run(argv: Sequence[str] | None = None) -> int:
         )
         return 1
 
-    env = {**os.environ, API_BIN_ENV: str(api_binary)}
+    env = {**os.environ, API_BIN_ENV: str(api_binary), LAUNCH_DIR_ENV: os.getcwd()}
 
     if args.dev:
         gui_dir = repo_gui_dir()
@@ -269,6 +273,7 @@ def run(argv: Sequence[str] | None = None) -> int:
 
 
 __all__ = [
+    "LAUNCH_DIR_ENV",
     "build_bundle",
     "bundle_build_output",
     "studio_log_path",

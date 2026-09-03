@@ -313,3 +313,28 @@ def test_build_flag_does_not_require_the_api(monkeypatch):
     monkeypatch.setattr(gui, "build_bundle", lambda: 0)
 
     assert gui.run(["--build"]) == 0
+
+
+def test_launch_dir_is_handed_to_the_app(monkeypatch, tmp_path):
+    """The folder you were standing in is the one the first session wants."""
+    binary = tmp_path / "vikram-api"
+    binary.write_text("#!/bin/sh\n")
+    bundle = tmp_path / "Vikram Studio.app"
+    executable = bundle / "Contents" / "MacOS" / "vikram-studio"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\n")
+    executable.chmod(0o755)
+
+    workspace = tmp_path / "some-repo"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(gui, "find_api_binary", lambda: binary)
+    monkeypatch.setattr(gui, "find_bundle", lambda: bundle)
+    monkeypatch.setenv("VIKRAM_STATE_DIR", str(tmp_path / "state"))
+    launched: dict = {}
+    monkeypatch.setattr(
+        gui.subprocess, "Popen", lambda cmd, **kw: launched.update(env=kw["env"])
+    )
+
+    assert gui.run([]) == 0
+    assert launched["env"][gui.LAUNCH_DIR_ENV] == str(workspace)
