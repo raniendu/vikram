@@ -160,8 +160,8 @@ skills; run them against a workspace with native approval dialogs; and compare
 one agent across 2-4 models side by side. See [docs/desktop_app.md](docs/desktop_app.md)
 for install and build steps.
 
-The checked-in `coder` spec defaults to local Ollama with `ornith:35b`,
-which is an MLX text-only model suited to Apple silicon. The `vikram`
+The checked-in `coder` spec defaults to local Ollama with `qwen3.6:35b-mlx`,
+which is an MLX mixture-of-experts model suited to Apple silicon. The `vikram`
 orchestrator defaults to local Ollama with `gemma4:26b-a4b-it-qat`. These
 spec pins hold even when your config sets a different global default; switch
 an agent's model with `/model` (saved for next time) or override one run with
