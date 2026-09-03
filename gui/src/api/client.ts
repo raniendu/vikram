@@ -10,6 +10,8 @@ import { invoke } from "@tauri-apps/api/core";
 export interface ApiConfig {
   base_url: string;
   token: string;
+  /** Directory `vikram gui` was launched from; null for a Finder launch. */
+  launch_dir: string | null;
 }
 
 export interface SidecarError {
@@ -26,7 +28,7 @@ function devConfigFromUrl(): ApiConfig | null {
   const params = new URLSearchParams(window.location.search);
   const base_url = params.get("api");
   const token = params.get("token");
-  return base_url && token ? { base_url, token } : null;
+  return base_url && token ? { base_url, token, launch_dir: null } : null;
 }
 
 export async function connect(): Promise<ApiConfig> {
