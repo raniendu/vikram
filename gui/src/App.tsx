@@ -11,6 +11,7 @@ import { AgentEditor } from "./screens/AgentEditor";
 import { AgentList } from "./screens/AgentList";
 import { Chat } from "./screens/Chat";
 import { Doctor } from "./screens/Doctor";
+import { NewAgent } from "./screens/NewAgent";
 import { NewSession } from "./screens/NewSession";
 import { Playground } from "./screens/Playground";
 import { Settings } from "./screens/Settings";
@@ -22,7 +23,8 @@ type Pane =
   | { kind: "view"; view: View }
   | { kind: "session"; sessionId: string }
   | { kind: "new"; agent: AgentSummary | null }
-  | { kind: "edit"; agentId: string };
+  | { kind: "edit"; agentId: string }
+  | { kind: "create" };
 
 export function App() {
   const [ready, setReady] = useState(false);
@@ -114,6 +116,7 @@ export function App() {
         <AgentList
           onChat={(agent) => setPane({ kind: "new", agent })}
           onEdit={(agentId) => setPane({ kind: "edit", agentId })}
+          onCreate={() => setPane({ kind: "create" })}
         />
       )}
       {pane.kind === "view" && pane.view === "playground" && <Playground />}
@@ -145,6 +148,13 @@ export function App() {
 
       {pane.kind === "edit" && (
         <AgentEditor agentId={pane.agentId} />
+      )}
+
+      {pane.kind === "create" && (
+        <NewAgent
+          onCancel={() => setPane({ kind: "view", view: "agents" })}
+          onCreated={(agentId) => setPane({ kind: "edit", agentId })}
+        />
       )}
     </main>
   );

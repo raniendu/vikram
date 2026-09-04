@@ -9,6 +9,7 @@ import {
   startComparison,
 } from "../api/client";
 import { StreamEvent, streamSession } from "../api/events";
+import { ModelPicker } from "../components/ModelPicker";
 
 const MAX = 4;
 
@@ -163,11 +164,14 @@ export function Playground() {
                 </option>
               ))}
             </select>
-            <input
-              value={column.model}
-              placeholder="model name"
-              onChange={(e) => patch(i, { model: e.target.value })}
-            />
+            <div style={{ width: 220 }}>
+              <ModelPicker
+                provider={column.provider}
+                value={column.model}
+                onChange={(model) => patch(i, { model })}
+                placeholder="Choose a model…"
+              />
+            </div>
             {columns.length > 2 && (
               <button
                 className="btn quiet"

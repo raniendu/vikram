@@ -5,6 +5,7 @@ import { Eyebrow, Rule } from "../components/primitives";
 interface Props {
   onChat: (agent: AgentSummary) => void;
   onEdit: (agentId: string) => void;
+  onCreate: () => void;
 }
 
 type Filter = "all" | "builtin" | "user";
@@ -15,7 +16,7 @@ const FILTERS: [Filter, string][] = [
   ["user", "Yours"],
 ];
 
-export function AgentList({ onChat, onEdit }: Props) {
+export function AgentList({ onChat, onEdit, onCreate }: Props) {
   const [agents, setAgents] = useState<AgentSummary[] | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +42,9 @@ export function AgentList({ onChat, onEdit }: Props) {
             copy separate.
           </p>
         </div>
+        <button className="btn" onClick={onCreate}>
+          New agent
+        </button>
       </div>
 
       <div className="rule" />

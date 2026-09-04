@@ -6,7 +6,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from vikram import api, api_gui
+from vikram import api, api_gui, model_catalog
 from vikram.api_gui import GUI_ENABLED_ENV, GUI_TOKEN_ENV
 from vikram.settings import VikramSettings
 
@@ -450,3 +450,172 @@ def test_run_command_is_reported_as_policy_gated_not_ungated(client):
     assert rows["delegate_to_agent"]["approval"] == "always"
     # The old boolean stays truthful for anything that always needs approval.
     assert rows["run_command"]["requires_approval"] is False
+
+
+# --- model listing -----------------------------------------------------
+#
+# The editor used to make you type a model name from memory. These cover the
+# states the field has to survive, because every one of them still has to
+# leave a usable free-text fallback rather than a dead end.
+
+
+def test_model_listing_returns_ollama_tags_with_sizes(client, monkeypatch):
+    def fake_get(url, headers=None, timeout=None):
+        assert url == "http://localhost:11434/api/tags"
+        return _Response(
+            {
+                "models": [
+                    {
+                        "model": "ornith:35b",
+                        "size": 20_000_000_000,
+                        "details": {"parameter_size": "35B"},
+                    },
+                    {"model": "llama3.2", "size": 2_000_000_000, "details": {}},
+                ]
+            }
+        )
+
+    monkeypatch.setattr(model_catalog.httpx, "get", fake_get)
+    model_catalog.clear_cache()
+
+    payload = client.get("/v1/providers/ollama/models", headers=AUTH).json()
+
+    assert payload["ok"] is True
+    assert [m["id"] for m in payload["models"]] == ["llama3.2", "ornith:35b"]
+    assert payload["models"][1]["meta"] == "35B · 20.0 GB"
+
+
+def test_model_listing_reports_an_unreachable_daemon_without_failing(
+    client, monkeypatch
+):
+    """A dead daemon is a state the field renders, not a failed request."""
+
+    def boom(url, headers=None, timeout=None):
+        raise model_catalog.httpx.ConnectError("refused")
+
+    monkeypatch.setattr(model_catalog.httpx, "get", boom)
+    model_catalog.clear_cache()
+
+    response = client.get("/v1/providers/ollama/models", headers=AUTH)
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is False
+    assert "localhost:11434" in response.json()["error"]
+
+
+def test_model_listing_without_a_key_says_so_and_is_not_cached(client, monkeypatch):
+    monkeypatch.setattr(
+        model_catalog.httpx, "get", lambda *a, **k: pytest.fail("should not fetch")
+    )
+    model_catalog.clear_cache()
+
+    payload = client.get("/v1/providers/anthropic/models", headers=AUTH).json()
+
+    assert payload["ok"] is False
+    assert payload["enumerable"] is True
+    assert "API key" in payload["error"]
+    assert "anthropic" not in model_catalog._cache
+
+
+def test_custom_endpoints_are_reported_as_not_enumerable(client):
+    payload = client.get("/v1/providers/openai-compatible/models", headers=AUTH).json()
+
+    assert payload["ok"] is False
+    assert payload["enumerable"] is False
+
+
+def test_model_listing_never_returns_key_material(client, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
+    monkeypatch.setattr(api_gui, "_settings", VikramSettings(_env_file=None))
+
+    def fake_get(url, headers=None, timeout=None):
+        assert headers["x-api-key"] == "sk-ant-secret"
+        return _Response({"data": [{"id": "claude-sonnet-5"}]})
+
+    monkeypatch.setattr(model_catalog.httpx, "get", fake_get)
+    model_catalog.clear_cache()
+
+    body = client.get("/v1/providers/anthropic/models", headers=AUTH).text
+
+    assert "sk-ant-secret" not in body
+    assert "claude-sonnet-5" in body
+
+
+def test_unknown_provider_models_is_not_enumerable(client):
+    payload = client.get("/v1/providers/nope/models", headers=AUTH).json()
+
+    assert payload["ok"] is False
+    assert payload["enumerable"] is False
+
+
+# --- TOML round trip ---------------------------------------------------
+#
+# The create screen's two tabs are one draft. They stay one draft only if the
+# server owns both directions.
+
+
+def test_toml_round_trip_preserves_the_draft(client):
+    draft = {
+        "name": "Helper",
+        "description": "d",
+        "system_prompt": "system_prompt.md",
+        "tools": ["read_file", "glob"],
+        "model_provider": "ollama",
+        "model": "ornith:35b",
+    }
+
+    rendered = client.post(
+        "/v1/agents/render-toml", headers=AUTH, json={"draft": draft}
+    ).json()["toml"]
+    assert 'model = "ornith:35b"' in rendered
+
+    parsed = client.post(
+        "/v1/agents/parse-toml", headers=AUTH, json={"toml": rendered}
+    ).json()["draft"]
+
+    assert parsed["name"] == "Helper"
+    assert parsed["tools"] == ["read_file", "glob"]
+    assert parsed["model"] == "ornith:35b"
+
+
+def test_render_toml_keeps_comments_from_the_existing_file(client):
+    existing = '# why this agent exists\nname = "Old"\ndescription = "d"\n'
+    draft = {"name": "New", "description": "d", "system_prompt": "p.md"}
+
+    rendered = client.post(
+        "/v1/agents/render-toml",
+        headers=AUTH,
+        json={"draft": draft, "existing": existing},
+    ).json()["toml"]
+
+    assert "# why this agent exists" in rendered
+    assert 'name = "New"' in rendered
+
+
+def test_parse_toml_rejects_broken_text(client):
+    response = client.post(
+        "/v1/agents/parse-toml", headers=AUTH, json={"toml": "name = "}
+    )
+
+    assert response.status_code == 400
+
+
+def test_parse_toml_rejects_a_valid_file_that_is_not_a_spec(client):
+    response = client.post(
+        "/v1/agents/parse-toml", headers=AUTH, json={"toml": 'unrelated = "x"\n'}
+    )
+
+    assert response.status_code == 422
+
+
+class _Response:
+    """The slice of httpx.Response these fetchers touch."""
+
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return self._payload
