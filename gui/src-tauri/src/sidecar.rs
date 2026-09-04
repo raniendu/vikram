@@ -38,6 +38,11 @@ const SYSTEM_PROBE_DIRS: &[&str] = &[
 pub struct ApiConfig {
     pub base_url: String,
     pub token: String,
+    /// The directory `vikram gui` was launched from, when it was launched that
+    /// way. The frontend uses it as the default workspace on a first run, so
+    /// the folder picker stops being a mandatory first step. Absent for a
+    /// Finder launch, where the cwd is `/` and means nothing.
+    pub launch_dir: Option<String>,
 }
 
 #[derive(Default)]
@@ -176,11 +181,23 @@ pub async fn spawn(app: &AppHandle) -> Result<ApiConfig, SidecarError> {
     let config = ApiConfig {
         base_url: format!("http://127.0.0.1:{port}"),
         token,
+        launch_dir: launch_dir(),
     };
     let state = app.state::<SidecarState>();
     *state.config.lock().unwrap() = Some(config.clone());
     *state.child.lock().unwrap() = Some(child);
     Ok(config)
+}
+
+/// A Finder-launched app inherits `/` as its cwd, which is not a workspace
+/// anyone means. Only a directory the launcher explicitly named counts.
+fn launch_dir() -> Option<String> {
+    let raw = std::env::var("VIKRAM_LAUNCH_DIR").ok()?;
+    let path = std::path::Path::new(&raw);
+    if raw.is_empty() || path.parent().is_none() || !path.is_dir() {
+        return None;
+    }
+    Some(raw)
 }
 
 fn parse_ready(line: &str) -> Option<u16> {

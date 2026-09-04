@@ -355,6 +355,35 @@ pre.source {
 
 .path { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* ---- folder choices on New session ------------------------------- */
+/* Hairline rows, same as every other list here — the picker is one more
+   option among them rather than the gate in front of them. */
+
+.folders { max-width: 66ch; margin-top: 16px; }
+.folders-head {
+  display: flex; align-items: baseline; gap: 8px;
+  padding-bottom: 4px; border-bottom: 1px solid var(--fg);
+}
+.link-quiet { color: var(--muted); }
+.link-quiet:hover { color: var(--accent); }
+
+.folder-row {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; height: 28px; padding: 0 8px; margin: 0 -8px;
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+}
+.folder-row:hover { background: var(--card); }
+.folder-row.active { color: var(--fg); }
+.folder-row .mark {
+  width: 4px; height: 4px; border-radius: 999px;
+  background: transparent; flex-shrink: 0;
+}
+.folder-row.active .mark { background: var(--accent); }
+.folder-row .folder-name { font-size: 13px; text-align: left; }
+.folder-row .path { max-width: 58%; text-align: right; }
+
 /* ---- one-page form ------------------------------------------------ */
 
 /* Sections are separated by the full-ink rule the Playground columns use,

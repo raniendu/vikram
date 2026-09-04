@@ -97,7 +97,7 @@ def test_run_reports_a_missing_bundle_with_build_instructions(
 
     assert gui.run([]) == 1
     err = capsys.readouterr().err
-    assert "npm run tauri build" in err
+    assert "vikram gui --build" in err
     assert "--dev" in err
 
 
@@ -234,3 +234,107 @@ def test_an_installed_bundle_wins_over_the_checkout_build(monkeypatch, tmp_path)
     monkeypatch.setenv("HOME", str(home))
 
     assert gui.find_bundle() == installed
+
+
+# --- building -----------------------------------------------------------
+#
+# `find_bundle` prefers ~/Applications over the checkout's build output, so a
+# build that stops at the checkout leaves the stale app winning the lookup.
+
+
+def test_build_refuses_without_the_toolchain(monkeypatch, capsys):
+    monkeypatch.setattr(gui.shutil, "which", lambda _: None)
+
+    assert gui.build_bundle() == 1
+    err = capsys.readouterr().err
+    assert "npm" in err and "cargo" in err
+
+
+def test_build_names_only_the_tool_that_is_missing(monkeypatch, capsys):
+    monkeypatch.setattr(
+        gui.shutil, "which", lambda name: None if name == "cargo" else "/x"
+    )
+
+    assert gui.build_bundle() == 1
+    err = capsys.readouterr().err
+    assert "cargo" in err and "npm," not in err
+
+
+def test_build_installs_over_a_stale_bundle(monkeypatch, tmp_path):
+    gui_dir = tmp_path / "gui"
+    gui_dir.mkdir()
+    (gui_dir / "package.json").write_text("{}")
+    built = gui_dir / "out" / "Vikram Studio.app"
+    (built / "Contents").mkdir(parents=True)
+    (built / "Contents" / "fresh").write_text("new")
+
+    installed = tmp_path / "Applications"
+    stale = installed / "Vikram Studio.app"
+    stale.mkdir(parents=True)
+    (stale / "stale-marker").write_text("old")
+
+    monkeypatch.setattr(gui.shutil, "which", lambda _: "/usr/bin/x")
+    monkeypatch.setattr(gui, "repo_gui_dir", lambda: gui_dir)
+    monkeypatch.setattr(gui, "bundle_build_output", lambda: built)
+    monkeypatch.setattr(gui, "INSTALL_DIR", installed)
+
+    class _Done:
+        returncode = 0
+
+    monkeypatch.setattr(gui.subprocess, "run", lambda cmd, **kw: _Done())
+
+    assert gui.build_bundle() == 0
+    assert (stale / "Contents" / "fresh").read_text() == "new"
+    assert not (stale / "stale-marker").exists()
+
+
+def test_build_stops_when_npm_install_fails(monkeypatch, tmp_path):
+    gui_dir = tmp_path / "gui"
+    gui_dir.mkdir()
+    (gui_dir / "package.json").write_text("{}")
+    monkeypatch.setattr(gui.shutil, "which", lambda _: "/usr/bin/x")
+    monkeypatch.setattr(gui, "repo_gui_dir", lambda: gui_dir)
+    calls: list = []
+
+    class _Failed:
+        returncode = 3
+
+    monkeypatch.setattr(
+        gui.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or _Failed()
+    )
+
+    assert gui.build_bundle() == 3
+    assert calls == [["npm", "install"]]  # never reached `tauri build`
+
+
+def test_build_flag_does_not_require_the_api(monkeypatch):
+    """Building is a source operation; a missing vikram-api is irrelevant."""
+    monkeypatch.setattr(gui, "find_api_binary", lambda: None)
+    monkeypatch.setattr(gui, "build_bundle", lambda: 0)
+
+    assert gui.run(["--build"]) == 0
+
+
+def test_launch_dir_is_handed_to_the_app(monkeypatch, tmp_path):
+    """The folder you were standing in is the one the first session wants."""
+    binary = tmp_path / "vikram-api"
+    binary.write_text("#!/bin/sh\n")
+    bundle = tmp_path / "Vikram Studio.app"
+    executable = bundle / "Contents" / "MacOS" / "vikram-studio"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\n")
+    executable.chmod(0o755)
+
+    workspace = tmp_path / "some-repo"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(gui, "find_api_binary", lambda: binary)
+    monkeypatch.setattr(gui, "find_bundle", lambda: bundle)
+    monkeypatch.setenv("VIKRAM_STATE_DIR", str(tmp_path / "state"))
+    launched: dict = {}
+    monkeypatch.setattr(
+        gui.subprocess, "Popen", lambda cmd, **kw: launched.update(env=kw["env"])
+    )
+
+    assert gui.run([]) == 0
+    assert launched["env"][gui.LAUNCH_DIR_ENV] == str(workspace)

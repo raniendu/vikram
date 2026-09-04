@@ -186,6 +186,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Emit a JSON status object instead of human-readable text.",
     )
+    parser.add_argument(
+        "--no-gui",
+        action="store_true",
+        help="Skip rebuilding the Vikram Studio desktop app.",
+    )
     return parser
 
 
@@ -194,6 +199,37 @@ def _emit(text: str, *, json_mode: bool, payload: dict[str, Any]) -> None:
         print(json.dumps(payload))
     else:
         print(text)
+
+
+def _refresh_desktop_app(*, json_mode: bool, skip: bool) -> None:
+    """Rebuild Vikram Studio, but only for someone who already has it.
+
+    ``find_bundle`` prefers ~/Applications over the checkout's build output, so
+    leaving the old bundle in place after an update means the stale app keeps
+    being the one that launches. Rebuilding is therefore the correct default --
+    but only when a bundle is already installed: a CLI-only install has no
+    reason to be handed a multi-minute Rust build it never asked for.
+    """
+    if skip:
+        return
+    from vikram import gui
+
+    if gui.find_bundle() is None:
+        return
+    missing = gui.missing_build_tools()
+    if missing:
+        if not json_mode:
+            print(
+                f"Vikram Studio left as-is ({', '.join(missing)} not on PATH); "
+                "the app is now older than the CLI.",
+                file=sys.stderr,
+            )
+        return
+    if gui.build_bundle() != 0 and not json_mode:
+        print(
+            "Vikram Studio failed to rebuild; the CLI was still updated.",
+            file=sys.stderr,
+        )
 
 
 def run(argv: Sequence[str] | None = None) -> int:
@@ -342,6 +378,8 @@ def run(argv: Sequence[str] | None = None) -> int:
                 "git_sha": new_sha,
             }
         )
+
+        _refresh_desktop_app(json_mode=args.json, skip=args.no_gui)
 
         if source_is_current and installed_is_stale:
             _emit(

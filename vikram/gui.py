@@ -20,6 +20,10 @@ from pathlib import Path
 
 API_BIN_ENV = "VIKRAM_API_BIN"
 APP_ENV = "VIKRAM_GUI_APP"
+# The shell that ran `vikram gui` is standing in a folder, and that folder
+# is almost always the one the first session wants. Passing it through
+# turns the first run from "open a dialog and navigate" into "press Start".
+LAUNCH_DIR_ENV = "VIKRAM_LAUNCH_DIR"
 
 BUNDLE_NAME = "Vikram Studio"
 
@@ -90,6 +94,66 @@ def find_bundle() -> Path | None:
     return built if built.exists() else None
 
 
+INSTALL_DIR = Path("~/Applications").expanduser()
+
+# Building needs the Tauri toolchain, which a CLI-only install has no reason
+# to carry. Both are checked up front so the failure names what is missing
+# rather than surfacing as an npm error 40 lines in.
+BUILD_TOOLS = ("npm", "cargo")
+
+
+def missing_build_tools() -> list[str]:
+    return [tool for tool in BUILD_TOOLS if shutil.which(tool) is None]
+
+
+def build_bundle(*, install: bool = True) -> int:
+    """Build the app from the checkout, and put it where `find_bundle` looks.
+
+    Installing into ~/Applications is not tidiness: `find_bundle` checks it
+    ahead of the checkout's build output, so a stale copy there would keep
+    winning over whatever was just built.
+    """
+    missing = missing_build_tools()
+    if missing:
+        print(
+            f"Cannot build Vikram Studio: {', '.join(missing)} not on PATH.\n"
+            "  npm:   https://nodejs.org\n"
+            "  cargo: https://rustup.rs",
+            file=sys.stderr,
+        )
+        return 1
+
+    gui_dir = repo_gui_dir()
+    if not (gui_dir / "package.json").is_file():
+        print(f"No GUI sources at {gui_dir}.", file=sys.stderr)
+        return 1
+
+    print(f"Building Vikram Studio from {gui_dir}…", file=sys.stderr)
+    for command in (["npm", "install"], ["npm", "run", "tauri", "build"]):
+        result = subprocess.run(command, cwd=gui_dir)
+        if result.returncode != 0:
+            print(f"`{' '.join(command)}` failed.", file=sys.stderr)
+            return result.returncode
+
+    built = bundle_build_output()
+    if not built.exists():
+        print(f"Build reported success but {built} is missing.", file=sys.stderr)
+        return 1
+    if not install:
+        print(f"Built {built}")
+        return 0
+
+    target = INSTALL_DIR / built.name
+    INSTALL_DIR.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        shutil.rmtree(target)
+    # symlinks=True: a macOS bundle's Frameworks are symlinked, and resolving
+    # them would both bloat the copy and break code signing later.
+    shutil.copytree(built, target, symlinks=True)
+    print(f"Installed {target}")
+    return 0
+
+
 def repo_gui_dir() -> Path:
     """The ``gui/`` sources, from a checkout or from the recorded install.
 
@@ -136,7 +200,16 @@ def run(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Run from the checkout with hot reload (needs npm).",
     )
+    parser.add_argument(
+        "--build",
+        action="store_true",
+        help="Rebuild the app from source and install it to ~/Applications.",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
+
+    # Building needs no running API, so this returns before that check.
+    if args.build:
+        return build_bundle()
 
     api_binary = find_api_binary()
     if api_binary is None:
@@ -147,7 +220,7 @@ def run(argv: Sequence[str] | None = None) -> int:
         )
         return 1
 
-    env = {**os.environ, API_BIN_ENV: str(api_binary)}
+    env = {**os.environ, API_BIN_ENV: str(api_binary), LAUNCH_DIR_ENV: os.getcwd()}
 
     if args.dev:
         gui_dir = repo_gui_dir()
@@ -166,7 +239,7 @@ def run(argv: Sequence[str] | None = None) -> int:
         print(
             "Vikram Studio is not built yet.\n"
             "\n"
-            "  Build it:      cd gui && npm install && npm run tauri build\n"
+            "  Build it:      vikram gui --build\n"
             "  Or run live:   vikram gui --dev\n"
             "\n"
             f"Looked in: {', '.join(BUNDLE_CANDIDATES)}, "
@@ -200,10 +273,13 @@ def run(argv: Sequence[str] | None = None) -> int:
 
 
 __all__ = [
+    "LAUNCH_DIR_ENV",
+    "build_bundle",
     "bundle_build_output",
     "studio_log_path",
     "find_api_binary",
     "find_bundle",
+    "missing_build_tools",
     "repo_gui_dir",
     "run",
 ]
