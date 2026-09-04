@@ -57,7 +57,8 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 | Screen | What it does |
 |---|---|
-| **Agents** | Every agent from both roots. Built-ins are read-only; editing one copies it to your own root first. |
+| **Agents** | Every agent from both roots. Built-ins are read-only; editing one copies it to your own root first. **New agent** opens the create screen. |
+| **New agent** | One page rather than a section rail: identity, model, system prompt, tools, MCP servers under a bar that does not scroll. A **TOML** tab holds the same draft as text -- the server renders and parses it, so the two tabs cannot drift. Nothing is written until Create. |
 | **Editor** | Identity, system prompt, tool picker with approval badges, model and `model_settings`, MCP servers with a Test button, raw TOML. Validate dry-runs the spec and shows the assembled prompt. |
 | **Chat** | Pick a workspace folder, run the agent, answer approvals in a native dialog. |
 | **Playground** | One agent, one prompt, 2–4 models side by side with time-to-first-token, total time and token counts. |
@@ -78,6 +79,28 @@ and delegation from the orchestrator.
 
 Comments survive edits: the writer round-trips the file with tomlkit rather
 than re-emitting it.
+
+## Choosing a model
+
+The editor, the create screen and the Playground all list models from the
+provider rather than asking you to type a name from memory:
+`GET /v1/providers/<id>/models`, cached for a minute and refetched whenever the
+provider changes.
+
+| Provider | Listed from |
+|---|---|
+| `ollama`, `ollama-cloud` | `/api/tags`, the one source that also reports a size |
+| `anthropic` | `api.anthropic.com/v1/models` |
+| `gemini` | the Generative Language API, filtered to models that support `generateContent` |
+| `openai`, `digitalocean` | the OpenAI-shaped `/v1/models` |
+| `openai-compatible` | nothing -- custom endpoints publish no list |
+
+**The list is a shortcut, never a whitelist.** A daemon that is down, a
+provider with no key yet, and an endpoint that cannot be enumerated all fall
+back to the plain text field, with the reason shown beside it, because a name
+the provider has not heard of is still a legitimate thing to write into
+`agent.toml`. Listing failures answer `200` with `ok: false` for the same
+reason: they are states the field renders, not failed requests.
 
 ## Security
 

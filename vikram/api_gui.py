@@ -20,6 +20,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Literal
 
+import tomlkit
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -36,10 +37,13 @@ from vikram.config import (
 from vikram.hooks import HookSpec
 from vikram.logging import get_logger
 from vikram.mcp import MCPConfigError, MCPServerSpec, build_mcp_server
+from vikram.model_catalog import clear_cache as clear_model_cache
+from vikram.model_catalog import list_models
 from vikram.providers import PROVIDER_IDS, PROVIDERS
 from vikram.session import SessionError, SessionRegistry, sse_stream
 from vikram.settings import VikramSettings
 from vikram.spec import AgentSpecDraft
+from vikram.spec_io import SpecWriteError, render_agent_toml
 from vikram.specstore import (
     AgentNotFoundError,
     AgentReadOnlyError,
@@ -123,6 +127,15 @@ class AgentUpdateRequest(BaseModel):
 class AgentDuplicateRequest(BaseModel):
     new_id: str
     name: str | None = None
+
+
+class TomlRenderRequest(BaseModel):
+    draft: AgentSpecDraft
+    existing: str | None = None
+
+
+class TomlParseRequest(BaseModel):
+    toml: str
 
 
 class ValidateRequest(BaseModel):
@@ -251,6 +264,33 @@ def post_validate(request: ValidateRequest) -> dict[str, Any]:
     return asdict(report)
 
 
+@router.post("/agents/render-toml")
+def post_render_toml(request: TomlRenderRequest) -> dict[str, str]:
+    """Draft to ``agent.toml`` text, for the editor's TOML tab.
+
+    ``existing`` keeps a hand-edited file's comments and key order, which
+    is what lets the two tabs be one draft rather than two documents.
+    """
+    try:
+        return {"toml": render_agent_toml(request.draft, existing=request.existing)}
+    except SpecWriteError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/agents/parse-toml")
+def post_parse_toml(request: TomlParseRequest) -> dict[str, Any]:
+    """``agent.toml`` text back to a draft, for leaving the TOML tab."""
+    try:
+        data = tomlkit.parse(request.toml).unwrap()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid TOML: {exc}") from exc
+    try:
+        draft = AgentSpecDraft.model_validate(data)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"draft": draft.model_dump(mode="json")}
+
+
 @router.get("/agents/{agent_id}/prompt-preview")
 def read_prompt_preview(agent_id: str) -> dict[str, Any]:
     """The fully assembled system prompt -- what the model actually sees.
@@ -322,6 +362,20 @@ def read_providers() -> dict[str, Any]:
         "default_provider": getattr(settings, "config_default_provider", None),
         "providers": [asdict(info) for info in introspect.provider_catalog(settings)],
     }
+
+
+@router.get("/providers/{provider_id}/models")
+def read_provider_models(
+    provider_id: str, refresh: bool = Query(default=False)
+) -> dict[str, Any]:
+    """What this provider will actually serve.
+
+    Answers 200 with ``ok: false`` rather than an error status: an
+    unreachable daemon or a missing key is an expected state the editor
+    renders inline, not a failed request.
+    """
+    listing = list_models(provider_id, _settings_for_request(), refresh=refresh)
+    return asdict(listing)
 
 
 @router.get("/skills")
@@ -403,6 +457,7 @@ def read_config() -> dict[str, Any]:
 
 @router.put("/config/providers/{provider_id}")
 def put_provider(provider_id: str, request: ProviderUpdateRequest) -> dict[str, Any]:
+    global _settings
     if provider_id not in PROVIDERS:
         raise HTTPException(
             status_code=404,
@@ -415,6 +470,9 @@ def put_provider(provider_id: str, request: ProviderUpdateRequest) -> dict[str, 
     }
     if values:
         merge_write_config({"providers": {provider_id: values}})
+        # A new key or endpoint must list models now, not in a minute.
+        clear_model_cache()
+        _settings = None
     return read_config()
 
 

@@ -146,6 +146,9 @@ input, select, textarea {
   width: 100%;
 }
 input, select { height: 26px; }
+/* Checkboxes are not text fields: the 100% width above stretches them
+   into a square the size of the column. */
+input[type="checkbox"] { width: auto; height: auto; margin: 0; }
 input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); }
 textarea.code { font-family: var(--font-mono); font-size: 12px; line-height: 1.65; }
 select { width: auto; }
@@ -272,7 +275,10 @@ select { width: auto; }
 
 /* ---- editor ------------------------------------------------------ */
 
-.editor { display: grid; grid-template-columns: 168px minmax(0, 1fr); overflow: hidden; }
+/* Header on top, rail + pane below it. The columns belong to the body,
+   not to the whole screen -- otherwise the header takes a grid track. */
+.editor { display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+.editor-body { display: grid; grid-template-columns: 168px minmax(0, 1fr); overflow: hidden; }
 .editor-rail { border-right: 1px solid var(--border); padding: 12px 0; overflow-y: auto; }
 .editor-rail button {
   display: block; width: 100%; height: 25px; line-height: 25px;
@@ -348,3 +354,74 @@ pre.source {
 .boot h1 { font-family: var(--font-display); font-weight: 500; font-size: 20px; letter-spacing: -0.02em; margin: 0 0 8px; }
 
 .path { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- one-page form ------------------------------------------------ */
+
+/* Sections are separated by the full-ink rule the Playground columns use,
+   not by a second navigation rail: the whole draft is one scroll. */
+.sec { border-top: 1px solid var(--fg); padding-top: 10px; }
+.sec + .sec { margin-top: 26px; }
+.sec-head { display: flex; align-items: baseline; gap: 10px; padding-bottom: 11px; }
+.divider { width: 1px; height: 15px; background: var(--border); flex-shrink: 0; }
+.tool-row .desc {
+  font-size: 12.5px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tool-row .flag { text-align: right; }
+
+/* ---- model picker -------------------------------------------------- */
+
+/* A combobox over a fetched list. The list is a shortcut, never a gate:
+   every state below still writes whatever the field holds. */
+.picker { position: relative; }
+.picker-trigger {
+  display: flex; align-items: center; gap: 8px;
+  height: 26px; padding: 0 8px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg); font-size: 13px; width: 100%;
+}
+.picker-trigger.open { border-color: var(--fg); }
+.picker-trigger:disabled { background: var(--card); color: var(--muted-2); }
+.picker-trigger .val {
+  flex-grow: 1; font-family: var(--font-mono); font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left;
+}
+.picker-trigger .val.sans { font-family: var(--font-sans); font-size: 13px; }
+.picker-trigger .val.placeholder {
+  font-family: var(--font-sans); font-size: 13px; color: var(--muted-2);
+}
+.picker-trigger .chev { color: var(--muted-2); display: flex; }
+
+/* Full-ink border, matching the approval card: both are surfaces that want
+   an answer before anything else happens. */
+.sheet {
+  position: absolute; top: 29px; left: 0; right: 0; z-index: 5;
+  background: var(--bg); border: 1px solid var(--fg);
+  border-radius: var(--radius); overflow: hidden;
+}
+.sheet-search {
+  display: flex; align-items: center; gap: 8px;
+  height: 28px; padding: 0 9px;
+  border-bottom: 1px solid var(--border); color: var(--muted-2);
+}
+.sheet-search input { border: 0; height: auto; padding: 0; background: none; font-size: 12.5px; }
+.sheet-list { max-height: 232px; overflow-y: auto; }
+.opt {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; height: 26px; padding: 0 9px; color: var(--muted);
+}
+.opt:hover { background: var(--card); }
+.opt.on { background: var(--card); color: var(--fg); }
+.opt .name {
+  font-family: var(--font-mono); font-size: 11.5px; flex-grow: 1;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.opt .meta {
+  font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: 0.06em; color: var(--muted-2); white-space: nowrap;
+}
+.sheet-foot {
+  display: flex; align-items: center; gap: 10px;
+  height: 27px; padding: 0 9px; border-top: 1px solid var(--border);
+}
+.skeleton { height: 8px; border-radius: 2px; background: var(--card); }

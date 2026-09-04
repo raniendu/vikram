@@ -1,15 +1,19 @@
 import { useEffect, useState } from "react";
 import {
   AgentDetail,
+  ProviderInfo,
   ToolInfo,
   ValidationReport,
   getAgent,
+  listProviders,
   listTools,
   saveAgent,
-  testMcp,
   validateDraft,
 } from "../api/client";
-import { Eyebrow } from "../components/primitives";
+import { McpEditor } from "../components/McpEditor";
+import { ModelPicker } from "../components/ModelPicker";
+import { ToolList } from "../components/ToolList";
+import { Eyebrow, Field, Fields } from "../components/primitives";
 
 interface Props {
   agentId: string;
@@ -31,18 +35,20 @@ export function AgentEditor({ agentId }: Props) {
   const [draft, setDraft] = useState<Record<string, any> | null>(null);
   const [prompt, setPrompt] = useState("");
   const [tools, setTools] = useState<ToolInfo[]>([]);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [section, setSection] = useState<Section>("identity");
   const [report, setReport] = useState<ValidationReport | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([getAgent(agentId), listTools()])
-      .then(([d, t]) => {
+    Promise.all([getAgent(agentId), listTools(), listProviders()])
+      .then(([d, t, p]) => {
         setDetail(d);
         setDraft(d.draft);
         setPrompt(d.system_prompt);
         setTools(t);
+        setProviders(p);
       })
       .catch((e) => setError(String(e)));
   }, [agentId]);
@@ -169,57 +175,62 @@ export function AgentEditor({ agentId }: Props) {
           )}
 
           {section === "tools" && (
-            <div>
-              {tools.map((tool) => {
-                const on = (draft.tools ?? []).includes(tool.name);
-                return (
-                  <label key={tool.name} className="tool-row">
-                    <input
-                      type="checkbox"
-                      checked={on}
-                      onChange={(e) =>
-                        update({
-                          tools: e.target.checked
-                            ? [...(draft.tools ?? []), tool.name]
-                            : (draft.tools ?? []).filter(
-                                (t: string) => t !== tool.name,
-                              ),
-                        })
-                      }
-                    />
-                    <div>
-                      <div className="row">
-                        <code>{tool.name}</code>
-                        <ApprovalBadge tool={tool} />
-                      </div>
-                      <p className="muted small">{tool.description}</p>
-                    </div>
-                  </label>
-                );
-              })}
-            </div>
+            <ToolList
+              tools={tools}
+              selected={draft.tools ?? []}
+              onChange={(next) => update({ tools: next })}
+            />
           )}
 
           {section === "model" && (
             <Fields>
-              <Field label="Provider" hint="Leave blank to follow your default.">
-                <input
+              <Field
+                label="Provider"
+                hint="Leave blank to follow your default. Changing it refetches the model list."
+              >
+                <select
                   value={draft.model_provider ?? ""}
-                  placeholder="ollama"
                   onChange={(e) =>
                     update({ model_provider: e.target.value || null })
                   }
-                />
-              </Field>
-              <Field label="Model">
-                <input
-                  value={draft.model ?? ""}
-                  placeholder="qwen3.6:35b-mlx"
-                  onChange={(e) => update({ model: e.target.value || null })}
-                />
+                >
+                  <option value="">Follow my default</option>
+                  {providers.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.display_name}
+                      {p.needs_api_key && !p.has_credential ? " — no key" : ""}
+                    </option>
+                  ))}
+                </select>
               </Field>
               <Field
-                label="Model settings"
+                label="Model"
+                hint={
+                  draft.model_provider
+                    ? "Read from the provider above. A name you type by hand is still accepted."
+                    : "Pick a provider to list its models, or leave blank to follow your default."
+                }
+              >
+                {draft.model_provider ? (
+                  <ModelPicker
+                    provider={draft.model_provider}
+                    value={draft.model ?? ""}
+                    onChange={(model) => update({ model: model || null })}
+                    clearOnProviderChange={false}
+                  />
+                ) : (
+                  <input
+                    className="mono"
+                    style={{ fontSize: 12 }}
+                    value={draft.model ?? ""}
+                    placeholder="follows your default"
+                    onChange={(e) => update({ model: e.target.value || null })}
+                  />
+                )}
+              </Field>
+              <Field
+                label="Settings"
+                top
                 hint="JSON: temperature, top_p, max_tokens, thinking…"
               >
                 <textarea
@@ -269,142 +280,6 @@ export function AgentEditor({ agentId }: Props) {
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-function ApprovalBadge({ tool }: { tool: ToolInfo }) {
-  // Falls back to the older boolean so a server that predates the
-  // three-valued field still shows the badge rather than silently dropping
-  // a security-relevant one.
-  const approval =
-    tool.approval ?? (tool.requires_approval ? "always" : "never");
-  if (approval === "always")
-    return <span className="badge">needs approval</span>;
-  if (approval === "policy")
-    return (
-      <span className="badge" title="Decided per call by the command policy">
-        approval by policy
-      </span>
-    );
-  return null;
-}
-
-function Fields({ children }: { children: React.ReactNode }) {
-  return <div className="fields">{children}</div>;
-}
-
-function Field({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="field">
-      <span className="eyebrow">{label}</span>
-      {hint && <span className="field-hint">{hint}</span>}
-      {children}
-    </label>
-  );
-}
-
-function McpEditor({
-  servers,
-  onChange,
-}: {
-  servers: any[];
-  onChange: (next: any[]) => void;
-}) {
-  const [result, setResult] = useState<Record<number, string>>({});
-
-  function patch(index: number, values: Record<string, any>) {
-    onChange(servers.map((s, i) => (i === index ? { ...s, ...values } : s)));
-  }
-
-  async function test(index: number) {
-    setResult({ ...result, [index]: "Testing…" });
-    try {
-      const r = await testMcp(servers[index]);
-      setResult({
-        ...result,
-        [index]: r.ok ? `${r.tools.length} tools: ${r.tools.join(", ")}` : r.error!,
-      });
-    } catch (e) {
-      setResult({ ...result, [index]: String(e) });
-    }
-  }
-
-  return (
-    <div className="fields">
-      {servers.map((server, i) => (
-        <div key={i} className="mcp-card">
-          <div className="row">
-            <input
-              value={server.name ?? ""}
-              placeholder="name"
-              onChange={(e) => patch(i, { name: e.target.value })}
-            />
-            <select
-              value={server.transport ?? "stdio"}
-              onChange={(e) => patch(i, { transport: e.target.value })}
-            >
-              <option value="stdio">stdio</option>
-              <option value="http">http</option>
-              <option value="sse">sse</option>
-            </select>
-            <button className="secondary" onClick={() => test(i)}>
-              Test
-            </button>
-            <button
-              className="link"
-              onClick={() => onChange(servers.filter((_, j) => j !== i))}
-            >
-              Remove
-            </button>
-          </div>
-          {(server.transport ?? "stdio") === "stdio" ? (
-            <div className="row">
-              <input
-                value={server.command ?? ""}
-                placeholder="command (e.g. uvx)"
-                onChange={(e) => patch(i, { command: e.target.value })}
-              />
-              <input
-                value={(server.args ?? []).join(" ")}
-                placeholder="args"
-                onChange={(e) =>
-                  patch(i, { args: e.target.value.split(/\s+/).filter(Boolean) })
-                }
-              />
-            </div>
-          ) : (
-            <input
-              value={server.url ?? ""}
-              placeholder="https://example.com/mcp"
-              onChange={(e) => patch(i, { url: e.target.value })}
-            />
-          )}
-          {result[i] && <p className="muted small">{result[i]}</p>}
-        </div>
-      ))}
-      <div>
-        <button
-          className="secondary"
-          onClick={() =>
-            onChange([...servers, { name: "", transport: "stdio", command: "" }])
-          }
-        >
-          Add server
-        </button>
-      </div>
-      <p className="muted small">
-        Reference secrets as <code>${"{ENV_VAR}"}</code>; they are never stored in
-        the spec or returned by the API.
-      </p>
     </div>
   );
 }

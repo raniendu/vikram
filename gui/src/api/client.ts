@@ -203,6 +203,24 @@ export interface ProviderInfo {
   base_url: string | null;
 }
 
+export interface ModelOption {
+  id: string;
+  label: string;
+  meta: string;
+}
+
+/** Why a listing failed matters as much as the list: the field falls back
+ *  to free text, and the reason is what tells you which one to type. */
+export interface ModelListing {
+  provider: string;
+  ok: boolean;
+  models: ModelOption[];
+  error: string | null;
+  source: string | null;
+  enumerable: boolean;
+  fetched_at: number;
+}
+
 export interface ValidationIssue {
   field: string | null;
   severity: "error" | "warning";
@@ -272,6 +290,38 @@ export const validateDraft = (draft: Record<string, any>, agentId?: string) =>
 
 export const listTools = () =>
   api.get<{ tools: ToolInfo[] }>("/v1/tools").then((r) => r.tools);
+
+export const listModels = (providerId: string, refresh = false) =>
+  api.get<ModelListing>(
+    `/v1/providers/${encodeURIComponent(providerId)}/models` +
+      (refresh ? "?refresh=true" : ""),
+  );
+
+export const createAgent = (
+  id: string,
+  draft: Record<string, any>,
+  systemPrompt: string,
+) =>
+  api.post<AgentDetail>("/v1/agents", {
+    id,
+    draft,
+    system_prompt: systemPrompt,
+  });
+
+/** The TOML tab is the same draft, rendered. Round-tripping through the
+ *  server keeps one serializer rather than a second one in the GUI. */
+export const renderToml = (draft: Record<string, any>, existing?: string) =>
+  api
+    .post<{ toml: string }>("/v1/agents/render-toml", {
+      draft,
+      existing: existing ?? null,
+    })
+    .then((r) => r.toml);
+
+export const parseToml = (toml: string) =>
+  api
+    .post<{ draft: Record<string, any> }>("/v1/agents/parse-toml", { toml })
+    .then((r) => r.draft);
 
 export const listProviders = () =>
   api

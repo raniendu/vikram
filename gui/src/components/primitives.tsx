@@ -43,3 +43,46 @@ export function ThemeToggle({ dark, onToggle }: { dark: boolean; onToggle: () =>
     </button>
   );
 }
+
+/** A stack of labelled fields, one column, at reading width. */
+export function Fields({
+  children,
+  wide,
+}: {
+  children: ReactNode;
+  wide?: boolean;
+}) {
+  return (
+    <div className="fields" style={wide ? { maxWidth: "none" } : undefined}>
+      {children}
+    </div>
+  );
+}
+
+/** Label, control, hint -- in that source order.
+ *
+ * `.field-hint` pins itself to column 2, so the control has to come before
+ * it or auto-placement drops the control into the 96px label column.
+ */
+export function Field({
+  label,
+  hint,
+  top,
+  children,
+}: {
+  label: string;
+  hint?: ReactNode;
+  /** Align the label to the first line of a tall control. */
+  top?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <label className="field" style={top ? { alignItems: "start" } : undefined}>
+      <span className="eyebrow" style={top ? { paddingTop: 5 } : undefined}>
+        {label}
+      </span>
+      {children}
+      {hint && <span className="field-hint">{hint}</span>}
+    </label>
+  );
+}
