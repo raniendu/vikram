@@ -619,3 +619,36 @@ class _Response:
 
     def json(self) -> dict:
         return self._payload
+
+
+def test_model_listing_shows_the_id_not_the_display_name(client, monkeypatch):
+    """The id is what lands in agent.toml, so it is what the row reads.
+
+    A friendlier name belongs in ``meta``, where it cannot be mistaken for
+    the thing being chosen.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+    monkeypatch.setattr(api_gui, "_settings", VikramSettings(_env_file=None))
+    monkeypatch.setattr(
+        model_catalog.httpx,
+        "get",
+        lambda *a, **k: _Response(
+            {
+                "data": [
+                    {
+                        "id": "claude-sonnet-5",
+                        "display_name": "Claude Sonnet 5",
+                        "created_at": "2026-02-01T00:00:00Z",
+                    }
+                ]
+            }
+        ),
+    )
+    model_catalog.clear_cache()
+
+    model = client.get("/v1/providers/anthropic/models", headers=AUTH).json()["models"][
+        0
+    ]
+
+    assert model["label"] == "claude-sonnet-5"
+    assert model["meta"] == "Claude Sonnet 5"

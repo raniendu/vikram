@@ -43,7 +43,9 @@ class ModelOption:
     """The name to write into ``agent.toml``."""
 
     label: str
-    """What to show. Equals ``id`` unless the provider offers a nicer name."""
+    """What to show. The id, always: it is what lands in ``agent.toml``, so a
+    friendlier name belongs in ``meta`` where it cannot be mistaken for the
+    thing you are choosing."""
 
     meta: str = ""
     """One short right-aligned line: parameter size, or nothing."""
@@ -117,8 +119,8 @@ def _anthropic(base_url: str, api_key: str | None) -> tuple[list[ModelOption], s
     options = [
         ModelOption(
             id=entry["id"],
-            label=entry.get("display_name") or entry["id"],
-            meta=str(entry.get("created_at", ""))[:10],
+            label=entry["id"],
+            meta=entry.get("display_name") or "",
         )
         for entry in payload.get("data", [])
         if entry.get("id")
@@ -141,7 +143,8 @@ def _gemini(base_url: str, api_key: str | None) -> tuple[list[ModelOption], str]
         options.append(
             ModelOption(
                 id=model_id,
-                label=entry.get("displayName") or model_id,
+                label=model_id,
+                meta=entry.get("displayName") or "",
             )
         )
     return options, url

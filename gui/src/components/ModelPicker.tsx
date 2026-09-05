@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ModelListing, listModels } from "../api/client";
+import { ModelListing, ModelOption, listModels } from "../api/client";
 
 /**
  * A model field backed by the provider's own list.
@@ -125,7 +125,10 @@ export function ModelPicker({
         className={`picker-trigger${open ? " open" : ""}`}
         onClick={() => setOpen(!open)}
       >
-        <span className={`val${value ? "" : " placeholder"}`}>
+        <span
+          className={`val${value ? "" : " placeholder"}`}
+          title={value || undefined}
+        >
           {loading && !value ? "Reading models…" : value || placeholder}
         </span>
         <span className="chev">
@@ -179,7 +182,9 @@ export function ModelPicker({
                   <span className={`dot${model.id === value ? " live" : ""}`}
                         style={model.id === value ? undefined
                                                   : { background: "transparent" }} />
-                  <span className="name">{model.label}</span>
+                  <span className="name" title={fullName(model)}>
+                    {model.label}
+                  </span>
                   <span className="meta">{model.meta}</span>
                 </button>
               ))}
@@ -231,6 +236,11 @@ export function ModelPicker({
       )}
     </div>
   );
+}
+
+/** What the hover shows when the row is too narrow for the name. */
+function fullName(model: ModelOption): string {
+  return model.meta ? `${model.label} — ${model.meta}` : model.label;
 }
 
 function age(listing: ModelListing | null): string {

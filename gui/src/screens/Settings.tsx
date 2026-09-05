@@ -7,6 +7,7 @@ import {
   saveProvider,
   setDefaultProvider,
 } from "../api/client";
+import { ModelPicker } from "../components/ModelPicker";
 import { Eyebrow, Rule } from "../components/primitives";
 
 export function Settings() {
@@ -86,11 +87,14 @@ function ProviderRow({
   onSave,
 }: {
   provider: ProviderInfo;
-  onSave: (values: Record<string, string>) => void;
+  onSave: (values: Record<string, string>) => Promise<void>;
 }) {
   const [model, setModel] = useState(provider.configured_model ?? "");
   const [baseUrl, setBaseUrl] = useState(provider.base_url ?? "");
   const [apiKey, setApiKey] = useState("");
+  // Saving a key is what makes a model list possible, so the picker has to
+  // go and look again rather than keep showing the reason it could not.
+  const [listing, setListing] = useState(0);
   const dirty =
     model !== (provider.configured_model ?? "") ||
     baseUrl !== (provider.base_url ?? "") ||
@@ -105,27 +109,41 @@ function ProviderRow({
         )}
       </div>
 
-      <div className="row" style={{ gap: 8 }}>
-        <input
-          value={model}
-          placeholder={provider.suggested_model ?? "model"}
-          onChange={(e) => setModel(e.target.value)}
-        />
-        {provider.prompt_base_url && (
-          <input
-            value={baseUrl}
-            placeholder={provider.default_base_url ?? "base URL"}
-            onChange={(e) => setBaseUrl(e.target.value)}
-          />
-        )}
+      {/* Key first: a keyed provider cannot list a single model until it has
+          one, so asking for the model first asks you to name something the
+          app has no way to check. */}
+      <div className="row" style={{ gap: 8, alignItems: "start" }}>
         {provider.needs_api_key && (
-          <input
-            type="password"
-            value={apiKey}
-            placeholder="Leave blank to keep the stored key"
-            onChange={(e) => setApiKey(e.target.value)}
-          />
+          <div style={{ flex: "1 1 170px" }}>
+            <input
+              type="password"
+              value={apiKey}
+              placeholder="Leave blank to keep the stored key"
+              onChange={(e) => setApiKey(e.target.value)}
+            />
+          </div>
         )}
+        {provider.prompt_base_url && (
+          <div style={{ flex: "1 1 180px" }}>
+            <input
+              className="mono"
+              style={{ fontSize: 12 }}
+              value={baseUrl}
+              placeholder={provider.default_base_url ?? "base URL"}
+              onChange={(e) => setBaseUrl(e.target.value)}
+            />
+          </div>
+        )}
+        <div style={{ flex: "1 1 210px" }}>
+          <ModelPicker
+            key={listing}
+            provider={provider.id}
+            value={model}
+            onChange={setModel}
+            placeholder={provider.suggested_model ?? "Choose a model…"}
+            clearOnProviderChange={false}
+          />
+        </div>
       </div>
 
       <div className="row-rail">
@@ -137,13 +155,18 @@ function ProviderRow({
         <button
           className="btn quiet"
           disabled={!dirty}
-          onClick={() => {
+          onClick={async () => {
             const values: Record<string, string> = {};
             if (model) values.model = model;
             if (provider.prompt_base_url && baseUrl) values.base_url = baseUrl;
             if (apiKey) values.api_key = apiKey;
-            onSave(values);
+            const credentialChanged =
+              !!apiKey || baseUrl !== (provider.base_url ?? "");
+            await onSave(values);
             setApiKey("");
+            // Only after the write lands -- refetching first would ask with
+            // the credentials the server had a moment ago.
+            if (credentialChanged) setListing((n) => n + 1);
           }}
         >
           Save
