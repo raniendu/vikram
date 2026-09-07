@@ -80,3 +80,31 @@ def test_doctor_json_never_prints_api_key(monkeypatch, tmp_path, capsys):
         next(item for item in diagnostics if item["name"] == "API credential")["detail"]
         == "available"
     )
+
+
+# --- the workspace is a session's, not the machine's --------------------
+#
+# The desktop sidecar inherits the launcher's working directory -- "/" on
+# macOS -- so a doctor run with no folder used to report that "/" was not a
+# repository. Nobody chose "/" and no agent will ever write there.
+
+
+def test_no_workspace_means_no_git_row(monkeypatch, tmp_path):
+    _clean_environment(monkeypatch, tmp_path)
+
+    diagnostics = collect_diagnostics(
+        agent_name="coder", config_file=tmp_path / "missing.toml"
+    )
+
+    assert "Git workspace" not in {item.name for item in diagnostics}
+
+
+def test_a_named_workspace_still_gets_the_git_row(monkeypatch, tmp_path):
+    _clean_environment(monkeypatch, tmp_path)
+
+    diagnostics = collect_diagnostics(
+        agent_name="coder", cwd=APP_ROOT, config_file=tmp_path / "missing.toml"
+    )
+
+    by_name = {item.name: item for item in diagnostics}
+    assert by_name["Git workspace"].status == "ok"

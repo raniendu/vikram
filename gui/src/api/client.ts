@@ -122,6 +122,9 @@ export interface SessionInfo {
   agent_id: string;
   agent_name: string;
   workspace: string;
+  /** Repository this session's workspace sits in; null when it is not in
+   *  one. Resolved per session, because every session picks its own folder. */
+  git_root: string | null;
   model: string | null;
   closed: boolean;
   state: SessionState;

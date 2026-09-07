@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 
 import pytest
 
@@ -355,3 +356,23 @@ async def test_usage_reads_the_property_shape(tmp_path):
         "output_tokens": 104,
         "total_tokens": 6105,
     }
+
+
+# --- version control is per session ------------------------------------
+
+
+def test_git_root_finds_the_repository_a_workspace_sits_in(tmp_path):
+    from vikram.session import git_root
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    nested = tmp_path / "src" / "deep"
+    nested.mkdir(parents=True)
+
+    # Resolved, because macOS hands back /private/var for /var.
+    assert git_root(nested) == str(tmp_path.resolve())
+
+
+def test_git_root_is_none_outside_a_repository(tmp_path):
+    from vikram.session import git_root
+
+    assert git_root(tmp_path) is None
