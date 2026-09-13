@@ -49,7 +49,11 @@ def collect_diagnostics(
     from vikram.settings import VikramSettings
     from vikram.specstore import load_agent
 
-    cwd = (cwd or Path.cwd()).resolve()
+    # No cwd means there is no folder to judge -- the desktop app's sidecar
+    # inherits the launcher's directory, which is "/" and belongs to nobody.
+    # Whether a workspace is a repository is a per-session fact and is
+    # reported on the session, not here.
+    cwd = cwd.resolve() if cwd else None
     config_file = config_file or config_path()
     diagnostics = [_python_diagnostic(), _config_file_diagnostic(config_file)]
 
@@ -64,7 +68,8 @@ def collect_diagnostics(
                 "Fix the reported setting or run `vikram configure`.",
             )
         )
-        diagnostics.append(_git_diagnostic(cwd))
+        if cwd is not None:
+            diagnostics.append(_git_diagnostic(cwd))
         return diagnostics
 
     selected_agent = agent_name or settings.default_agent
@@ -165,7 +170,8 @@ def collect_diagnostics(
                 Diagnostic("Command policy", "ok", str(spec.command_policy))
             )
 
-    diagnostics.append(_git_diagnostic(cwd))
+    if cwd is not None:
+        diagnostics.append(_git_diagnostic(cwd))
     return diagnostics
 
 
@@ -256,7 +262,7 @@ def _print_table(diagnostics: list[Diagnostic]) -> None:
 def run(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    diagnostics = collect_diagnostics(agent_name=args.agent)
+    diagnostics = collect_diagnostics(agent_name=args.agent, cwd=Path.cwd())
     if args.json:
         print(json.dumps({"diagnostics": [asdict(item) for item in diagnostics]}))
     else:

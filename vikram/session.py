@@ -13,6 +13,7 @@ import contextlib
 import json
 import os
 import signal
+import subprocess
 import sys
 import time
 import uuid
@@ -39,6 +40,10 @@ class Session:
     agent_id: str
     workspace: Path
     process: asyncio.subprocess.Process
+    # Resolved once when the session opens: every session runs in its own
+    # folder, so whether changes here are reviewable is a fact about this
+    # session, not about the machine.
+    git_root: str | None = None
     ready: dict[str, Any] = field(default_factory=dict)
     closed: bool = False
     # Live state, derived from the events already flowing through the pump so
@@ -151,6 +156,7 @@ class Session:
             "agent_id": self.agent_id,
             "agent_name": ready.get("name") or self.agent_id,
             "workspace": str(self.workspace),
+            "git_root": self.git_root,
             "model": (ready.get("model_config") or {}).get("model"),
             "closed": self.closed,
             "state": self.state,
@@ -233,6 +239,28 @@ class Session:
         logger.info("session_stopped", session=self.id, agent=self.agent_id)
 
 
+def git_root(workspace: Path) -> str | None:
+    """The repository ``workspace`` sits in, or None if it is not in one.
+
+    Asked once per session rather than per health check: the answer belongs
+    to the folder this session was opened on, and a session's folder does not
+    move. Never raises -- Git being absent and the folder not being a
+    repository are the same answer to the caller.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=workspace,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip() or None if result.returncode == 0 else None
+
+
 class SessionRegistry:
     def __init__(self) -> None:
         self._sessions: dict[str, Session] = {}
@@ -274,7 +302,11 @@ class SessionRegistry:
             start_new_session=True,
         )
         session = Session(
-            id=session_id, agent_id=agent_id, workspace=workspace, process=process
+            id=session_id,
+            agent_id=agent_id,
+            workspace=workspace,
+            process=process,
+            git_root=git_root(workspace),
         )
         session._pump = asyncio.create_task(session._pump_stdout())
         self._sessions[session_id] = session

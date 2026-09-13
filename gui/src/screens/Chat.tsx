@@ -156,6 +156,7 @@ export function Chat({ sessionId, session, onEnded }: Props) {
           <span className="mono truncate" style={{ fontSize: 12.5 }}>
             {session?.workspace ?? "…"}
           </span>
+          <VersionControl session={session} />
           <Eyebrow style={{ fontSize: 9 }}>{agentName}</Eyebrow>
           <Eyebrow style={{ fontSize: 9 }}>{session?.model ?? ""}</Eyebrow>
           {session?.state === "needs" && (
@@ -304,5 +305,25 @@ function Bubble({ entry, agentName }: { entry: Entry; agentName: string }) {
       <Eyebrow style={{ fontSize: 9, marginBottom: 3 }}>{agentName}</Eyebrow>
       <p>{entry.text}</p>
     </div>
+  );
+}
+
+/**
+ * Whether this session's changes will be reviewable.
+ *
+ * Per session, not per app: every session picks its own folder, so one can be
+ * in a repository while the next is in a scratch directory. Silent when the
+ * workspace is a repository — that is the expected case, and a chip for it
+ * would just be noise beside the path.
+ */
+function VersionControl({ session }: { session: SessionInfo | null }) {
+  if (!session || session.git_root) return null;
+  return (
+    <Eyebrow
+      style={{ fontSize: 9 }}
+      title="Not a Git repository, so there is nothing to diff what this agent writes against."
+    >
+      No repo
+    </Eyebrow>
   );
 }

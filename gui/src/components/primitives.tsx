@@ -5,13 +5,19 @@ export function Eyebrow({
   children,
   className,
   style,
+  title,
 }: {
   children: ReactNode;
   className?: string;
   style?: CSSProperties;
+  title?: string;
 }) {
   return (
-    <div className={`eyebrow${className ? ` ${className}` : ""}`} style={style}>
+    <div
+      className={`eyebrow${className ? ` ${className}` : ""}`}
+      style={style}
+      title={title}
+    >
       {children}
     </div>
   );
