@@ -4,7 +4,9 @@
 
 `vikram/` contains the package code. Agent specs live under `spec/<agent>/` and
 shared policy/context lives under `spec/shared/`. Tests live in `tests/`. Runtime
-state belongs under `.vikram/` and must not be committed.
+state belongs under `.vikram/` and must not be committed. Agent quality evals
+live in `evals/` (cases, fixtures, runner) and their metrics-only results in
+`evals/history/`, which the post-commit hook commits.
 
 Key modules:
 - `agent.py`: builds Pydantic AI agents from specs, tools, MCP servers, skills, and hooks.
@@ -31,6 +33,9 @@ Key modules:
 - `uv run vikram-api`: serve FastAPI on `http://127.0.0.1:8000`.
 - `uv run vikram-acp --agent coder`: start ACP over stdio.
 - `uv run pytest`: run the offline test suite.
+- `uv run pre-commit install`: also installs the post-commit eval hook.
+- `uv run python -m evals status|compare|report`: eval queue, before/after
+  table, and trend page (see `docs/evals.md`).
 - `uv run pre-commit run --all-files`: run Black and isort.
 - `docker compose -f compose.example.yml config`: validate the example Compose file.
 

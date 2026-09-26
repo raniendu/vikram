@@ -522,11 +522,17 @@ docker compose -f compose.example.yml config
 Default tests are offline and deterministic. Live model, web search, Telegram,
 and tracing flows require explicit environment configuration.
 
+Agent quality is tracked separately by the eval suite in `evals/`: after
+`uv run pre-commit install`, every commit that changes a prompt, model, tool,
+skill or framework version gets a before/after run against local Ollama, with
+metrics committed to `evals/history/`. See [docs/evals.md](docs/evals.md).
+
 ## Documentation
 
 | File | Content |
 | --- | --- |
 | [docs/current_architecture.md](docs/current_architecture.md) | Detailed module table and request flow documentation |
+| [docs/evals.md](docs/evals.md) | Before/after eval suite, change tracking and history |
 | [docs/deployment.md](docs/deployment.md) | Deployment, logging, and tracing details |
 | [docs/desktop_app.md](docs/desktop_app.md) | Desktop app install and build instructions |
 | [docs/hooks.md](docs/hooks.md) | Lifecycle hooks reference (Pre/Post ToolUse, UserPromptSubmit, Stop) |

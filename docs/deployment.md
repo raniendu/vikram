@@ -21,6 +21,11 @@ curl http://localhost:8000/healthz
 Mount `/app/.vikram` if you want to preserve thread history and DBOS workflow
 state across container restarts.
 
+The image leaves out `tests/` and `evals/` (see `.dockerignore`). The eval
+suite is a local development tool that runs against your own Ollama models
+from a post-commit hook. It does not run in CI or in deployments; see
+[evals.md](evals.md).
+
 ## Required Runtime Env
 
 For direct app installs, `vikram configure` (alias: `vikram setup`) writes
