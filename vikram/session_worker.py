@@ -5,10 +5,9 @@ Two pieces of runtime state are process-global and both are load-bearing:
 workspace root is ``Path.cwd()``. So one process can safely host exactly one
 (agent, workspace) pair, and the unit of isolation is a process.
 
-Threading an explicit root through ``_resolve_workspace_path`` and
-``_is_sensitive_path`` instead would mean refactoring precisely the code that
-prevents path escape and secret reads -- the wrong place to take a risk for
-GUI convenience. A process also gives clean teardown: killing the process
+The file tools fix their root when the agent is built (``vikram/file_tools.py``),
+but the command tools still resolve against ``Path.cwd()``, so the process
+keeps its working directory set to the workspace. A process also gives clean teardown: killing the process
 group reaps ``run_command`` children and MCP stdio servers deterministically.
 
 **stdout is the protocol.** All logging goes to stderr.

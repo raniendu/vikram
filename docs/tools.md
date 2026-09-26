@@ -36,13 +36,30 @@ The `coder` spec enables these CLI-only tools:
 
 | Tool | Behavior |
 | --- | --- |
-| `read_file` | Read a numbered UTF-8 excerpt within cwd |
-| `glob` | List files under cwd while skipping caches and sensitive paths |
-| `grep` | Regex search under cwd while skipping caches and sensitive paths |
+| `read_file` | Read a numbered excerpt within cwd (`path`, `offset`, `limit`; 200 lines max) |
+| `glob` | Find files under cwd by glob pattern, skipping caches and sensitive paths |
+| `grep` | Regex search under cwd with ripgrep (context lines, case, file type), skipping caches and sensitive paths |
 | `inspect_command` | Run read-only commands accepted by command policy |
-| `write_file` | Write a file after human approval |
-| `edit_file` | Exact-text replace after human approval |
+| `write_file` | Write a file after human approval, creating missing folders |
+| `edit_file` | Replace one unique text fragment (`old_text` → `new_text`) after human approval |
 | `run_command` | Run argv-only commands with policy-based approval or denial |
+
+The file tools (`read_file`, `glob`, `grep`, `write_file`, `edit_file`) are
+served by the Pydantic AI Harness `FileSystem` capability, wrapped by
+`vikram/file_tools.py` so the names and guarantees above stay the same:
+
+- **Confinement:** paths are resolved from cwd, and `..`, absolute paths and
+  symlinks that leave it are refused.
+- **Secrets and excluded folders:** `.env*` (except `.env.example`), keys,
+  `.ssh/`, `secrets/`, Terraform state, `.git/`, `.venv/`, `node_modules/` and
+  caches can't be read, written or listed.
+- **Refusals are answers, not errors:** the tool returns `Refusing: …` and logs
+  `tool_call_refused` with a stable reason, so a model that keeps asking for a
+  secret can't crash the run.
+- **Approvals and hooks:** writes go through the same approval prompt as
+  before, and `PreToolUse`/`PostToolUse` hooks wrap these tools too.
+- **ripgrep:** `grep` uses the `rg` binary installed with Vikram; if `rg` isn't
+  on `PATH`, Vikram appends its own install folder to `PATH`.
 
 Command policy lives in `spec/shared/command_policy.toml`. Deny rules are a
 hard backstop and cannot be bypassed by approval.

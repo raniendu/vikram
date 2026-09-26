@@ -77,7 +77,7 @@ The migration runs as separate work streams, each in its own PR:
 | WS8 | Tracing on the OpenTelemetry SDK (removes OpenLIT, which blocked the upgrade) | PR |
 | WS0 | This foundation: framework upgrade, `[capabilities]` table | PR |
 | WS1 | Turn on repair, output limits and compaction in the shipped specs | PR |
-| WS2 | File tools on harness `FileSystem` | planned |
+| WS2 | File tools on harness `FileSystem` | PR |
 | WS4 | Skills on harness `Skills` | planned |
 | WS3 | Shell on harness `Shell`, with the command policy as a guardrail | planned |
 | WS5 | Delegation on harness `SubAgents` | planned |

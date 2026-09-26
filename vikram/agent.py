@@ -38,6 +38,7 @@ from vikram.delegation import (
     make_delegate_to_agent_tool,
     subagent_instructions,
 )
+from vikram.file_tools import HarnessFileTool, build_file_capability
 from vikram.hooks import HookBlockedError, HookSet, HookToolset, build_hooks, run_hooks
 from vikram.logging import get_logger
 from vikram.mcp import VikramMCPClient, build_mcp_servers
@@ -315,7 +316,16 @@ def build_agent(
     mcp_clients = build_mcp_servers(spec.mcp_servers)
     hooks = build_hooks(spec.hooks)
 
-    base_toolset = FunctionToolset(tools)
+    # File tools are served by the harness FileSystem capability (which
+    # applies the hooks itself); everything else is a plain function tool.
+    file_tools = [entry for entry in tools if isinstance(entry, HarnessFileTool)]
+    function_tools = [
+        entry for entry in tools if not isinstance(entry, HarnessFileTool)
+    ]
+    file_capability = build_file_capability(
+        [entry.name for entry in file_tools], hooks=hooks, agent_name=spec.name
+    )
+    base_toolset = FunctionToolset(function_tools)
     all_toolsets = [base_toolset, *(client.raw for client in mcp_clients)]
     combined = CombinedToolset(all_toolsets)
     toolset = (
@@ -335,6 +345,7 @@ def build_agent(
             ),
             id="vikram-human-approval",
         ),
+        *([file_capability] if file_capability is not None else []),
         *harness_capabilities,
     ]
     raw_agent = Agent(
@@ -475,13 +486,13 @@ def _stringify_content(content: Any) -> str:
 
 
 def _tool_name(entry: ToolEntry) -> str:
-    if isinstance(entry, Tool):
+    if isinstance(entry, (Tool, HarnessFileTool)):
         return entry.name
     return entry.__name__
 
 
 def _requires_approval(entry: ToolEntry) -> bool:
-    return isinstance(entry, Tool) and entry.requires_approval
+    return isinstance(entry, (Tool, HarnessFileTool)) and entry.requires_approval
 
 
 def _settings_with_spec_model(

@@ -21,7 +21,9 @@ Key modules:
 - `api.py`: FastAPI app for `/chat`, threaded events, Telegram webhooks, and health.
 - `gateway.py` and `dbos_gateway.py`: SQLite thread history and DBOS queues.
 - `telegram.py` and `telegram_config.py`: Telegram parsing, allowlists, commands, and delivery.
-- `tools.py` and `command_policy.py`: web search plus local coding tools and command policy.
+- `tools.py` and `command_policy.py`: web search, command tools and command policy.
+- `file_tools.py`: the workspace file tools, served by the harness `FileSystem`
+  capability with Vikram's path rules, approvals and hooks.
 - `settings.py`: environment-driven settings and model provider construction.
 - `logging.py` and `observability.py`: structlog configuration, redaction
   helpers, and OpenTelemetry tracer/propagation helpers.

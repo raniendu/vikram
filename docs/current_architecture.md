@@ -41,7 +41,8 @@ flowchart LR
 | `vikram/gateway.py` | SQLite thread store and conversation service |
 | `vikram/dbos_gateway.py` | DBOS queues/workflows and Telegram reply delivery |
 | `vikram/telegram.py` | Telegram webhook parsing, allowlist, commands, formatting |
-| `vikram/tools.py` | Web search and local coding tools |
+| `vikram/tools.py` | Web search and command tools |
+| `vikram/file_tools.py` | Workspace file tools on the harness `FileSystem` capability |
 | `vikram/command_policy.py` | Declarative command execution policy |
 
 ## Quality Evals

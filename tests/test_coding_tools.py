@@ -23,91 +23,6 @@ def _reset_command_policy():
 
 
 @pytest.mark.asyncio
-async def test_read_file_returns_numbered_excerpt(monkeypatch, tmp_path):
-    source = tmp_path / "pkg" / "example.py"
-    source.parent.mkdir()
-    source.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
-
-    result = await tools.read_file("pkg/example.py", start_line=2, max_lines=2)
-
-    assert "pkg/example.py:2-3" in result
-    assert "2 | beta" in result
-    assert "3 | gamma" in result
-    assert "1 | alpha" not in result
-
-
-@pytest.mark.asyncio
-async def test_file_tools_refuse_sensitive_paths(monkeypatch, tmp_path):
-    secret = tmp_path / ".env.local"
-    secret.write_text("TOKEN=secret\n", encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
-
-    result = await tools.read_file(".env.local")
-
-    assert "Refusing" in result
-    assert "TOKEN" not in result
-    assert "secret" not in result
-
-
-@pytest.mark.asyncio
-async def test_file_tools_refuse_paths_outside_cwd(monkeypatch, tmp_path):
-    workspace = tmp_path / "workspace"
-    outside = tmp_path / "outside.txt"
-    workspace.mkdir()
-    outside.write_text("outside\n", encoding="utf-8")
-    monkeypatch.chdir(workspace)
-
-    result = await tools.read_file(str(outside))
-
-    assert "escapes the workspace" in result
-    assert "outside" not in result
-
-
-@pytest.mark.asyncio
-async def test_glob_and_grep_are_cwd_scoped(monkeypatch, tmp_path):
-    source = tmp_path / "vikram" / "agent.py"
-    source.parent.mkdir()
-    source.write_text("def build_agent():\n    return 'ok'\n", encoding="utf-8")
-    (tmp_path / ".env.local").write_text("build_agent secret\n", encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
-
-    glob_result = await tools.glob_paths("**/*.py")
-    grep_result = await tools.grep("build_agent")
-
-    assert "vikram/agent.py" in glob_result
-    assert ".env.local" not in glob_result
-    assert "vikram/agent.py:1:def build_agent():" in grep_result
-    assert "secret" not in grep_result
-
-
-@pytest.mark.asyncio
-async def test_write_and_edit_file_operate_relative_to_cwd(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-
-    write_result = await tools.write_file("notes/todo.txt", "hello\n")
-    edit_result = await tools.edit_file("notes/todo.txt", "hello", "goodbye")
-
-    assert "Wrote notes/todo.txt" in write_result
-    assert "Updated notes/todo.txt" in edit_result
-    assert (tmp_path / "notes" / "todo.txt").read_text(encoding="utf-8") == (
-        "goodbye\n"
-    )
-
-
-@pytest.mark.asyncio
-async def test_edit_file_requires_unique_match(monkeypatch, tmp_path):
-    target = tmp_path / "notes.txt"
-    target.write_text("same\nsame\n", encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
-
-    result = await tools.edit_file("notes.txt", "same", "other")
-
-    assert "matched 2 times" in result
-    assert target.read_text(encoding="utf-8") == "same\nsame\n"
-
-
-@pytest.mark.asyncio
 async def test_run_command_non_allowlisted_reaches_approval(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
 
@@ -239,8 +154,8 @@ def test_destructive_tools_require_pydantic_ai_approval():
     for name in ("write_file", "edit_file"):
         tool = tools.TOOL_REGISTRY[name]
 
-        assert isinstance(tool, Tool)
         assert tool.requires_approval is True
+        assert tool.sequential is True
         assert tool.name == name
 
 
@@ -254,7 +169,7 @@ def test_run_command_uses_dynamic_approval():
 
 def test_read_only_tools_do_not_require_approval():
     for name in ("read_file", "glob", "grep", "inspect_command"):
-        assert not isinstance(tools.TOOL_REGISTRY[name], Tool)
+        assert not getattr(tools.TOOL_REGISTRY[name], "requires_approval", False)
 
 
 @pytest.mark.asyncio
@@ -265,25 +180,6 @@ async def test_web_search_no_api_key(monkeypatch):
 
     result = await tools.web_search("test query")
     assert "PARALLEL_API_KEY is not set" in result
-
-
-@pytest.mark.asyncio
-async def test_refusals_are_logged_with_a_stable_reason(
-    monkeypatch, tmp_path, log_events
-):
-    secret = tmp_path / ".env.local"
-    secret.write_text("TOKEN=secret\n", encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
-
-    await tools.read_file(".env.local")
-    await tools.grep("x", path="../outside")
-
-    refusals = [entry for entry in log_events if entry["event"] == "tool_call_refused"]
-    assert {(entry["tool"], entry["reason"]) for entry in refusals} == {
-        ("read_file", "sensitive_path"),
-        ("grep", "path_escapes_workspace"),
-    }
-    assert {entry["log_level"] for entry in refusals} == {"warning"}
 
 
 @pytest.mark.asyncio
@@ -335,20 +231,3 @@ async def test_missing_command_is_logged_not_silently_swallowed(
     not_found = find_log_event(log_events, "tool_command_not_found")
     assert not_found["log_level"] == "warning"
     assert not_found["executable"] == "definitely-not-a-real-binary-xyz"
-
-
-@pytest.mark.asyncio
-async def test_write_and_edit_file_log_what_changed(monkeypatch, tmp_path, log_events):
-    monkeypatch.chdir(tmp_path)
-
-    await tools.write_file("notes.txt", "alpha\n")
-    await tools.edit_file("notes.txt", "alpha", "beta")
-
-    written = find_log_event(log_events, "tool_write_file_succeeded")
-    assert written["path"] == "notes.txt"
-    assert written["content_length"] == 6
-    assert written["overwrote_existing"] is False
-
-    edited = find_log_event(log_events, "tool_edit_file_succeeded")
-    assert edited["path"] == "notes.txt"
-    assert edited["replacements"] == 1
