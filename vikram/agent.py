@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+import pydantic_ai
 from pydantic_ai import (
     Agent,
     AgentRunResultEvent,
@@ -30,6 +31,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.toolsets import CombinedToolset, FunctionToolset
 
+from vikram.capabilities import build_capabilities, capability_names
 from vikram.context import agent_identity, current_datetime
 from vikram.delegation import (
     DELEGATE_TOOL_NAME,
@@ -50,6 +52,11 @@ from vikram.spec import AgentSpec
 from vikram.tools import TOOL_REGISTRY, ToolEntry, set_command_policy
 
 logger = get_logger(__name__)
+
+# Pydantic AI prints a first-run banner to the terminal. Vikram's CLI and ACP
+# own stdout (chat output, --json payloads, the JSON-RPC stream), so it must
+# never appear there.
+pydantic_ai.BANNER_ENABLED = False
 
 
 class AgentToolError(RuntimeError):
@@ -317,6 +324,7 @@ def build_agent(
         else combined
     )
 
+    harness_capabilities = build_capabilities(spec, surface=surface)
     capabilities = [
         HandleDeferredToolCalls(
             handler=_approval_handler(
@@ -326,7 +334,8 @@ def build_agent(
                 approval_request=approval_request,
             ),
             id="vikram-human-approval",
-        )
+        ),
+        *harness_capabilities,
     ]
     raw_agent = Agent(
         model.raw,
@@ -347,6 +356,7 @@ def build_agent(
         mcp_servers=[client.id for client in mcp_clients],
         skills=[skill.name for skill in skills],
         hook_events=_configured_hook_events(hooks),
+        capabilities=capability_names(harness_capabilities),
         command_policy_deny_rules=len(command_policy.deny),
         approve_all=approve_all,
         system_prompt_length=len(system_prompt),

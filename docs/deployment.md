@@ -131,7 +131,7 @@ Every HTTP request gets an `x-request-id` (generated, or taken from an inbound
 header of the same name) that is echoed back in the response and bound to every
 log line emitted while handling that request. Quote it when reporting an issue.
 
-OpenLIT/OpenTelemetry tracing is opt-in and applies to every surface — HTTP,
+OpenTelemetry tracing is opt-in and applies to every surface — HTTP,
 CLI, and ACP:
 
 ```env
@@ -146,3 +146,11 @@ emitted inside a span also carry `trace_id` and `span_id`, so logs and traces
 join up.
 
 Message-content capture is disabled by default and forced off in production.
+
+`VIKRAM_OTLP_ENDPOINT` is the collector's base URL; traces go to `/v1/traces`
+and metrics to `/v1/metrics` over OTLP/HTTP. Leave it unset to use the standard
+`OTEL_EXPORTER_OTLP_*` variables instead. Model requests, tool calls and token
+usage come from Pydantic AI's own GenAI instrumentation. Vikram used OpenLIT for
+this until it was removed: every OpenLIT release pins `anthropic<1.0`, which
+conflicts with the Pydantic AI versions the Harness needs.
+`VIKRAM_OBSERVABILITY_DISABLED_INSTRUMENTORS` is still accepted but ignored.

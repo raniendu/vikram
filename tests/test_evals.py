@@ -966,3 +966,21 @@ def test_process_job_reports_steps_and_clears_progress(eval_repo, capsys):
     err = capsys.readouterr().err
     assert "2 suite runs for coder (no earlier results" in err
     assert f"job {head[:7]} finished" in err
+
+
+def test_capabilities_table_is_its_own_change_kind(spec_repo):
+    def edit(repo: Path) -> None:
+        text = _AGENT_TOML + "\n[capabilities]\nrepair_tool_arguments = true\n"
+        text += "\n[capabilities.compaction]\nmax_tokens = 1000\n"
+        (repo / "spec/coder/agent.toml").write_text(text)
+
+    described = _detect(spec_repo, edit).for_agent("coder")
+    assert described["kinds"] == ["capabilities"]
+    assert described["details"]["capabilities.repair_tool_arguments"] == {
+        "from": None,
+        "to": True,
+    }
+    assert described["details"]["capabilities.compaction"] == {
+        "from": None,
+        "to": {"max_tokens": 1000},
+    }

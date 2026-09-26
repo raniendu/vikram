@@ -14,6 +14,7 @@ Agent-spec concerns stay away from it deliberately.
 from __future__ import annotations
 
 import os
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -41,7 +42,7 @@ KEY_ORDER = (
 )
 
 # Emitted as their own tables/arrays-of-tables, after the scalars above.
-_TABLE_KEYS = ("model_settings", "command_policy_override")
+_TABLE_KEYS = ("model_settings", "command_policy_override", "capabilities")
 _AOT_KEYS = ("mcp_servers", "hooks")
 
 
@@ -53,6 +54,8 @@ def _plain(value: Any) -> Any:
     """Convert pydantic values into something tomlkit can emit."""
     if isinstance(value, Path):
         return str(value)
+    if isinstance(value, Decimal):
+        return float(value)
     if isinstance(value, (list, tuple)):
         return [_plain(item) for item in value]
     if isinstance(value, dict):
@@ -80,7 +83,12 @@ def _sync_table(doc: TOMLDocument | Table, key: str, value: dict[str, Any]) -> N
         for subkey in [k for k in existing.keys() if k not in value]:
             del existing[subkey]
         for subkey, subvalue in value.items():
-            existing[subkey] = subvalue
+            # Recurse into nested tables ([capabilities.compaction]) so their
+            # comments and commented-out options survive an editor save.
+            if isinstance(subvalue, dict) and isinstance(existing.get(subkey), Table):
+                _sync_table(existing, subkey, subvalue)
+            elif existing.get(subkey) != subvalue:
+                existing[subkey] = subvalue
         return
     table = tomlkit.table()
     for subkey, subvalue in value.items():

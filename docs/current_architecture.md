@@ -32,6 +32,7 @@ flowchart LR
 | `vikram/agent.py` | Builds Pydantic AI agents from specs, settings, tools, MCP servers, skills, and hooks |
 | `vikram/mcp.py` | Declarative MCP server specs and toolset construction |
 | `vikram/skills.py` | Agent Skills discovery, instructions, and the `load_skill` tool |
+| `vikram/capabilities.py` | Declarative `[capabilities]` table built into Pydantic AI Harness capabilities |
 | `vikram/hooks.py` | Declarative lifecycle hooks compiled into Pydantic AI toolset and run wrappers |
 | `vikram/cli.py` | Interactive and one-shot CLI |
 | `vikram/doctor.py` | Read-only CLI setup and workspace diagnostics |
@@ -101,6 +102,10 @@ references.
 - Approval-gated tools use Pydantic AI deferred-tool handlers. CLI prompts ask
   on stdio, `--approve-all` approves all calls, and ACP maps requests to editor
   permissions. Command policy can require approval dynamically per command.
+- Pydantic AI Harness capabilities from `[capabilities]` are added after the
+  approval handler (`docs/capabilities.md`). The harness requires
+  `pydantic-ai-slim>=2.44` and is pinned exactly while it is pre-1.0.
 - Pydantic AI manages MCP toolset lifecycle per run; the interactive CLI keeps
   configured servers warm for the session.
-- Observability uses OpenLIT/OpenTelemetry plus Vikram's structured logs.
+- Observability uses the OpenTelemetry SDK (OTLP/HTTP export) with Pydantic AI's
+  built-in instrumentation, plus Vikram's structured logs.

@@ -296,7 +296,7 @@ td.layer { font: 500 11px var(--mono); letter-spacing: .06em; text-transform: up
       <div class="tablewrap"><table>
         <tr><th>Module</th><th>Role</th></tr>
         <tr><td class="mono">logging.py</td><td>structlog config and redaction, used by every layer</td></tr>
-        <tr><td class="mono">observability.py</td><td>OpenTelemetry/OpenLIT tracer and propagation</td></tr>
+        <tr><td class="mono">observability.py</td><td>OpenTelemetry SDK setup, tracer and propagation</td></tr>
         <tr><td class="mono">doctor.py</td><td>Read-only setup and workspace diagnostics</td></tr>
         <tr><td class="mono">introspect.py</td><td>Lists tools, providers, skills and draft specs</td></tr>
         <tr><td class="mono">playground.py</td><td>Runs one agent against several models side by side</td></tr>
@@ -326,6 +326,7 @@ td.layer { font: 500 11px var(--mono); letter-spacing: .06em; text-transform: up
       <tr><td class="layer">Core</td><td class="mono">settings.py · config.py · providers.py</td><td>Env settings, local config file, provider adapter registry</td></tr>
       <tr><td class="layer">Capability</td><td class="mono">tools.py · command_policy.py</td><td>Web search and local coding tools; tiered shell policy</td></tr>
       <tr><td class="layer">Capability</td><td class="mono">mcp.py · skills.py · hooks.py</td><td>MCP toolsets, progressive-disclosure skills, lifecycle hooks</td></tr>
+      <tr><td class="layer">Capability</td><td class="mono">capabilities.py</td><td>Declarative <code>[capabilities]</code> built into Pydantic AI Harness capabilities</td></tr>
       <tr><td class="layer">Capability</td><td class="mono">delegation.py</td><td><code>delegate_to_agent</code> sub-agent calls</td></tr>
     </table></div>
   </section>

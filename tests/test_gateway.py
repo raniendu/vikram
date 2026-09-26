@@ -270,3 +270,48 @@ async def test_conversation_service_logs_agent_lifecycle_without_content(tmp_pat
     assert "agent_run_succeeded" in events
     assert "sensitive prompt" not in repr(logs)
     assert "sensitive reply" not in repr(logs)
+
+
+async def test_context_warning_reads_usage_as_an_attribute(tmp_path):
+    """pydantic-ai 2.44+ exposes ``result.usage`` as an attribute, not a method.
+
+    The warning silently disappeared when only the method form was handled.
+    """
+    from pydantic_ai.usage import RunUsage
+
+    store = ThreadStore(tmp_path / "vikram.sqlite3")
+
+    class FakeResult:
+        output = "reply"
+        usage = RunUsage(input_tokens=95)
+
+        def all_messages_json(self):
+            return b"[]"
+
+    class FakeAgent:
+        async def run(self, prompt, *, message_history, conversation_id):
+            return FakeResult()
+
+    service = ConversationService(
+        settings=VikramSettings(
+            _env_file=None,
+            VIKRAM_CONTEXT_WINDOW_TOKENS=100,
+            VIKRAM_CONTEXT_WARNING_RATIO=0.8,
+        ),
+        store=store,
+        agent_factory=lambda name: FakeAgent(),
+    )
+
+    reply = await service.send_message(
+        InboundMessage(
+            interface="telegram",
+            external_thread_id="7",
+            prompt="hello",
+            agent_name=None,
+            default_agent="vikram",
+            metadata={},
+        )
+    )
+
+    assert "Context warning:" in reply.output
+    assert "95%" in reply.output

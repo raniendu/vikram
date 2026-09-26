@@ -69,6 +69,7 @@ uv run python -m evals detect --base main --head HEAD
 | `model_version` | Ollama digest differs from the baseline's (same tag, re-pulled) | digest from → to |
 | `tools` | `vikram/tools.py`, `vikram/command_policy.py`, command policy TOML, `tools = [...]` | tools added/removed |
 | `mcp_hooks_skills` | `[[mcp_servers]]`, `[[hooks]]`, skills, `SKILL.md`, `mcp.py`, `hooks.py`, `skills.py`, `delegation.py` | names added/removed (never URLs or env) |
+| `capabilities` | `[capabilities]` in `spec/*/agent.toml`, `vikram/capabilities.py` | each capability from → to |
 | `framework` | `pydantic-ai-slim` / `pydantic-ai-harness` version in `uv.lock`, `vikram/agent.py` | version from → to |
 | `eval_suite` | `evals/cases/**`, `evals/fixtures/**`, `evals/checks.py`, `evals/judge.py` | new suite hash |
 
