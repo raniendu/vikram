@@ -26,6 +26,9 @@ approve or deny it before the subagent runs. Once approved, the delegated run
 may use the target agent's approval-gated tools; command policy deny rules still
 apply as a hard backstop.
 
+The subagent shares the parent run's usage, so its requests and tokens are
+counted in the parent's totals and spend limits.
+
 `cli_only` agents remain local-only. For example, `vikram` can delegate to
 `coder` from CLI/ACP sessions, but HTTP, threaded, and Telegram runs cannot use
 delegation to bypass `coder`'s surface restriction.

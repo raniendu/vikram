@@ -98,6 +98,21 @@ agent runs no longer inherit provider API keys or Vikram's own secrets.
 **Revisit when** the harness offers argv execution, or Vikram runs commands
 inside an OS sandbox (container or Modal), where a shell is safe to allow.
 
+## Decision: delegation stays on Vikram's `delegate_to_agent` (WS5)
+
+The harness `SubAgents` capability was evaluated and not adopted:
+
+- It needs every child agent **built up front** as a raw Pydantic AI agent.
+  Vikram builds the child only when it's called, after checking the surface
+  (so `coder` is never even constructed on HTTP, threaded or Telegram).
+- A child that asks for approval **fails the delegation** with a `UserError`.
+  Vikram stops the child and tells the parent why ("run that agent directly").
+- Running a raw agent skips the child's `UserPromptSubmit`/`Stop` hooks.
+
+Adopted instead: **usage forwarding**. The child runs with the parent's
+`RunUsage`, so delegated requests and tokens appear in the parent's usage and
+count toward its `spend_limits`, as they do with `SubAgents`.
+
 ## Versions
 
 `pydantic-ai-harness` is pinned exactly because it is pre-1.0. It requires
@@ -116,6 +131,6 @@ The migration runs as separate work streams, each in its own PR:
 | WS2 | File tools on harness `FileSystem` | PR |
 | WS4 | Skills on harness `Skills` | kept Vikram's loader (see decision above) |
 | WS3 | Shell on harness `Shell` | kept argv-only executor; adopted credential stripping (see decision above) |
-| WS5 | Delegation on harness `SubAgents` | planned |
+| WS5 | Delegation on harness `SubAgents` | kept Vikram's tool; adopted usage forwarding (see decision above) |
 | WS7 | Prompt-injection defender, guardrails, memory | planned |
 | WS6 | Durable agent runs on DBOS | planned |
