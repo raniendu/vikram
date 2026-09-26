@@ -17,6 +17,7 @@ import fcntl
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import uuid
@@ -35,6 +36,11 @@ logger = get_logger(__name__)
 AUTOCOMMIT_ENV = "VIKRAM_EVALS_AUTOCOMMIT"
 DISABLE_ENV = "VIKRAM_EVALS_DISABLE"
 REPEATS_ENV = "VIKRAM_EVALS_REPEATS"
+SUITE_TIMEOUT_ENV = "VIKRAM_EVALS_SUITE_TIMEOUT"
+# Allowance per repeat for checks (tests_pass is capped at 300s) and the
+# judge, and once per run for creating the commit's uv environment.
+_CHECKS_ALLOWANCE_SECONDS = 300.0
+_SETUP_ALLOWANCE_SECONDS = 600.0
 DEFAULT_REPEATS = 3
 
 EXIT_MODEL_UNAVAILABLE = 3
@@ -341,14 +347,37 @@ def run_suite_at(
     env = {k: v for k, v in os.environ.items() if k not in _SCRUBBED_ENV}
     env.pop("VIRTUAL_ENV", None)
     env["PYTHONPATH"] = str(suite_root)
-    completed = subprocess.run(argv, cwd=suite_root, env=env, check=False)
-    if completed.returncode == EXIT_MODEL_UNAVAILABLE:
+    budget = suite_timeout(suite_root, agent, repeats)
+    # Own session so a timeout can kill the whole tree: uv, python, and any
+    # command the agent started.
+    process = subprocess.Popen(argv, cwd=suite_root, env=env, start_new_session=True)
+    try:
+        returncode = process.wait(timeout=budget)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+        logger.warning("eval_suite_timed_out", agent=agent, timeout_seconds=budget)
+        raise SuiteRunError(f"Suite run for {agent} timed out after {budget:.0f}s.")
+    if returncode == EXIT_MODEL_UNAVAILABLE:
         raise ModelUnavailable(f"Model server unreachable for {agent}.")
-    if completed.returncode != 0 or not out.exists():
-        raise SuiteRunError(
-            f"Suite run for {agent} exited with {completed.returncode}."
-        )
+    if returncode != 0 or not out.exists():
+        raise SuiteRunError(f"Suite run for {agent} exited with {returncode}.")
     return json.loads(out.read_text())
+
+
+def suite_timeout(suite_root: Path, agent: str, repeats: int) -> float:
+    """Wall-clock budget for one suite run, from the cases' own timeouts."""
+    override = os.environ.get(SUITE_TIMEOUT_ENV)
+    if override:
+        try:
+            return float(override)
+        except ValueError:
+            logger.warning("eval_suite_timeout_invalid", env=SUITE_TIMEOUT_ENV)
+    from evals.cases import load_suite
+
+    cases = load_suite(agent, suite_root / "evals").cases
+    per_repeat = sum(c.timeout_seconds + _CHECKS_ALLOWANCE_SECONDS for c in cases)
+    return per_repeat * repeats + _SETUP_ALLOWANCE_SECONDS
 
 
 def _autocommit_enabled() -> bool:

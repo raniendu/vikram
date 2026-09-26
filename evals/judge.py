@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -14,8 +15,17 @@ logger = get_logger(__name__)
 
 JUDGE_PROVIDER_ENV = "VIKRAM_EVAL_JUDGE_PROVIDER"
 JUDGE_MODEL_ENV = "VIKRAM_EVAL_JUDGE_MODEL"
+JUDGE_TIMEOUT_ENV = "VIKRAM_EVAL_JUDGE_TIMEOUT"
+JUDGE_TIMEOUT_SECONDS = 120.0
 # The judge defaults to this spec's model: a general assistant, not the coder.
 DEFAULT_JUDGE_AGENT = "vikram"
+
+
+def judge_timeout() -> float:
+    try:
+        return float(os.environ.get(JUDGE_TIMEOUT_ENV, JUDGE_TIMEOUT_SECONDS))
+    except ValueError:
+        return JUDGE_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -60,8 +70,12 @@ def build_judge_model(settings: Any) -> JudgeModel:
 async def judge(
     *, prompt: str, output: str, rubric: str, threshold: float, model: JudgeModel
 ) -> Verdict:
-    grading = await judge_input_output(
-        prompt, output, rubric, model.raw, model_settings={"temperature": 0.0}
+    # Bounded so a hung model server fails this repeat instead of the worker.
+    grading = await asyncio.wait_for(
+        judge_input_output(
+            prompt, output, rubric, model.raw, model_settings={"temperature": 0.0}
+        ),
+        timeout=judge_timeout(),
     )
     score = max(0.0, min(1.0, float(grading.score)))
     logger.info(

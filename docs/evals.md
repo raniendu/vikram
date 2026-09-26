@@ -43,6 +43,21 @@ worker (.vikram/evals/logs/worker.log)
 - One worker at a time. Commits made while it runs are coalesced into one
   follow-up job; the diff from baseline to the newest HEAD covers them all.
 - If Ollama is not reachable, the job is skipped and nothing is recorded.
+- Every step has a time limit, so a hung model server can't stall the worker:
+  - each agent run is limited to its case's `timeout_seconds` (default 600);
+  - each judge call to `VIKRAM_EVAL_JUDGE_TIMEOUT` seconds (default 120);
+  - the whole suite run to the sum of its case limits plus room for checks and
+    setup (`VIKRAM_EVALS_SUITE_TIMEOUT` overrides it). A suite past its limit is
+    killed along with everything it started, and the job is marked `FAILED`
+    in `status`.
+
+To see what a commit changed and whether it would trigger a run, without
+running anything:
+
+```bash
+uv run python -m evals detect                       # HEAD~1..HEAD
+uv run python -m evals detect --base main --head HEAD
+```
 
 ### Change kinds
 
@@ -84,6 +99,9 @@ Ollama digest, the judge model, package versions, the suite hash, the summary
 (pass rate, judge score, tokens, latency, tool calls) and per-case metrics with
 the names of failed checks, plus the difference from the baseline. It never
 holds prompts, answers or author emails.
+
+Records are about 10 KB each (1,000 runs ≈ 10 MB) and are never pruned. The
+history is the point: it lets you see quality over time.
 
 ### How scoring works
 

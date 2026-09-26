@@ -2,6 +2,7 @@
 
 Commands people run:
   status        queued job, running worker, last results
+  detect        dry run: what a commit changed and whether it would trigger
   compare A B   before/after table (run ids, commit shas, labels or files)
   report        write the HTML trend page
   run           run the suite on the working tree now (not committed)
@@ -49,6 +50,36 @@ def _cmd_hook(args: argparse.Namespace) -> int:
             f"vikram-evals: queued {', '.join(job.agents)} for {job.sha[:7]} "
             f"(log: {log_path(_repo()).relative_to(_repo())})\n"
         )
+    return 0
+
+
+def _cmd_detect(args: argparse.Namespace) -> int:
+    from evals import gitutil
+    from evals.cases import list_agents
+    from evals.changes import detect_changes
+
+    repo = _repo()
+    base = gitutil.rev_parse(repo, args.base)
+    head = gitutil.rev_parse(repo, args.head)
+    if base is None or head is None:
+        sys.stderr.write(
+            f"Unknown commit: {args.base if base is None else args.head}\n"
+        )
+        return 1
+    changeset = detect_changes(repo, base, head, list_agents())
+    sys.stdout.write(f"{base[:7]}..{head[:7]}\n")
+    agents = changeset.agents()
+    if not agents:
+        sys.stdout.write("no eval-relevant changes; the hook would not queue a run\n")
+        return 0
+    for agent in agents:
+        described = changeset.for_agent(agent)
+        sys.stdout.write(f"{agent}: {', '.join(described['kinds'])}\n")
+        for path in described["files"]:
+            sys.stdout.write(f"  file  {path}\n")
+        for key, value in described["details"].items():
+            sys.stdout.write(f"  {key}: {json.dumps(value)}\n")
+    sys.stdout.write(f"the hook would queue: {', '.join(agents)}\n")
     return 0
 
 
@@ -197,6 +228,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("hook").set_defaults(fn=_cmd_hook)
+
+    p = sub.add_parser("detect", help="dry run of the hook's change detection")
+    p.add_argument("--base", default="HEAD~1")
+    p.add_argument("--head", default="HEAD")
+    p.set_defaults(fn=_cmd_detect)
 
     p = sub.add_parser("worker")
     p.add_argument("--repeats", type=int)

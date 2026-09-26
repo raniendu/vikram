@@ -767,3 +767,105 @@ def test_report_renders_history(spec_repo):
     assert "<svg" in html and "coder" in html
     assert "prompt_lines" in html
     assert "+50pt" in html
+
+
+# --- review follow-ups: rule order, timeouts, dry run ------------------------------
+
+
+def test_path_rules_put_shared_before_per_agent_rules():
+    """First match wins, so a spec/*/ glob listed before a spec/shared/ one
+    would claim shared files for a non-existent agent named "shared"."""
+    templates = {"*", "{agent}", "{case_agent}"}
+    first_per_agent = None
+    for index, (pattern, kind, template) in enumerate(changes._PATH_RULES):
+        assert kind in changes.ALL_KINDS, pattern
+        assert template in templates, pattern
+        if pattern.startswith("spec/*/") and first_per_agent is None:
+            first_per_agent = index
+        if pattern.startswith("spec/shared/"):
+            assert first_per_agent is None or index < first_per_agent, pattern
+    patterns = [rule[0] for rule in changes._PATH_RULES]
+    assert len(patterns) == len(set(patterns))
+
+
+async def test_judge_call_is_bounded(monkeypatch):
+    import asyncio
+
+    from evals import judge as judge_mod
+
+    async def hang(*args, **kwargs):
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(judge_mod, "judge_input_output", hang)
+    monkeypatch.setenv(judge_mod.JUDGE_TIMEOUT_ENV, "0.05")
+    with pytest.raises(TimeoutError):
+        await judge_mod.judge(
+            prompt="p",
+            output="o",
+            rubric="r",
+            threshold=0.5,
+            model=JudgeModel(raw=None, provider="x", model="y"),
+        )
+
+
+def test_suite_timeout_budget_and_override(monkeypatch):
+    monkeypatch.delenv(orchestrate.SUITE_TIMEOUT_ENV, raising=False)
+    cases = load_suite("coder").cases
+    expected = (
+        sum(c.timeout_seconds + orchestrate._CHECKS_ALLOWANCE_SECONDS for c in cases)
+        * 2
+        + orchestrate._SETUP_ALLOWANCE_SECONDS
+    )
+    assert orchestrate.suite_timeout(SUITE_DIR.parent, "coder", 2) == expected
+    monkeypatch.setenv(orchestrate.SUITE_TIMEOUT_ENV, "7")
+    assert orchestrate.suite_timeout(SUITE_DIR.parent, "coder", 2) == 7.0
+
+
+def test_hung_suite_run_is_killed(tmp_path, monkeypatch):
+    """A suite subprocess past its budget is killed with its whole group."""
+    pid_file = tmp_path / "child.pid"
+    fake_uv = tmp_path / "uv"
+    fake_uv.write_text("#!/bin/sh\n" f"sleep 30 & echo $! > {pid_file}\n" "wait\n")
+    fake_uv.chmod(0o755)
+    code_dir = tmp_path / "code"
+    code_dir.mkdir()
+    (code_dir / "uv.lock").write_text(
+        '[[package]]\nname = "pydantic-ai-slim"\nversion = "2.31.1"\n'
+    )
+    monkeypatch.setattr(orchestrate.shutil, "which", lambda name: str(fake_uv))
+    monkeypatch.setenv(orchestrate.SUITE_TIMEOUT_ENV, "1")
+
+    with pytest.raises(orchestrate.SuiteRunError, match="timed out"):
+        orchestrate.run_suite_at(
+            tmp_path, code_dir, SUITE_DIR.parent, "coder", repeats=1, run_id="t"
+        )
+    import os
+    import time
+
+    child = int(pid_file.read_text())
+    for _ in range(50):  # the grandchild dies with its process group
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("sleep child survived the timeout")
+
+
+def test_detect_command_is_a_dry_run(spec_repo, monkeypatch, capsys):
+    from evals.__main__ import main
+
+    (spec_repo / "spec/coder/system_prompt.md").write_text("Be careful.\nBrief.\n")
+    _commit_all(spec_repo, "prompt")
+    monkeypatch.chdir(spec_repo)
+    assert main(["detect"]) == 0
+    out = capsys.readouterr().out
+    assert "coder: prompt" in out
+    assert "the hook would queue: coder" in out
+    assert not (spec_repo / ".vikram").exists()  # nothing queued
+
+    (spec_repo / "README.md").write_text("docs\n")
+    _commit_all(spec_repo, "docs")
+    assert main(["detect"]) == 0
+    assert "would not queue" in capsys.readouterr().out
