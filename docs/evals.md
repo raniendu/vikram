@@ -76,10 +76,44 @@ uv run python -m evals detect --base main --head HEAD
 agent. A model re-pulled under the same tag changes no file, so run
 `uv run python -m evals check-models` (by hand or from cron) to catch it.
 
+## Watching a run
+
+A job prints one line per step: to the terminal with `enqueue --wait`, and to
+`.vikram/evals/logs/worker.log` when the hook started it in the background.
+
+```
+[evals 14:02:10] job 3a1b2c4: 4 suite runs for coder, vikram (no earlier results to compare with, so the parent commit is scored first)
+[evals 14:02:10] step 1/4: coder, before (9f8e7d6). Preparing the commit's Python environment; ...
+[evals 14:03:40] coder: 12 cases x 3 repeats = 36 agent runs
+[evals 14:03:40] case 1/12 coder.fix_failing_test, repeat 1/3: running (0/36 runs done)
+[evals 14:04:21] case 1/12 coder.fix_failing_test, repeat 1/3: passed (41s, judge 0.90). 1/36 runs done, about 23m 55s left
+```
+
+From another terminal, `status` shows where the job is:
+
+```
+$ uv run python -m evals status
+queued: nothing
+running: job 3a1b2c4 for coder, vikram, 3 repeats, 14m 10s so far
+  step 2/4: coder, after (3a1b2c4)
+  case 5/12 coder.edit_readme, repeat 2/3
+  14/36 runs done, 12 passed, about 21m 00s left in this step
+```
+
+- A **step** is one suite run on one commit: `before` (the parent commit,
+  scored only when there is no earlier result to compare with) or `after`.
+- **Time left** is the average time per finished run times the runs left in
+  the step. It appears after the first run.
+- If the worker died, `status` says the job stopped without finishing.
+- Lines carry case ids, pass/fail, judge scores and times, never prompts or
+  model output (those stay in `.vikram/evals/runs/`).
+- The agent under test logs at `WARNING` during a suite, so its own messages
+  don't bury the progress. Set `VIKRAM_EVALS_LOG_LEVEL=INFO` to see them.
+
 ## Reading results
 
 ```bash
-uv run python -m evals status                    # queue + last results
+uv run python -m evals status                    # progress, queue, last results
 uv run python -m evals compare 9f8e7d6 ab12cd3 --agent coder
 uv run python -m evals report                    # .vikram/evals/report.html
 ```

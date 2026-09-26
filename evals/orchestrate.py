@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from evals import STATE_RELPATH, changes, gitutil, history
+from evals import STATE_RELPATH, changes, gitutil, history, progress
 from evals.cases import list_agents, suite_hash
 from vikram.logging import get_logger
 
@@ -88,6 +88,10 @@ def summary_log_path(repo: Path) -> Path:
     path = state_dir(repo) / "logs"
     path.mkdir(exist_ok=True)
     return path / "summary.log"
+
+
+def progress_path(repo: Path) -> Path:
+    return state_dir(repo) / progress.PROGRESS_FILE
 
 
 def _pending_path(repo: Path) -> Path:
@@ -347,6 +351,7 @@ def run_suite_at(
     env = {k: v for k, v in os.environ.items() if k not in _SCRUBBED_ENV}
     env.pop("VIRTUAL_ENV", None)
     env["PYTHONPATH"] = str(suite_root)
+    env[progress.PROGRESS_ENV] = str(progress_path(repo))
     budget = suite_timeout(suite_root, agent, repeats)
     # Own session so a timeout can kill the whole tree: uv, python, and any
     # command the agent started.
@@ -395,9 +400,13 @@ def process_job(
     repeats = _repeats(repeats)
     head = job.sha
     logger.info("eval_job_started", sha=head[:7], agents=job.agents, repeats=repeats)
+    tracker = progress.JobProgress(
+        progress_path(repo), sha=head, agents=job.agents, repeats=repeats
+    )
     space = _Workspace(repo=repo, root=state_dir(repo) / "jobs" / uuid.uuid4().hex)
     written: list[Path] = []
     kinds_seen: set[str] = set()
+    outcome = "failed"
     try:
         # A manual run on an old commit may predate the suite; use HEAD's.
         suite_sha = head
@@ -406,6 +415,9 @@ def process_job(
         suite_root = space.freeze_suite(suite_sha)
         suite_agents = set(list_agents(suite_root / "evals"))
         records = history.load_records(repo)
+
+        # Plan first, so progress can say "step 2 of 4".
+        plan: list[tuple[str, dict[str, Any] | None, str | None]] = []
         for agent in job.agents:
             if agent not in suite_agents:
                 logger.info("eval_agent_has_no_cases", agent=agent)
@@ -418,31 +430,50 @@ def process_job(
                 latest = history.latest_record(records, agent)
                 if latest and latest.get("suite_hash") == s_hash:
                     baseline = latest
+            parent = None
             if baseline is None:
                 parent = gitutil.parent_of(repo, head)
                 if parent is None:
                     logger.info("eval_no_parent_for_baseline", agent=agent)
-                else:
-                    when = datetime.now(timezone.utc)
-                    result = runner(
-                        repo,
-                        space.checkout(parent),
-                        suite_root,
-                        agent,
-                        repeats=repeats,
-                        run_id=history.make_run_id(when, parent, agent),
-                    )
-                    baseline = history.build_record(
-                        repo=repo,
-                        result=result,
-                        sha=parent,
-                        trigger="baseline",
-                        change={"kinds": [], "files": [], "details": {}},
-                        baseline=None,
-                        when=when,
-                    )
-                    written.append(history.write_record(repo, baseline))
+            plan.append((agent, baseline, parent))
+        total = sum(2 if parent else 1 for _, _, parent in plan)
+        step = 0
+        progress.say(
+            f"job {head[:7]}: {total} suite runs for {', '.join(a for a, _, _ in plan)}"
+            + (
+                " (no earlier results to compare with, so the parent "
+                "commit is scored first)"
+                if any(parent for _, _, parent in plan)
+                else ""
+            )
+        )
 
+        for agent, baseline, parent in plan:
+            if parent is not None:
+                step += 1
+                tracker.step(step, total, agent=agent, side="before", sha=parent)
+                when = datetime.now(timezone.utc)
+                result = runner(
+                    repo,
+                    space.checkout(parent),
+                    suite_root,
+                    agent,
+                    repeats=repeats,
+                    run_id=history.make_run_id(when, parent, agent),
+                )
+                baseline = history.build_record(
+                    repo=repo,
+                    result=result,
+                    sha=parent,
+                    trigger="baseline",
+                    change={"kinds": [], "files": [], "details": {}},
+                    baseline=None,
+                    when=when,
+                )
+                written.append(history.write_record(repo, baseline))
+
+            step += 1
+            tracker.step(step, total, agent=agent, side="after", sha=head)
             when = datetime.now(timezone.utc)
             result = runner(
                 repo,
@@ -467,11 +498,15 @@ def process_job(
             summary = history.one_line_summary(record)
             logger.info("eval_record_written", run_id=record["run_id"])
             _append_summary(repo, summary)
+            progress.say(summary)
+        outcome = "finished"
     except ModelUnavailable:
         logger.warning("eval_job_skipped", sha=head[:7], reason="model_unavailable")
         _append_summary(repo, f"SKIPPED {head[:7]}: model server not reachable")
+        outcome = "skipped: model server not reachable"
     finally:
         space.close()
+        tracker.finish(outcome)
 
     if written:
         _commit_records(repo, job, written, sorted(kinds_seen))

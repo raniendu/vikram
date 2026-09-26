@@ -1,7 +1,7 @@
 """``python -m evals`` command line.
 
 Commands people run:
-  status        queued job, running worker, last results
+  status        running job's progress and time left, queue, last results
   detect        dry run: what a commit changed and whether it would trigger
   compare A B   before/after table (run ids, commit shas, labels or files)
   report        write the HTML trend page
@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -28,6 +29,8 @@ from evals import STATE_RELPATH
 from vikram.logging import configure_logging, get_logger
 
 logger = get_logger(__name__)
+
+LOG_LEVEL_ENV = "VIKRAM_EVALS_LOG_LEVEL"
 
 
 def _repo() -> Path:
@@ -205,7 +208,8 @@ def _cmd_report(args: argparse.Namespace) -> int:
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
-    from evals.orchestrate import state_dir, summary_log_path
+    from evals.orchestrate import progress_path, state_dir, summary_log_path
+    from evals.progress import describe
 
     repo = _repo()
     pending = state_dir(repo) / "pending.json"
@@ -216,6 +220,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
         )
     else:
         sys.stdout.write("queued: nothing\n")
+    sys.stdout.write("\n".join(describe(progress_path(repo))) + "\n")
     summary = summary_log_path(repo)
     if summary.exists():
         lines = summary.read_text().splitlines()[-args.lines :]
@@ -282,8 +287,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     # The hook runs on every commit; keep the terminal quiet unless it breaks.
-    level = "WARNING" if args.command == "hook" else "INFO"
-    configure_logging(level, stream=sys.stderr)
+    # A suite run prints its own progress lines (evals/progress.py); the agent
+    # under test's INFO logs would bury them, so they show only on request.
+    level = "WARNING" if args.command in {"hook", "run-suite", "run"} else "INFO"
+    configure_logging(os.environ.get(LOG_LEVEL_ENV, level), stream=sys.stderr)
     return args.fn(args)
 
 

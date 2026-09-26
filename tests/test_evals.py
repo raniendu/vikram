@@ -869,3 +869,100 @@ def test_detect_command_is_a_dry_run(spec_repo, monkeypatch, capsys):
     _commit_all(spec_repo, "docs")
     assert main(["detect"]) == 0
     assert "would not queue" in capsys.readouterr().out
+
+
+# --- progress ---------------------------------------------------------------
+
+
+def test_suite_progress_counts_runs_and_estimates_time_left(tmp_path, capsys):
+    from evals import progress
+
+    path = tmp_path / "progress.json"
+    job = progress.JobProgress(path, sha="a" * 40, agents=["coder"], repeats=2)
+    job.step(1, 2, agent="coder", side="before", sha="b" * 40)
+    ticks = iter([0.0, 0.0, 30.0, 30.0, 90.0])
+    suite = progress.SuiteProgress(
+        "coder", cases=2, repeats=2, path=path, clock=lambda: next(ticks)
+    )
+    suite.run_started("coder.a", 1, 1)
+    suite.run_finished("coder.a", 1, 1, passed=True, judge_score=0.8, error_type=None)
+    assert suite.eta_seconds() == 90.0  # 30s per run x 3 left
+    suite.run_started("coder.a", 1, 2)
+    suite.run_finished(
+        "coder.a", 1, 2, passed=False, judge_score=None, error_type="TimeoutError"
+    )
+    assert suite.eta_seconds() == 90.0  # (30 + 60) / 2 x 2 left
+
+    saved = json.loads(path.read_text())["suite"]
+    assert saved["runs_done"] == 2 and saved["runs_passed"] == 1
+    assert saved["runs_total"] == 4 and saved["eta_seconds"] == 90
+
+    lines = progress.describe(path)
+    assert lines[0].startswith("running: job aaaaaaa for coder, 2 repeats")
+    assert lines[1] == "  step 1/2: coder, before (bbbbbbb)"
+    assert lines[2] == "  case 1/2 coder.a, repeat 2/2"
+    assert lines[3] == "  2/4 runs done, 1 passed, about 1m 30s left in this step"
+
+    err = capsys.readouterr().err
+    assert "step 1/2: coder, before (bbbbbbb)" in err
+    assert "repeat 1/2: passed (30s, judge 0.80). 1/4 runs done" in err
+    assert "failed (1m 00s, error TimeoutError)" in err
+
+    job.finish("finished")
+    assert not path.exists()
+    assert progress.describe(path) == ["running: nothing"]
+
+
+def test_status_flags_a_job_whose_worker_died(tmp_path):
+    from evals import progress
+
+    path = tmp_path / "progress.json"
+    path.write_text(json.dumps({"pid": 2**22 + 12345, "sha": "c" * 40}))
+    assert "stopped without finishing" in progress.describe(path)[0]
+
+
+def test_format_duration():
+    from evals.progress import format_duration
+
+    assert format_duration(42) == "42s"
+    assert format_duration(425) == "7m 05s"
+    assert format_duration(3780) == "1h 03m"
+
+
+async def test_run_suite_reports_progress(settings, offline_models, capsys):
+    await eval_runner.run_suite(
+        "coder",
+        repeats=1,
+        case_filter=["coder.find_expiry_logic"],
+        settings=settings,
+        build_agent=offline_models,
+    )
+    err = capsys.readouterr().err
+    assert "coder: 1 cases x 1 repeats = 1 agent runs" in err
+    assert "case 1/1 coder.find_expiry_logic, repeat 1/1: passed" in err
+    assert "suite finished" in err
+
+
+def test_process_job_reports_steps_and_clears_progress(eval_repo, capsys):
+    seen: list[dict] = []
+    base = _fake_runner(1.0)
+
+    def runner(repo, *args, **kwargs):
+        seen.append(json.loads(orchestrate.progress_path(repo).read_text())["step"])
+        return base(repo, *args, **kwargs)
+
+    head = _git(eval_repo, "rev-parse", "HEAD").strip()
+    orchestrate.process_job(
+        eval_repo,
+        orchestrate.Job(sha=head, branch="main", agents=["coder"]),
+        repeats=1,
+        runner=runner,
+    )
+    assert [(s["index"], s["total"], s["side"]) for s in seen] == [
+        (1, 2, "before"),
+        (2, 2, "after"),
+    ]
+    assert not orchestrate.progress_path(eval_repo).exists()
+    err = capsys.readouterr().err
+    assert "2 suite runs for coder (no earlier results" in err
+    assert f"job {head[:7]} finished" in err

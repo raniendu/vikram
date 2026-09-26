@@ -34,7 +34,7 @@ Key modules:
 - `uv run vikram-acp --agent coder`: start ACP over stdio.
 - `uv run pytest`: run the offline test suite.
 - `uv run pre-commit install`: also installs the post-commit eval hook.
-- `uv run python -m evals status|compare|report`: eval queue, before/after
+- `uv run python -m evals status|compare|report`: eval progress and queue, before/after
   table, and trend page (see `docs/evals.md`).
 - `uv run pre-commit run --all-files`: run Black and isort.
 - `docker compose -f compose.example.yml config`: validate the example Compose file.
