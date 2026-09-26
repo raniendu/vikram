@@ -476,7 +476,7 @@ API through SSE streams on active sessions.
 ## Observability
 
 - **Logging**: JSON-structured logs via `structlog`, configurable per-stream (stdout for servers, stderr for workers).
-- **Tracing**: OpenLIT/OpenTelemetry integration. Trace context propagates across the DBOS queue boundary via W3C `traceparent`/`tracestate` headers embedded in CloudEvents.
+- **Tracing**: OpenTelemetry SDK with OTLP/HTTP export; Pydantic AI emits the GenAI spans for model and tool calls. Trace context propagates across the DBOS queue boundary via W3C `traceparent`/`tracestate` headers embedded in CloudEvents.
 - **Endpoints**: `/healthz` (liveness), `/readyz` (readiness with dependency checks).
 - **Per-request correlation**: Every response carries `x-request-id`, attached to all log lines and spans for that request.
 

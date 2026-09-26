@@ -1,21 +1,24 @@
-import logging
-import sys
-from types import SimpleNamespace
-
+from tests.conftest import find_log_event
+from vikram import observability
 from vikram.observability import init_observability, reset_observability_for_tests
 from vikram.settings import VikramSettings
 
 
 def teardown_function():
     reset_observability_for_tests()
-    logging.getLogger("openlit").setLevel(logging.NOTSET)
 
 
-def _install_fake_openlit(monkeypatch, calls, instrumentation_calls=None):
-    monkeypatch.setitem(
-        sys.modules,
-        "openlit",
-        SimpleNamespace(init=lambda **kwargs: calls.append(kwargs)),
+def _install_fakes(monkeypatch, provider_calls, instrumentation_calls=None):
+    """Record provider installs and Pydantic AI instrumentation.
+
+    OpenTelemetry honours ``set_tracer_provider`` once per process, so the
+    real install is swapped out; ``_install_providers`` is tested separately
+    against the SDK objects it builds.
+    """
+    monkeypatch.setattr(
+        observability,
+        "_install_providers",
+        lambda settings: provider_calls.append(settings),
     )
     monkeypatch.setattr(
         "pydantic_ai.Agent.instrument_all",
@@ -29,7 +32,7 @@ def _install_fake_openlit(monkeypatch, calls, instrumentation_calls=None):
 
 def test_observability_is_disabled_by_default(monkeypatch):
     calls = []
-    _install_fake_openlit(monkeypatch, calls)
+    _install_fakes(monkeypatch, calls)
 
     enabled = init_observability(VikramSettings(_env_file=None))
 
@@ -37,10 +40,10 @@ def test_observability_is_disabled_by_default(monkeypatch):
     assert calls == []
 
 
-def test_observability_initializes_openlit_for_pydantic_ai(monkeypatch):
+def test_observability_installs_otel_and_instruments_pydantic_ai(monkeypatch):
     calls = []
     instrumentation_calls = []
-    _install_fake_openlit(monkeypatch, calls, instrumentation_calls)
+    _install_fakes(monkeypatch, calls, instrumentation_calls)
 
     enabled = init_observability(
         VikramSettings(
@@ -52,25 +55,14 @@ def test_observability_initializes_openlit_for_pydantic_ai(monkeypatch):
     )
 
     assert enabled is True
-    assert logging.getLogger("openlit").level == logging.WARNING
-    assert calls == [
-        {
-            "application_name": "vikram",
-            "service_name": "vikram",
-            "environment": "local",
-            "otlp_endpoint": "http://jaeger:4318",
-            "capture_message_content": False,
-            "disabled_instrumentors": ["mistral"],
-            "disable_metrics": False,
-        }
-    ]
+    assert len(calls) == 1
     assert len(instrumentation_calls) == 1
     assert instrumentation_calls[0].include_content is False
 
 
 def test_observability_is_idempotent(monkeypatch):
     calls = []
-    _install_fake_openlit(monkeypatch, calls)
+    _install_fakes(monkeypatch, calls)
     settings = VikramSettings(_env_file=None, VIKRAM_OBSERVABILITY_ENABLED=True)
 
     assert init_observability(settings) is True
@@ -80,7 +72,8 @@ def test_observability_is_idempotent(monkeypatch):
 
 def test_observability_never_captures_message_content_in_production(monkeypatch):
     calls = []
-    _install_fake_openlit(monkeypatch, calls)
+    instrumentation_calls = []
+    _install_fakes(monkeypatch, calls, instrumentation_calls)
 
     enabled = init_observability(
         VikramSettings(
@@ -92,7 +85,103 @@ def test_observability_never_captures_message_content_in_production(monkeypatch)
     )
 
     assert enabled is True
-    assert calls[0]["capture_message_content"] is False
+    assert instrumentation_calls[0].include_content is False
+
+
+def test_message_content_capture_allowed_outside_production(monkeypatch):
+    calls = []
+    instrumentation_calls = []
+    _install_fakes(monkeypatch, calls, instrumentation_calls)
+
+    init_observability(
+        VikramSettings(
+            _env_file=None,
+            ENVIRONMENT="local",
+            VIKRAM_OBSERVABILITY_ENABLED=True,
+            VIKRAM_OBSERVABILITY_CAPTURE_MESSAGE_CONTENT=True,
+        )
+    )
+
+    assert instrumentation_calls[0].include_content is True
+
+
+def test_otlp_urls_are_built_from_the_collector_base():
+    assert (
+        observability._otlp_url("http://jaeger:4318/", "traces")
+        == "http://jaeger:4318/v1/traces"
+    )
+    assert (
+        observability._otlp_url("http://jaeger:4318", "metrics")
+        == "http://jaeger:4318/v1/metrics"
+    )
+    assert observability._otlp_url(None, "traces") is None
+
+
+def test_install_providers_exports_traces_and_metrics_over_otlp(monkeypatch):
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.trace import TracerProvider
+
+    installed = {}
+    monkeypatch.setattr(
+        "opentelemetry.trace.set_tracer_provider",
+        lambda provider: installed.setdefault("trace", provider),
+    )
+    monkeypatch.setattr(
+        "opentelemetry.metrics.set_meter_provider",
+        lambda provider: installed.setdefault("metrics", provider),
+    )
+
+    observability._install_providers(
+        VikramSettings(
+            _env_file=None,
+            ENVIRONMENT="staging",
+            VIKRAM_OBSERVABILITY_SERVICE_NAME="vikram-test",
+            VIKRAM_OTLP_ENDPOINT="http://collector:4318",
+        )
+    )
+
+    tracer_provider = installed["trace"]
+    assert isinstance(tracer_provider, TracerProvider)
+    attributes = tracer_provider.resource.attributes
+    assert attributes["service.name"] == "vikram-test"
+    assert attributes["deployment.environment"] == "staging"
+    assert isinstance(installed["metrics"], MeterProvider)
+    tracer_provider.shutdown()
+    installed["metrics"].shutdown()
+
+
+def test_install_providers_skips_metrics_when_disabled(monkeypatch):
+    installed = {}
+    monkeypatch.setattr(
+        "opentelemetry.trace.set_tracer_provider",
+        lambda provider: installed.setdefault("trace", provider),
+    )
+    monkeypatch.setattr(
+        "opentelemetry.metrics.set_meter_provider",
+        lambda provider: installed.setdefault("metrics", provider),
+    )
+
+    observability._install_providers(
+        VikramSettings(_env_file=None, VIKRAM_OBSERVABILITY_DISABLE_METRICS=True)
+    )
+
+    assert "trace" in installed and "metrics" not in installed
+    installed["trace"].shutdown()
+
+
+def test_legacy_instrumentor_setting_is_accepted_but_ignored(monkeypatch, log_events):
+    calls = []
+    _install_fakes(monkeypatch, calls)
+
+    init_observability(
+        VikramSettings(
+            _env_file=None,
+            VIKRAM_OBSERVABILITY_ENABLED=True,
+            VIKRAM_OBSERVABILITY_DISABLED_INSTRUMENTORS="openai,mistral",
+        )
+    )
+
+    assert find_log_event(log_events, "observability_disabled_instrumentors_ignored")
 
 
 def test_trace_context_survives_the_queue_boundary():
