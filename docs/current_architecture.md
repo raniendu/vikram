@@ -103,4 +103,5 @@ references.
   permissions. Command policy can require approval dynamically per command.
 - Pydantic AI manages MCP toolset lifecycle per run; the interactive CLI keeps
   configured servers warm for the session.
-- Observability uses OpenLIT/OpenTelemetry plus Vikram's structured logs.
+- Observability uses the OpenTelemetry SDK (OTLP/HTTP export) with Pydantic AI's
+  built-in instrumentation, plus Vikram's structured logs.

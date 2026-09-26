@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from collections.abc import Mapping
 from typing import Any
 
@@ -17,6 +16,7 @@ TRACER_NAME = "vikram"
 # W3C Trace Context headers, which are also the CloudEvents distributed-tracing
 # extension attribute names.
 _TRACE_HEADERS = ("traceparent", "tracestate")
+DEFAULT_DISABLED_INSTRUMENTORS = "mistral"
 
 
 def get_tracer() -> trace.Tracer:
@@ -25,7 +25,7 @@ def get_tracer() -> trace.Tracer:
     Safe to call whether or not :func:`init_observability` ran: with no SDK
     configured OpenTelemetry hands back a no-op tracer, so spans cost almost
     nothing and callers never need to branch on whether tracing is enabled.
-    OpenLIT installs the real SDK when tracing is turned on.
+    :func:`init_observability` installs the real SDK when tracing is on.
     """
     return trace.get_tracer(TRACER_NAME)
 
@@ -82,6 +82,60 @@ def extract_trace_context(carrier: Mapping[str, Any] | None) -> Context | None:
     return propagate.extract(headers)
 
 
+def _otlp_url(endpoint: str | None, signal: str) -> str | None:
+    """Full OTLP/HTTP URL for ``signal`` from a base endpoint.
+
+    ``VIKRAM_OTLP_ENDPOINT`` is a collector base such as
+    ``http://localhost:4318`` (the form OpenLIT took). ``None`` lets the
+    exporter fall back to the standard ``OTEL_EXPORTER_OTLP_*`` env vars.
+    """
+    if not endpoint:
+        return None
+    return f"{endpoint.rstrip('/')}/v1/{signal}"
+
+
+def _install_providers(settings: VikramSettings) -> None:
+    """Install the global tracer (and meter) provider with OTLP/HTTP export."""
+    from opentelemetry import metrics
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+    resource = Resource.create(
+        {
+            "service.name": settings.observability_service_name,
+            "deployment.environment": settings.environment,
+        }
+    )
+    tracer_provider = TracerProvider(resource=resource)
+    tracer_provider.add_span_processor(
+        BatchSpanProcessor(
+            OTLPSpanExporter(
+                endpoint=_otlp_url(settings.observability_otlp_endpoint, "traces")
+            )
+        )
+    )
+    trace.set_tracer_provider(tracer_provider)
+
+    if settings.observability_disable_metrics:
+        return
+    from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
+        OTLPMetricExporter,
+    )
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+
+    reader = PeriodicExportingMetricReader(
+        OTLPMetricExporter(
+            endpoint=_otlp_url(settings.observability_otlp_endpoint, "metrics")
+        )
+    )
+    metrics.set_meter_provider(
+        MeterProvider(resource=resource, metric_readers=[reader])
+    )
+
+
 def init_observability(settings: VikramSettings) -> bool:
     global _initialized
     if not settings.observability_enabled:
@@ -97,22 +151,16 @@ def init_observability(settings: VikramSettings) -> bool:
     )
     if settings.observability_capture_message_content and not capture_message_content:
         logger.warning("observability_message_content_capture_forced_off")
+    if settings.observability_disabled_instrumentors != DEFAULT_DISABLED_INSTRUMENTORS:
+        # OpenLIT-only knob; there are no third-party instrumentors any more.
+        logger.warning("observability_disabled_instrumentors_ignored")
 
-    logging.getLogger("openlit").setLevel(logging.WARNING)
-    import openlit
-
-    openlit.init(
-        application_name=settings.observability_service_name,
-        service_name=settings.observability_service_name,
-        environment=settings.environment,
-        otlp_endpoint=settings.observability_otlp_endpoint,
-        capture_message_content=capture_message_content,
-        disabled_instrumentors=settings.observability_disabled_instrumentor_list,
-        disable_metrics=settings.observability_disable_metrics,
-    )
+    _install_providers(settings)
     from pydantic_ai import Agent
     from pydantic_ai.models.instrumented import InstrumentationSettings
 
+    # Pydantic AI emits the GenAI spans (model requests, tool calls, token
+    # usage) that OpenLIT used to produce by patching provider SDKs.
     Agent.instrument_all(
         InstrumentationSettings(include_content=capture_message_content)
     )

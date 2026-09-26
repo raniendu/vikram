@@ -192,6 +192,8 @@ class VikramSettings(BaseSettings):
     observability_disable_metrics: bool = Field(
         default=False, validation_alias="VIKRAM_OBSERVABILITY_DISABLE_METRICS"
     )
+    # Deprecated: an OpenLIT setting. OpenLIT was removed (it pinned
+    # anthropic<1.0); the value is accepted so existing .env files still load.
     observability_disabled_instrumentors: str = Field(
         default="mistral",
         validation_alias="VIKRAM_OBSERVABILITY_DISABLED_INSTRUMENTORS",
