@@ -16,6 +16,7 @@ from typing import Any, Literal
 from pydantic_ai import Tool
 
 from vikram.delegation import DELEGATE_TOOL_NAME
+from vikram.file_tools import HarnessFileTool
 from vikram.logging import get_logger
 from vikram.providers import PROVIDER_IDS, PROVIDERS
 from vikram.settings import VikramSettings, resolve_agent_model_selection
@@ -99,6 +100,12 @@ def _entry_callable(entry: Any) -> Any:
     return entry.function if isinstance(entry, Tool) else entry
 
 
+def _entry_description(entry: Any) -> str:
+    if isinstance(entry, HarnessFileTool):
+        return entry.description
+    return _first_paragraph(getattr(_entry_callable(entry), "__doc__", ""))
+
+
 def tool_catalog() -> list[ToolInfo]:
     """Every tool an agent spec may name, with its approval semantics.
 
@@ -112,9 +119,7 @@ def tool_catalog() -> list[ToolInfo]:
         infos.append(
             ToolInfo(
                 name=name,
-                description=_first_paragraph(
-                    getattr(_entry_callable(entry), "__doc__", "")
-                ),
+                description=_entry_description(entry),
                 requires_approval=always,
                 sequential=bool(getattr(entry, "sequential", False)),
                 approval=(
