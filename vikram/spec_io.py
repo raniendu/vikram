@@ -83,7 +83,12 @@ def _sync_table(doc: TOMLDocument | Table, key: str, value: dict[str, Any]) -> N
         for subkey in [k for k in existing.keys() if k not in value]:
             del existing[subkey]
         for subkey, subvalue in value.items():
-            existing[subkey] = subvalue
+            # Recurse into nested tables ([capabilities.compaction]) so their
+            # comments and commented-out options survive an editor save.
+            if isinstance(subvalue, dict) and isinstance(existing.get(subkey), Table):
+                _sync_table(existing, subkey, subvalue)
+            elif existing.get(subkey) != subvalue:
+                existing[subkey] = subvalue
         return
     table = tomlkit.table()
     for subkey, subvalue in value.items():

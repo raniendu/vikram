@@ -217,3 +217,26 @@ async def test_tool_guardrail_approval_reaches_vikrams_approval_handler():
     assert "wrote no.txt" not in result.output
     assert "refused by policy" in result.output
     assert "should not run" not in result.output
+
+
+def test_editor_save_keeps_comments_inside_capability_tables():
+    original = (
+        'name = "X"\ndescription = "d"\nsystem_prompt = "p.md"\n\n'
+        "[capabilities]\n"
+        "repair_tool_arguments = true   # keep me\n\n"
+        "[capabilities.compaction]\n"
+        "max_tokens = 24000             # and me\n"
+        '# strategy = "sliding_window"  # and this option\n'
+    )
+    draft = AgentSpecDraft.model_validate(tomllib.loads(original))
+    changed = draft.model_copy(
+        update={
+            "capabilities": CapabilitiesSpec.model_validate(
+                {"repair_tool_arguments": True, "compaction": {"max_tokens": 9000}}
+            )
+        }
+    )
+    text = render_agent_toml(changed, existing=original)
+    assert "# keep me" in text
+    assert '# strategy = "sliding_window"  # and this option' in text
+    assert "max_tokens = 9000" in text
