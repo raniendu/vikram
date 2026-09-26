@@ -31,6 +31,9 @@ names that were attached.
 | `repair_tool_arguments` | Fixes malformed tool-call JSON (trailing commas, single quotes, truncated JSON) before validation. Helps local models. | `true` / absent |
 | `tool_output_limits` | Caps every tool result, built-in or MCP, before the model sees it. Oversized output is truncated, never written to disk. | `max_chars` (40000), `strategy` `head` \| `tail` \| `head_tail` |
 | `compaction` | Keeps long conversations inside the context window. `summarizing` replaces older turns with a summary written by the agent's own model; `sliding_window` drops the oldest turns. | `strategy` (`summarizing`), `max_tokens` (24000) trigger, `keep_messages` (20) |
+| `prompt_injection` | Scans tool results (web pages, files, MCP output) for planted instructions, with local pattern detection and no network. `report` logs `prompt_injection_detected` (tool and risk level only); `block` also withholds high-risk results. | `mode` (`report`), `tools` (all) |
+| `guardrails` | Redacts known secret formats (Anthropic, OpenAI, AWS, GitHub, Slack, Stripe and Google keys, JWTs, private keys) and refuses prompts with blocked keywords before the model is called. | `redact_secrets` (`input`, `output`, `tool_results`), `blocked_keywords` |
+| `memory` | A notebook the agent writes to and reads across runs (`write_memory`, `read_memory`, `search_memory`, `delete_memory`), injected into each request. Stored in local SQLite. `conversation` keeps one notebook per chat, keyed by a hash of the conversation id. | `scope` (`conversation`), `database` (`.vikram/memory.sqlite3`), `max_tokens` (2000) |
 | `spend_limits` | Stops a run that exceeds its budget (`SpendLimitExceeded`). Local models are priced at zero, so use `tokens_per_run` with Ollama. Budgets live in process memory. | `tokens_per_run`, `usd_per_run`, `usd_per_day`, `surfaces` (`http`, `telegram`, `threaded`) |
 
 ## Shipped defaults
@@ -44,8 +47,13 @@ capabilities:
 | `tool_output_limits` | 40,000 chars, head + tail | One cap for every tool. MCP output was previously uncapped. The built-in tools keep their own, smaller limits for now. |
 | `compaction` | summarizing at 24,000 tokens, keep 20 | Long Telegram and API threads previously grew until the model's window overflowed, with only a warning at 85%. |
 
+Both also run `prompt_injection` in **report** mode, so detections are logged
+without changing answers. `vikram` redacts secrets from its replies
+(`guardrails.redact_secrets = ["output"]`).
+
 `spend_limits` is supported but off: local models cost nothing, and a
-budget stops a run with an error.
+budget stops a run with an error. `memory` is off: it stores what the
+model chooses to remember, so turning it on is a deliberate choice per agent.
 
 **Ollama context size:** Ollama truncates prompts silently at the model's
 `num_ctx`, which is often smaller than 24,000 tokens by default. If your model
@@ -132,5 +140,5 @@ The migration runs as separate work streams, each in its own PR:
 | WS4 | Skills on harness `Skills` | kept Vikram's loader (see decision above) |
 | WS3 | Shell on harness `Shell` | kept argv-only executor; adopted credential stripping (see decision above) |
 | WS5 | Delegation on harness `SubAgents` | kept Vikram's tool; adopted usage forwarding (see decision above) |
-| WS7 | Prompt-injection defender, guardrails, memory | planned |
+| WS7 | Prompt-injection defender, guardrails, memory | PR |
 | WS6 | Durable agent runs on DBOS | planned |
