@@ -174,9 +174,7 @@ def hook(repo: Path) -> Job | None:
         Job(sha=head, branch=gitutil.current_branch(repo), agents=triggered),
     )
     kinds = sorted({k for a in triggered for k in changeset.kinds[a]})
-    logger.info(
-        "eval_job_queued", sha=head[:7], agents=job.agents, change_kinds=kinds
-    )
+    logger.info("eval_job_queued", sha=head[:7], agents=job.agents, change_kinds=kinds)
     spawn_worker(repo)
     return job
 

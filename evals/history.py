@@ -28,12 +28,7 @@ def make_run_id(when: datetime, sha: str, agent: str) -> str:
 
 def record_path(repo: Path, record: dict[str, Any]) -> Path:
     when = datetime.fromisoformat(record["timestamp"])
-    return (
-        history_dir(repo)
-        / f"{when:%Y}"
-        / f"{when:%m}"
-        / f"{record['run_id']}.json"
-    )
+    return history_dir(repo) / f"{when:%Y}" / f"{when:%m}" / f"{record['run_id']}.json"
 
 
 def write_record(repo: Path, record: dict[str, Any]) -> Path:
@@ -77,7 +72,11 @@ def find_baseline(
         if sha == head or not gitutil.is_ancestor(repo, sha, head):
             continue
         key = (gitutil.distance(repo, sha, head), record["timestamp"])
-        if best is None or key[0] < best[0] or (key[0] == best[0] and key[1] >= best[1]):
+        if (
+            best is None
+            or key[0] < best[0]
+            or (key[0] == best[0] and key[1] >= best[1])
+        ):
             best = (*key, record)
     return best[2] if best else None
 
@@ -144,7 +143,9 @@ def compute_delta(after: dict[str, Any], before: dict[str, Any]) -> dict[str, An
             "tokens_mean_pct": _pct(case.get("tokens_mean"), prior.get("tokens_mean")),
             "status": case_status(d_pass, d_judge),
         }
-    summary["worse_cases"] = sorted(k for k, v in cases.items() if v["status"] == "worse")
+    summary["worse_cases"] = sorted(
+        k for k, v in cases.items() if v["status"] == "worse"
+    )
     summary["better_cases"] = sorted(
         k for k, v in cases.items() if v["status"] == "better"
     )

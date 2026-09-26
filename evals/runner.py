@@ -279,7 +279,9 @@ async def run_case_once(
                 repeat.latency_ms = round((time.perf_counter() - started) * 1000, 1)
                 repeat.error_type = type(exc).__name__
                 logger.exception(
-                    "eval_case_run_failed", case_id=case.id, error_type=type(exc).__name__
+                    "eval_case_run_failed",
+                    case_id=case.id,
+                    error_type=type(exc).__name__,
                 )
                 return repeat
             repeat.latency_ms = round((time.perf_counter() - started) * 1000, 1)

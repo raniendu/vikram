@@ -153,9 +153,7 @@ def test_workspace_checks(tmp_path):
 
     (root / "inventory" / "stock.py").write_text("changed\n")
     assert not run_check(CheckSpec(type="files_unchanged"), obs).passed
-    assert run_check(
-        CheckSpec(type="files_unchanged", paths=["tests/*"]), obs
-    ).passed
+    assert run_check(CheckSpec(type="files_unchanged", paths=["tests/*"]), obs).passed
     assert not run_check(
         CheckSpec(type="workspace_not_contains", value="compute_total", paths=["*.py"]),
         obs,
@@ -180,7 +178,12 @@ def test_prepare_workspace_setup_steps(tmp_path):
             "git_init": True,
             "write": {"inventory/dates.py": "changed\n"},
             "generate": [
-                {"path": "logs/a.log", "lines": 5, "line": "ok {n}", "inject": {3: "ERR"}}
+                {
+                    "path": "logs/a.log",
+                    "lines": 5,
+                    "line": "ok {n}",
+                    "inject": {3: "ERR"},
+                }
             ],
         }
     )
@@ -201,8 +204,13 @@ def test_eval_approvals_allow_test_runs_only():
         "R", (), {"tool_name": tool, "args": args}
     )()
     assert eval_runner._approve(request("write_file", path="a")) == "yes"
-    assert eval_runner._approve(request("run_command", command="python -m pytest")) == "yes"
-    assert eval_runner._approve(request("run_command", command="cat /etc/passwd")) == "no"
+    assert (
+        eval_runner._approve(request("run_command", command="python -m pytest"))
+        == "yes"
+    )
+    assert (
+        eval_runner._approve(request("run_command", command="cat /etc/passwd")) == "no"
+    )
     assert eval_runner._approve(request("run_command", command="curl x")) == "no"
     assert eval_runner._approve(request("some_other_tool")) == "no"
 
@@ -247,7 +255,9 @@ def offline_models(monkeypatch):
     from vikram.agent import build_agent as real_build
 
     def build(spec, settings, **kwargs):
-        return _Overridden(real_build(spec, settings, **kwargs), FunctionModel(_scripted_coder))
+        return _Overridden(
+            real_build(spec, settings, **kwargs), FunctionModel(_scripted_coder)
+        )
 
     return build
 
@@ -273,7 +283,9 @@ async def test_run_suite_offline_aggregates_metrics(settings, offline_models, tm
     assert by_id["coder.refuse_env_secrets"]["pass_rate"] == 1.0
     assert result["summary"]["pass_rate"] == 1.0
 
-    detail = json.loads((tmp_path / "details" / "coder.find_expiry_logic.json").read_text())
+    detail = json.loads(
+        (tmp_path / "details" / "coder.find_expiry_logic.json").read_text()
+    )
     assert detail["repeats"][0]["trace"][0]["tool"] == "read_file"
 
 
@@ -299,7 +311,9 @@ async def test_judge_scores_feed_pass_rate(settings, monkeypatch):
         lambda messages, info: ModelResponse(parts=[TextPart("Processes vs threads.")])
     )
     judge_model = JudgeModel(
-        raw=TestModel(custom_output_args={"reason": "fine", "pass": True, "score": 0.4}),
+        raw=TestModel(
+            custom_output_args={"reason": "fine", "pass": True, "score": 0.4}
+        ),
         provider="test",
         model="judge",
     )
@@ -382,7 +396,9 @@ def _detect(repo: Path, edit) -> changes.ChangeSet:
 def test_detects_prompt_change_for_one_agent(spec_repo):
     cs = _detect(
         spec_repo,
-        lambda r: (r / "spec/coder/system_prompt.md").write_text("Be careful.\nAnd brief.\n"),
+        lambda r: (r / "spec/coder/system_prompt.md").write_text(
+            "Be careful.\nAnd brief.\n"
+        ),
     )
     assert cs.agents() == ["coder"]
     described = cs.for_agent("coder")
@@ -399,7 +415,10 @@ def test_detects_model_settings_and_tools_with_details(spec_repo):
 
     described = _detect(spec_repo, edit).for_agent("coder")
     assert described["kinds"] == ["model", "model_settings", "tools"]
-    assert described["details"]["model_settings.temperature"] == {"from": 0.2, "to": 0.1}
+    assert described["details"]["model_settings.temperature"] == {
+        "from": 0.2,
+        "to": 0.1,
+    }
     assert described["details"]["tools"] == {"added": ["run_command"], "removed": []}
     assert described["details"]["model"] == {"from": "qwen", "to": "qwen:v2"}
 
@@ -425,7 +444,9 @@ def test_framework_version_bump_is_detected(spec_repo):
     lock = '[[package]]\nname = "pydantic-ai-slim"\nversion = "{v}"\n'
     (spec_repo / "uv.lock").write_text(lock.format(v="2.31.1"))
     _commit_all(spec_repo, "lock")
-    cs = _detect(spec_repo, lambda r: (r / "uv.lock").write_text(lock.format(v="2.40.0")))
+    cs = _detect(
+        spec_repo, lambda r: (r / "uv.lock").write_text(lock.format(v="2.40.0"))
+    )
     assert cs.for_agent("vikram")["details"]["pydantic-ai-slim"] == {
         "from": "2.31.1",
         "to": "2.40.0",
@@ -487,7 +508,9 @@ def test_baseline_is_newest_ancestor_with_same_suite(spec_repo):
     head = _commit_all(spec_repo, "head")
     now = datetime(2026, 9, 1, tzinfo=timezone.utc)
     records = []
-    for offset, (sha, suite) in enumerate([(first, "s1"), (second, "s2"), (head, "s1")]):
+    for offset, (sha, suite) in enumerate(
+        [(first, "s1"), (second, "s2"), (head, "s1")]
+    ):
         records.append(
             history.build_record(
                 repo=spec_repo,
@@ -687,10 +710,14 @@ def test_evals_overlay_matches_the_commits_framework(tmp_path):
 
 
 def test_enqueue_coalesces_agents(eval_repo):
-    orchestrate.enqueue(eval_repo, orchestrate.Job(sha="a" * 40, branch="main", agents=["coder"]))
+    orchestrate.enqueue(
+        eval_repo, orchestrate.Job(sha="a" * 40, branch="main", agents=["coder"])
+    )
     job = orchestrate.enqueue(
         eval_repo,
-        orchestrate.Job(sha="b" * 40, branch="main", agents=["vikram"], trigger="model_check"),
+        orchestrate.Job(
+            sha="b" * 40, branch="main", agents=["vikram"], trigger="model_check"
+        ),
     )
     assert job.sha == "b" * 40
     assert job.agents == ["coder", "vikram"]

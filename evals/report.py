@@ -227,7 +227,9 @@ def render(records: list[dict[str, Any]]) -> str:
             f"{_runs_table(runs)}</section>"
         )
     if not sections:
-        sections.append("<p>No eval history yet. Commit a prompt, model or tool change.</p>")
+        sections.append(
+            "<p>No eval history yet. Commit a prompt, model or tool change.</p>"
+        )
     return (
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
