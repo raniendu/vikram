@@ -52,6 +52,23 @@ tools = [
 # transport = "python"           # in-process callable, imported at build time
 # entrypoint = "myhooks.audit:on_tool"   # "module:function"
 
+# Capabilities - Pydantic AI Harness building blocks; see docs/capabilities.md.
+# Every entry is off unless listed.
+[capabilities]
+repair_tool_arguments = true       # Fix malformed tool-call JSON (common with local models).
+
+[capabilities.tool_output_limits]
+max_chars = 40000                  # Truncate any tool result, built-in or MCP, past this size.
+# strategy = "head_tail"           # head | tail | head_tail
+
+[capabilities.compaction]
+strategy = "summarizing"           # summarizing | sliding_window
+max_tokens = 24000                 # Compact once the conversation history passes this size.
+keep_messages = 20                 # Recent messages always kept verbatim.
+
+# [capabilities.spend_limits]      # Stop a run past its budget (network surfaces by default).
+# tokens_per_run = 200000          # Local models price at zero, so budget tokens, not USD.
+
 # Model knobs — passed to Pydantic AI for provider-aware handling.
 [model_settings]
 temperature = 0.2
