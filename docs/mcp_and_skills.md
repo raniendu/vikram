@@ -56,7 +56,9 @@ Agent Skills convention. Skills use **progressive disclosure**: only each
 skill's `name` and one-line `description` are injected into the agent's system
 instructions up front. The full body is loaded on demand when the agent calls
 the `load_skill` tool, which Vikram adds automatically to any agent that has at
-least one skill.
+least one skill. This is Vikram's own loader: the harness `Skills` capability
+was evaluated and not adopted (see the WS4 decision in
+[capabilities.md](capabilities.md)).
 
 ### What happens at runtime
 
