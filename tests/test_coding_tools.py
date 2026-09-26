@@ -231,3 +231,29 @@ async def test_missing_command_is_logged_not_silently_swallowed(
     not_found = find_log_event(log_events, "tool_command_not_found")
     assert not_found["log_level"] == "warning"
     assert not_found["executable"] == "definitely-not-a-real-binary-xyz"
+
+
+@pytest.mark.asyncio
+async def test_commands_do_not_inherit_credentials(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-secret")
+    monkeypatch.setenv("VIKRAM_TELEGRAM_BOT_TOKEN", "123:telegram-secret")
+    monkeypatch.setenv("PARALLEL_API_KEY", "parallel-secret")
+    monkeypatch.setenv("GITHUB_TOKEN", "gh-token-kept")
+    monkeypatch.setenv("HARMLESS_SETTING", "kept")
+
+    script = "import os; print(sorted(os.environ))"
+    result = await tools._execute_command(
+        "python -c ...", ["python", "-c", script], 10, 12_000, tool="run_command"
+    )
+
+    for name in (
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "VIKRAM_TELEGRAM_BOT_TOKEN",
+        "PARALLEL_API_KEY",
+    ):
+        assert name not in result
+    assert "GITHUB_TOKEN" in result
+    assert "HARMLESS_SETTING" in result

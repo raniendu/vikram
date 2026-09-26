@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
+import os
 import shlex
 import time
 from functools import lru_cache
@@ -224,6 +226,32 @@ async def run_command(
     )
 
 
+# Environment variables a command the agent runs must not inherit: provider
+# credentials (the harness's LLM_API_KEY_ENV_PATTERNS) plus Vikram's own
+# configuration and secrets. A script in the workspace (a test, a build step)
+# would otherwise be able to read every API key and the Telegram bot token.
+# GITHUB_TOKEN/GH_TOKEN stay: `gh pr create` is a documented coder workflow.
+_VIKRAM_SECRET_ENV_PATTERNS = (
+    "VIKRAM_*",
+    "OLLAMA_API_KEY",
+    "PARALLEL_API_KEY",
+    "SARVAM_API_KEY",
+    "DIGITALOCEAN_ACCESS_TOKEN",
+)
+
+
+def _command_env() -> dict[str, str]:
+    """``os.environ`` without credentials, for commands the agent runs."""
+    from pydantic_ai_harness import LLM_API_KEY_ENV_PATTERNS
+
+    patterns = (*LLM_API_KEY_ENV_PATTERNS, *_VIKRAM_SECRET_ENV_PATTERNS)
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if not any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)
+    }
+
+
 async def _execute_command(
     command: str,
     argv: list[str],
@@ -252,6 +280,7 @@ async def _execute_command(
         process = await asyncio.create_subprocess_exec(
             *argv,
             cwd=_workspace_root(),
+            env=_command_env(),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
