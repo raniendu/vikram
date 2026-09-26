@@ -473,13 +473,15 @@ def _context_usage_warning(result: Any, settings: VikramSettings) -> str | None:
     warning_ratio = settings.context_warning_ratio
     if context_window <= 0 or warning_ratio <= 0:
         return None
-    usage_fn = getattr(result, "usage", None)
-    if not callable(usage_fn):
-        return None
-    try:
-        usage = usage_fn()
-    except Exception:
-        logger.exception("context_usage_unavailable")
+    # ``usage`` is a method before pydantic-ai 2.44 and an attribute after.
+    usage = getattr(result, "usage", None)
+    if callable(usage):
+        try:
+            usage = usage()
+        except Exception:
+            logger.exception("context_usage_unavailable")
+            return None
+    if usage is None:
         return None
     input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
     if input_tokens <= 0:
