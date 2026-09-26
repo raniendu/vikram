@@ -33,6 +33,25 @@ names that were attached.
 | `compaction` | Keeps long conversations inside the context window. `summarizing` replaces older turns with a summary written by the agent's own model; `sliding_window` drops the oldest turns. | `strategy` (`summarizing`), `max_tokens` (24000) trigger, `keep_messages` (20) |
 | `spend_limits` | Stops a run that exceeds its budget (`SpendLimitExceeded`). Local models are priced at zero, so use `tokens_per_run` with Ollama. Budgets live in process memory. | `tokens_per_run`, `usd_per_run`, `usd_per_day`, `surfaces` (`http`, `telegram`, `threaded`) |
 
+## Shipped defaults
+
+Both shipped agents (`vikram` and `coder`) turn on the three low-risk
+capabilities:
+
+| Capability | Setting | Why |
+|---|---|---|
+| `repair_tool_arguments` | on | Local Ollama models often emit near-JSON tool calls. |
+| `tool_output_limits` | 40,000 chars, head + tail | One cap for every tool. MCP output was previously uncapped. The built-in tools keep their own, smaller limits for now. |
+| `compaction` | summarizing at 24,000 tokens, keep 20 | Long Telegram and API threads previously grew until the model's window overflowed, with only a warning at 85%. |
+
+`spend_limits` is supported but off: local models cost nothing, and a
+budget stops a run with an error.
+
+**Ollama context size:** Ollama truncates prompts silently at the model's
+`num_ctx`, which is often smaller than 24,000 tokens by default. If your model
+runs with a small `num_ctx`, lower `max_tokens` below it so compaction happens
+before Ollama cuts the prompt.
+
 ## Guarantees
 
 - Approvals stay Vikram's. Capabilities never approve a tool call themselves.
@@ -57,7 +76,7 @@ The migration runs as separate work streams, each in its own PR:
 |---|---|---|
 | WS8 | Tracing on the OpenTelemetry SDK (removes OpenLIT, which blocked the upgrade) | PR |
 | WS0 | This foundation: framework upgrade, `[capabilities]` table | PR |
-| WS1 | Turn on repair, output limits and compaction in the shipped specs | planned |
+| WS1 | Turn on repair, output limits and compaction in the shipped specs | PR |
 | WS2 | File tools on harness `FileSystem` | planned |
 | WS4 | Skills on harness `Skills` | planned |
 | WS3 | Shell on harness `Shell`, with the command policy as a guardrail | planned |

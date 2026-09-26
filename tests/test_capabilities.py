@@ -110,7 +110,8 @@ def test_capabilities_round_trip_through_the_spec_writer():
     path = SPEC_ROOT / "vikram" / "agent.toml"
     original = path.read_text()
     draft = AgentSpecDraft.model_validate(tomllib.loads(original))
-    assert "[capabilities" not in render_agent_toml(draft, existing=original)
+    empty = draft.model_copy(update={"capabilities": CapabilitiesSpec()})
+    assert "[capabilities" not in render_agent_toml(empty)
 
     updated = draft.model_copy(
         update={
@@ -240,3 +241,123 @@ def test_editor_save_keeps_comments_inside_capability_tables():
     assert "# keep me" in text
     assert '# strategy = "sliding_window"  # and this option' in text
     assert "max_tokens = 9000" in text
+
+
+# --- WS1: the capabilities do their job inside a Vikram-built agent -----------
+
+
+def _tool_returns(messages):
+    return [
+        part
+        for message in messages
+        for part in getattr(message, "parts", [])
+        if isinstance(part, ToolReturnPart)
+    ]
+
+
+def _plain_agent(capabilities: dict, settings, tools):
+    """A Vikram-built agent (real capability wiring) with extra test tools."""
+    spec = _spec_with(capabilities)
+    agent = build_agent(spec=spec, settings=settings, surface="cli")
+    for tool in tools:
+        agent.raw_agent.tool_plain(tool)
+    return agent
+
+
+def test_shipped_specs_enable_the_quick_wins():
+    for name in ("coder", "vikram"):
+        caps = load_spec(name, SPEC_ROOT).capabilities
+        assert caps.repair_tool_arguments is True
+        assert caps.tool_output_limits is not None
+        assert caps.compaction is not None
+        assert caps.spend_limits is None  # supported, deliberately off
+
+
+async def test_malformed_tool_arguments_are_repaired(settings):
+    calls: list[str] = []
+
+    def echo(path: str) -> str:
+        calls.append(path)
+        return f"echo {path}"
+
+    def model(messages, info):
+        if not _tool_returns(messages):
+            # Trailing comma and single quotes: invalid JSON.
+            return ModelResponse(parts=[ToolCallPart("echo", "{'path': 'a.txt',}")])
+        return ModelResponse(parts=[TextPart("done")])
+
+    agent = _plain_agent({"repair_tool_arguments": True}, settings, [echo])
+    with agent.raw_agent.override(model=FunctionModel(model)):
+        result = await agent.run("go")
+
+    assert calls == ["a.txt"]
+    assert result.output == "done"
+
+
+async def test_oversized_tool_output_is_truncated_before_the_model(settings):
+    seen: list[int] = []
+
+    def big() -> str:
+        return "x" * 100_000
+
+    def model(messages, info):
+        returned = _tool_returns(messages)
+        if not returned:
+            return ModelResponse(parts=[ToolCallPart("big", {})])
+        seen.append(len(returned[0].model_response_str()))
+        return ModelResponse(parts=[TextPart("done")])
+
+    agent = _plain_agent({"tool_output_limits": {"max_chars": 2000}}, settings, [big])
+    with agent.raw_agent.override(model=FunctionModel(model)):
+        await agent.run("go")
+
+    assert seen and seen[0] <= 2000
+
+
+async def test_sliding_window_compaction_trims_long_history(settings):
+    from pydantic_ai.messages import ModelRequest, UserPromptPart
+
+    history = []
+    for i in range(60):
+        history.append(ModelRequest(parts=[UserPromptPart(f"question {i} " * 50)]))
+        history.append(ModelResponse(parts=[TextPart(f"answer {i} " * 50)]))
+    sizes: list[int] = []
+
+    def model(messages, info):
+        sizes.append(len(messages))
+        return ModelResponse(parts=[TextPart("ok")])
+
+    agent = _plain_agent(
+        {
+            "compaction": {
+                "strategy": "sliding_window",
+                "max_tokens": 2000,
+                "keep_messages": 10,
+            }
+        },
+        settings,
+        [],
+    )
+    with agent.raw_agent.override(model=FunctionModel(model)):
+        await agent.run("latest question", message_history=history)
+
+    assert sizes and sizes[0] < len(history) + 1
+
+
+async def test_token_budget_stops_a_run(settings):
+    from pydantic_ai_harness.spend import SpendLimitExceeded
+
+    def model(messages, info):
+        if len(_tool_returns(messages)) < 5:
+            return ModelResponse(parts=[ToolCallPart("step", {})])
+        return ModelResponse(parts=[TextPart("done")])
+
+    def step() -> str:
+        return "tick " * 200
+
+    spec = _spec_with({"spend_limits": {"tokens_per_run": 50}})
+    agent = build_agent(spec=spec, settings=settings, surface="threaded")
+    agent.raw_agent.tool_plain(step)
+    with agent.raw_agent.override(model=FunctionModel(model)):
+        with pytest.raises(SpendLimitExceeded):
+            await agent.run("go")
