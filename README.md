@@ -397,6 +397,23 @@ entrypoint = "myhooks.notify:on_stop"
 
 See [docs/hooks.md](docs/hooks.md) for the full reference.
 
+### Capabilities
+
+A `[capabilities]` table in `agent.toml` switches on building blocks from the
+[Pydantic AI Harness](https://github.com/pydantic/pydantic-ai-harness):
+tool-argument repair, tool output limits, conversation compaction and spend
+limits. Every entry is off unless listed.
+
+```toml
+[capabilities]
+repair_tool_arguments = true
+
+[capabilities.compaction]
+max_tokens = 24000
+```
+
+See [docs/capabilities.md](docs/capabilities.md) for the full reference.
+
 ## Tools
 
 The built-in tool registry (`vikram/tools.py`) provides different capabilities per agent:
@@ -532,6 +549,7 @@ metrics committed to `evals/history/`. See [docs/evals.md](docs/evals.md).
 | File | Content |
 | --- | --- |
 | [docs/current_architecture.md](docs/current_architecture.md) | Detailed module table and request flow documentation |
+| [docs/capabilities.md](docs/capabilities.md) | `[capabilities]` reference and the Harness migration roadmap |
 | [docs/evals.md](docs/evals.md) | Before/after eval suite, change tracking and history |
 | [docs/deployment.md](docs/deployment.md) | Deployment, logging, and tracing details |
 | [docs/desktop_app.md](docs/desktop_app.md) | Desktop app install and build instructions |

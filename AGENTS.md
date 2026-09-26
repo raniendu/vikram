@@ -12,6 +12,8 @@ Key modules:
 - `agent.py`: builds Pydantic AI agents from specs, tools, MCP servers, skills, and hooks.
 - `mcp.py`: declarative `[[mcp_servers]]` specs and MCP toolset construction.
 - `skills.py`: Agent Skills discovery and the `load_skill` progressive-disclosure tool.
+- `capabilities.py`: declarative `[capabilities]` specs built into Pydantic AI
+  Harness capabilities (see `docs/capabilities.md`).
 - `hooks.py`: declarative `[[hooks]]` specs compiled into a Pydantic AI wrapper
   toolset plus prompt/stop callbacks.
 - `cli.py`: `vikram` command, including interactive and one-shot modes.
