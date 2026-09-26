@@ -141,4 +141,4 @@ The migration runs as separate work streams, each in its own PR:
 | WS3 | Shell on harness `Shell` | kept argv-only executor; adopted credential stripping (see decision above) |
 | WS5 | Delegation on harness `SubAgents` | kept Vikram's tool; adopted usage forwarding (see decision above) |
 | WS7 | Prompt-injection defender, guardrails, memory | PR |
-| WS6 | Durable agent runs on DBOS | planned |
+| WS6 | Durable agent runs on DBOS (`VIKRAM_DURABLE_AGENT_RUNS`, off by default) | PR |

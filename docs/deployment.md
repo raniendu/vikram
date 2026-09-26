@@ -86,6 +86,14 @@ VIKRAM_TELEGRAM_ALLOWED_CHAT_IDS=123456789
 VIKRAM_TELEGRAM_BOT_USERNAME=VikramBot
 ```
 
+Optional: checkpoint each model request of threaded and Telegram runs, so a
+restart resumes a run instead of redoing it (see
+[threaded_conversations.md](threaded_conversations.md#durable-agent-runs)):
+
+```env
+VIKRAM_DURABLE_AGENT_RUNS=true
+```
+
 ## Health And Readiness
 
 Two probes, with different jobs:

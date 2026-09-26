@@ -198,6 +198,11 @@ class VikramSettings(BaseSettings):
         default="mistral",
         validation_alias="VIKRAM_OBSERVABILITY_DISABLED_INSTRUMENTORS",
     )
+    # Checkpoint each model request (and MCP call) of threaded/Telegram runs
+    # as a DBOS step, so a restart resumes the run instead of redoing it.
+    durable_agent_runs: bool = Field(
+        default=False, validation_alias="VIKRAM_DURABLE_AGENT_RUNS"
+    )
     context_window_tokens: int = Field(
         default=256_000,
         validation_alias="VIKRAM_CONTEXT_WINDOW_TOKENS",
