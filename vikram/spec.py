@@ -6,6 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from vikram.capabilities import CapabilitiesSpec
 from vikram.command_policy import POLICY_FILENAME, CommandPolicy, load_command_policy
 from vikram.hooks import HookSpec
 from vikram.mcp import MCPServerSpec
@@ -51,6 +52,7 @@ class AgentSpecDraft(BaseModel):
     model_settings: dict[str, Any] = {}
     command_policy: Path = Path(POLICY_FILENAME)
     command_policy_override: dict[str, Any] = {}
+    capabilities: CapabilitiesSpec = CapabilitiesSpec()
 
 
 class AgentSpec(AgentSpecDraft):

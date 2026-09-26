@@ -869,3 +869,21 @@ def test_detect_command_is_a_dry_run(spec_repo, monkeypatch, capsys):
     _commit_all(spec_repo, "docs")
     assert main(["detect"]) == 0
     assert "would not queue" in capsys.readouterr().out
+
+
+def test_capabilities_table_is_its_own_change_kind(spec_repo):
+    def edit(repo: Path) -> None:
+        text = _AGENT_TOML + "\n[capabilities]\nrepair_tool_arguments = true\n"
+        text += "\n[capabilities.compaction]\nmax_tokens = 1000\n"
+        (repo / "spec/coder/agent.toml").write_text(text)
+
+    described = _detect(spec_repo, edit).for_agent("coder")
+    assert described["kinds"] == ["capabilities"]
+    assert described["details"]["capabilities.repair_tool_arguments"] == {
+        "from": None,
+        "to": True,
+    }
+    assert described["details"]["capabilities.compaction"] == {
+        "from": None,
+        "to": {"max_tokens": 1000},
+    }

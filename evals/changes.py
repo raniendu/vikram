@@ -21,6 +21,7 @@ MODEL_VERSION = "model_version"
 TOOLS = "tools"
 MCP_HOOKS_SKILLS = "mcp_hooks_skills"
 FRAMEWORK = "framework"
+CAPABILITIES = "capabilities"
 EVAL_SUITE = "eval_suite"
 
 ALL_KINDS = (
@@ -31,6 +32,7 @@ ALL_KINDS = (
     TOOLS,
     MCP_HOOKS_SKILLS,
     FRAMEWORK,
+    CAPABILITIES,
     EVAL_SUITE,
 )
 
@@ -57,6 +59,7 @@ _PATH_RULES: list[tuple[str, str, str]] = [
     ("vikram/skills.py", MCP_HOOKS_SKILLS, ALL),
     ("vikram/delegation.py", MCP_HOOKS_SKILLS, ALL),
     ("vikram/agent.py", FRAMEWORK, ALL),
+    ("vikram/capabilities.py", CAPABILITIES, ALL),
     ("evals/cases/*.yaml", EVAL_SUITE, "{case_agent}"),
     ("evals/fixtures/*", EVAL_SUITE, ALL),
     ("evals/checks.py", EVAL_SUITE, ALL),
@@ -172,6 +175,16 @@ def _diff_agent_toml(
         if old != new or before.get(key) != after.get(key):
             changes.add(agent, MCP_HOOKS_SKILLS, path)
             changes.detail(agent, key, _list_delta(old, new))
+    old_caps = before.get("capabilities") or {}
+    new_caps = after.get("capabilities") or {}
+    for key in sorted(set(old_caps) | set(new_caps)):
+        if old_caps.get(key) != new_caps.get(key):
+            changes.add(agent, CAPABILITIES, path)
+            changes.detail(
+                agent,
+                f"capabilities.{key}",
+                {"from": old_caps.get(key), "to": new_caps.get(key)},
+            )
     for key in ("context_files", "shared_context_files", "system_prompt"):
         if before.get(key) != after.get(key):
             changes.add(agent, PROMPT, path)

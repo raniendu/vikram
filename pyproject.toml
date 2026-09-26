@@ -14,6 +14,7 @@ dependencies = [
     "opentelemetry-sdk>=1.44.0",
     "parallel-web>=0.6.0",
     "prompt-toolkit>=3.0.52",
+    "pydantic-ai-harness[coder,skills]==0.35.0",
     "pydantic-ai-slim[anthropic,google,mcp,openai]>=2.11.0",
     "pydantic-settings>=2.14.1",
     "python-dateutil>=2.9.0.post0",
