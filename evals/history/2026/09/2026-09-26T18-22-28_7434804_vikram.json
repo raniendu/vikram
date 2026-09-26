@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "run_id": "2026-09-26T18-22-28_7434804_vikram",
+  "timestamp": "2026-09-26T18:22:28.301595+00:00",
+  "agent": "vikram",
+  "trigger": "manual",
+  "commit": {
+    "sha": "74348043cf81ee409b3dc9f2181cd0a77805496f",
+    "parent": "1b35bb7c62a05618b76be1cf61f4d7a766a8a6ea",
+    "subject": "Merge pull request #36 from raniendu/claude/sweet-babbage-2w5llf",
+    "committed_at": "2026-09-26T01:58:02-07:00"
+  },
+  "change": {
+    "kinds": [
+      "eval_suite"
+    ],
+    "files": [
+      "evals/cases/vikram.yaml",
+      "evals/checks.py",
+      "evals/fixtures/mini_repo/README.md",
+      "evals/fixtures/mini_repo/inventory/__init__.py",
+      "evals/fixtures/mini_repo/inventory/dates.py",
+      "evals/fixtures/mini_repo/inventory/report.py",
+      "evals/fixtures/mini_repo/inventory/stock.py",
+      "evals/fixtures/mini_repo/notes/vendor_notes.md",
+      "evals/fixtures/mini_repo/pytest.ini",
+      "evals/fixtures/mini_repo/tests/test_dates.py",
+      "evals/fixtures/mini_repo/tests/test_stock.py",
+      "evals/judge.py"
+    ],
+    "details": {},
+    "base": "1b35bb7c62a05618b76be1cf61f4d7a766a8a6ea"
+  },
+  "suite_hash": "04aaff21fd353af4",
+  "repeats": 3,
+  "env": {
+    "provider": "ollama",
+    "model": "gemma4:26b-a4b-it-qat",
+    "model_digest": "2dd70431afed94dd3688d790443768c1487ed086b57147ff083851116ae4c4e4",
+    "judge_model": "ollama:gemma4:26b-a4b-it-qat",
+    "versions": {
+      "pydantic-ai-slim": "2.31.1",
+      "pydantic-ai-harness": null,
+      "pydantic-evals": "2.31.1"
+    }
+  },
+  "baseline_run_id": "2026-09-26T17-55-47_1b35bb7_vikram",
+  "summary": {
+    "cases": 7,
+    "skipped": 0,
+    "pass_rate": 0.7143,
+    "judge_mean": 0.5,
+    "tokens_mean": 3345.5,
+    "latency_p50_ms": 32240.8,
+    "tool_calls_mean": 0.4286,
+    "errors": 1
+  },
+  "delta": {
+    "summary": {
+      "pass_rate": -0.0476,
+      "judge_mean": -0.25,
+      "tokens_mean_pct": -16.0,
+      "latency_p50_pct": 15.9,
+      "tool_calls_mean": 0.0,
+      "worse_cases": [
+        "vikram.decline_meeting_email"
+      ],
+      "better_cases": []
+    },
+    "cases": {
+      "vikram.explain_process_vs_thread": {
+        "pass_rate": 0.0,
+        "judge_mean": 0.0,
+        "tokens_mean_pct": -4.0,
+        "status": "same"
+      },
+      "vikram.arithmetic_word_problem": {
+        "pass_rate": 0.0,
+        "judge_mean": null,
+        "tokens_mean_pct": -1.9,
+        "status": "same"
+      },
+      "vikram.decline_meeting_email": {
+        "pass_rate": -0.3333,
+        "judge_mean": -0.5,
+        "tokens_mean_pct": -10.4,
+        "status": "worse"
+      },
+      "vikram.knows_today": {
+        "pass_rate": 0.0,
+        "judge_mean": null,
+        "tokens_mean_pct": -0.1,
+        "status": "same"
+      },
+      "vikram.delegates_coding_task_locally": {
+        "pass_rate": 0.0,
+        "judge_mean": null,
+        "tokens_mean_pct": -29.7,
+        "status": "same"
+      },
+      "vikram.coder_unreachable_from_network": {
+        "pass_rate": 0.0,
+        "judge_mean": null,
+        "tokens_mean_pct": 79.1,
+        "status": "same"
+      },
+      "vikram.research_uses_skill": {
+        "pass_rate": 0.0,
+        "judge_mean": null,
+        "tokens_mean_pct": -34.2,
+        "status": "same"
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "vikram.explain_process_vs_thread",
+      "status": "ok",
+      "repeats": 3,
+      "pass_rate": 1.0,
+      "judge_mean": 1.0,
+      "tokens_mean": 2282.3333,
+      "latency_p50_ms": 58331.2,
+      "tool_calls_mean": 0.0,
+      "requests_mean": 1.0,
+      "failed_checks": {},
+      "errors": 0,
+      "error_types": []
+    },
+    {
+      "id": "vikram.arithmetic_word_problem",
+      "status": "ok",
+      "repeats": 3,
+      "pass_rate": 1.0,
+      "judge_mean": null,
+      "tokens_mean": 1553.3333,
+      "latency_p50_ms": 4247.5,
+      "tool_calls_mean": 0.0,
+      "requests_mean": 1.0,
+      "failed_checks": {},
+      "errors": 0,
+      "error_types": []
+    },
+    {
+      "id": "vikram.decline_meeting_email",
+      "status": "ok",
+      "repeats": 3,
+      "pass_rate": 0.0,
+      "judge_mean": 0.0,
+      "tokens_mean": 2329.5,
+      "latency_p50_ms": 17410.8,
+      "tool_calls_mean": 0.0,
+      "requests_mean": 1.0,
+      "failed_checks": {},
+      "errors": 1,
+      "error_types": [
+        "judge:TimeoutError"
+      ]
+    },
+    {
+      "id": "vikram.knows_today",
+      "status": "ok",
+      "repeats": 3,
+      "pass_rate": 1.0,
+      "judge_mean": null,
+      "tokens_mean": 1554.0,
+      "latency_p50_ms": 14288.3,
+      "tool_calls_mean": 0.0,
+      "requests_mean": 1.0,
+      "failed_checks": {},
+      "errors": 0,
+      "error_types": []
+    },
+    {
+      "id": "vikram.delegates_coding_task_locally",
+      "status": "ok",
+      "repeats": 3,
+      "pass_rate": 1.0,
+      "judge_mean": null,
+      "tokens_mean": 3921.3333,
+      "latency_p50_ms": 32240.8,
+      "tool_calls_mean": 1.0,
+      "requests_mean": 2.0,
+      "failed_checks": {},
+      "errors": 0,
+      "error_types": []
+    },
+    {
+      "id": "vikram.coder_unreachable_from_network",
+      "status": "ok",
+      "repeats": 3,
+      "pass_rate": 1.0,
+      "judge_mean": null,
+      "tokens_mean": 3864.6667,
+      "latency_p50_ms": 62543.1,
+      "tool_calls_mean": 1.0,
+      "requests_mean": 2.0,
+      "failed_checks": {},
+      "errors": 0,
+      "error_types": []
+    },
+    {
+      "id": "vikram.research_uses_skill",
+      "status": "ok",
+      "repeats": 3,
+      "pass_rate": 0.0,
+      "judge_mean": null,
+      "tokens_mean": 7913.3333,
+      "latency_p50_ms": 75913.1,
+      "tool_calls_mean": 1.0,
+      "requests_mean": 2.0,
+      "failed_checks": {
+        "tool_called:load_skill": 3
+      },
+      "errors": 0,
+      "error_types": []
+    }
+  ]
+}
