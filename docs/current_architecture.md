@@ -43,6 +43,26 @@ flowchart LR
 | `vikram/tools.py` | Web search and local coding tools |
 | `vikram/command_policy.py` | Declarative command execution policy |
 
+## Quality Evals
+
+`evals/` sits outside the `vikram/` package and is not shipped. It measures
+answer quality before and after changes. After `uv run pre-commit install`, a
+post-commit hook classifies each commit's diff. When a prompt, model, model
+setting, tool, skill, MCP server, hook or framework version changed, it queues
+a background run. That run executes the suite on the baseline and new commits
+in git worktrees and commits a metrics-only record. See [evals.md](evals.md).
+
+| Path | Responsibility |
+| --- | --- |
+| `evals/changes.py` | Classifies a diff into change kinds and affected agents |
+| `evals/orchestrate.py` | Post-commit hook, job queue, background worker, worktree runs |
+| `evals/runner.py` | Runs one agent's cases through `build_agent` and aggregates metrics |
+| `evals/checks.py` · `evals/judge.py` | Hard checks and the LLM judge |
+| `evals/history.py` | History records, baseline lookup and before/after deltas |
+| `evals/compare.py` · `evals/report.py` | Before/after table and HTML trend page |
+| `evals/cases/` · `evals/fixtures/` | Cases per agent and the fixture workspace |
+| `evals/history/` | Committed results, one JSON file per agent per run |
+
 ## Request Flows
 
 `POST /chat` is stateless. It loads or reuses an agent and calls
