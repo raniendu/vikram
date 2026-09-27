@@ -540,9 +540,11 @@ Default tests are offline and deterministic. Live model, web search, Telegram,
 and tracing flows require explicit environment configuration.
 
 Agent quality is tracked separately by the eval suite in `evals/`: after
-`uv run pre-commit install`, every commit that changes a prompt, model, tool,
-skill or framework version gets a before/after run against local Ollama, with
-metrics committed to `evals/history/`. See [docs/evals.md](docs/evals.md).
+`uv run pre-commit install`, every commit that changes a model, model setting,
+model version, framework version or prompt gets a before/after run against
+local Ollama, with metrics committed to `evals/history/`. `uv run pytest --evals`
+also scores your working tree and fails on a regression. See
+[docs/evals.md](docs/evals.md).
 
 ## Documentation
 

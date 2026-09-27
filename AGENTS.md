@@ -40,6 +40,8 @@ Key modules:
 - `uv run vikram-api`: serve FastAPI on `http://127.0.0.1:8000`.
 - `uv run vikram-acp --agent coder`: start ACP over stdio.
 - `uv run pytest`: run the offline test suite.
+- `uv run pytest --evals`: tests, then score the agents on the working tree
+  against the last recorded eval result (needs Ollama; fails on a regression).
 - `uv run pre-commit install`: also installs the post-commit eval hook.
 - `uv run python -m evals status|compare|report`: eval progress and queue, before/after
   table, and trend page (see `docs/evals.md`).

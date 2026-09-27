@@ -984,3 +984,138 @@ def test_capabilities_table_is_its_own_change_kind(spec_repo):
         "from": None,
         "to": {"max_tokens": 1000},
     }
+
+
+# --- triggers ----------------------------------------------------------------
+
+
+def test_trigger_kinds_default_all_and_list():
+    assert changes.trigger_kinds("") == frozenset(changes.DEFAULT_TRIGGERS)
+    assert changes.trigger_kinds("all") == frozenset(changes.ALL_KINDS)
+    assert changes.trigger_kinds(" model, tools ") == {"model", "tools"}
+    with pytest.raises(ValueError, match="bogus"):
+        changes.trigger_kinds("model,bogus")
+    assert "tools" not in changes.DEFAULT_TRIGGERS
+    assert {"model", "model_settings", "model_version", "framework", "prompt"} == set(
+        changes.DEFAULT_TRIGGERS
+    )
+
+
+def test_hook_skips_non_triggering_kinds_unless_configured(eval_repo, monkeypatch):
+    spawned: list[Path] = []
+    monkeypatch.setattr(orchestrate, "spawn_worker", spawned.append)
+    monkeypatch.delenv(changes.TRIGGERS_ENV, raising=False)
+
+    (eval_repo / "vikram").mkdir()
+    (eval_repo / "vikram" / "tools.py").write_text("# tools\n")
+    _commit_all(eval_repo, "tools only")
+    assert orchestrate.hook(eval_repo) is None  # tools isn't a default trigger
+    assert spawned == []
+
+    monkeypatch.setenv(changes.TRIGGERS_ENV, "all")
+    job = orchestrate.hook(eval_repo)
+    assert job is not None and "coder" in job.agents  # tools.py affects every agent
+
+    monkeypatch.setenv(changes.TRIGGERS_ENV, "nonsense")
+    assert orchestrate.hook(eval_repo) is None  # bad config never queues
+
+
+def test_detect_reports_when_kinds_do_not_trigger(spec_repo, monkeypatch, capsys):
+    from evals.__main__ import main
+
+    monkeypatch.delenv(changes.TRIGGERS_ENV, raising=False)
+    (spec_repo / "vikram").mkdir(exist_ok=True)
+    (spec_repo / "vikram" / "tools.py").write_text("# changed\n")
+    _commit_all(spec_repo, "tools")
+    monkeypatch.chdir(spec_repo)
+    assert main(["detect"]) == 0
+    out = capsys.readouterr().out
+    assert "coder: tools" in out
+    assert "none of these kinds trigger a run" in out
+
+
+# --- pytest --evals gate -------------------------------------------------------
+
+
+def _gate_runner(pass_rates: dict[str, float], *, fail: bool = False):
+    async def run(agent, *, repeats, details_dir):
+        if fail:
+            raise eval_runner.ModelUnavailableError("down")
+        from evals.cases import suite_hash
+
+        result = _result(agent, pass_rates)
+        result["suite_hash"] = suite_hash(agent)
+        return result
+
+    return run
+
+
+def _record_on_head(repo: Path, agent: str, pass_rates: dict[str, float]) -> None:
+    from evals.cases import suite_hash
+
+    result = _result(agent, pass_rates)
+    result["suite_hash"] = suite_hash(agent)
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    history.write_record(
+        repo,
+        history.build_record(
+            repo=repo,
+            result=result,
+            sha=head,
+            trigger="commit",
+            change={"kinds": [], "files": [], "details": {}},
+            baseline=None,
+        ),
+    )
+
+
+def test_gate_fails_when_a_case_gets_worse(eval_repo):
+    from evals import gate
+
+    _record_on_head(eval_repo, "coder", {"coder.x": 1.0, "coder.y": 1.0})
+    outcome = gate.run_gate(
+        eval_repo,
+        agents=["coder"],
+        repeats=1,
+        runner=_gate_runner({"coder.x": 0.33, "coder.y": 1.0}),
+    )
+    assert outcome.failed
+    assert outcome.outcomes[0].worse_cases == ["coder.x"]
+    report = outcome.report()
+    assert "FAILED: worse on coder.x" in report
+    saved = eval_repo / ".vikram/evals/runs/manual-pytest-coder/result.json"
+    assert saved.is_file()  # `python -m evals compare pytest-coder <sha>` works
+
+
+def test_gate_passes_when_nothing_got_worse(eval_repo):
+    from evals import gate
+
+    _record_on_head(eval_repo, "coder", {"coder.x": 0.67})
+    outcome = gate.run_gate(
+        eval_repo,
+        agents=["coder"],
+        repeats=1,
+        runner=_gate_runner({"coder.x": 1.0}),
+    )
+    assert not outcome.failed
+    assert "no case got worse" in outcome.report()
+
+
+def test_gate_without_baseline_passes_and_says_so(eval_repo):
+    from evals import gate
+
+    outcome = gate.run_gate(
+        eval_repo, agents=["coder"], repeats=1, runner=_gate_runner({"coder.x": 0.5})
+    )
+    assert not outcome.failed
+    assert "No recorded result to compare with yet" in outcome.report()
+
+
+def test_gate_fails_clearly_when_model_is_unreachable(eval_repo):
+    from evals import gate
+
+    outcome = gate.run_gate(
+        eval_repo, agents=["coder"], repeats=1, runner=_gate_runner({}, fail=True)
+    )
+    assert outcome.failed
+    assert "model server not reachable" in outcome.report()

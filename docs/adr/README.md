@@ -31,7 +31,7 @@ A bug fix or a refactor that keeps behaviour needs no ADR.
 | # | Decision | Status |
 |---|---|---|
 | [0001](0001-record-architecture-decisions.md) | Record architecture decisions as ADRs | Accepted |
-| [0002](0002-evals-on-every-commit.md) | Run evals on every relevant commit, locally, with metrics committed | Accepted |
+| [0002](0002-evals-on-every-commit.md) | Run evals on every relevant commit, locally, with metrics committed | Accepted; triggers superseded by 0011 |
 | [0003](0003-opentelemetry-sdk-instead-of-openlit.md) | Trace with the OpenTelemetry SDK instead of OpenLIT | Accepted |
 | [0004](0004-adopt-pydantic-ai-harness-declaratively.md) | Adopt Pydantic AI Harness through a declarative `[capabilities]` table | Accepted |
 | [0005](0005-file-tools-on-harness-filesystem.md) | Serve file tools from the harness `FileSystem`, behind Vikram's guard | Accepted |
@@ -40,6 +40,7 @@ A bug fix or a refactor that keeps behaviour needs no ADR.
 | [0008](0008-keep-delegate-to-agent.md) | Keep `delegate_to_agent`; forward usage to the parent | Accepted |
 | [0009](0009-injection-defence-and-memory-opt-in.md) | Prompt-injection defence in report mode; secret redaction on; memory opt-in | Accepted |
 | [0010](0010-durable-agent-runs-opt-in.md) | Durable agent runs on DBOS, off by default | Accepted |
+| [0011](0011-eval-triggers-and-pytest-gate.md) | Trigger evals only on model and prompt changes; add `pytest --evals` | Accepted |
 
 0008–0010 were reviewed in raniendu/vikram#43–#45, which merged into stacked
 branches; their code reached `main` with raniendu/vikram#47.

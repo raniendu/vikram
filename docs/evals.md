@@ -2,8 +2,15 @@
 
 `tests/` proves the code works. `evals/` measures **how well the agents
 answer**, and how that changes when you change a prompt, a model, a tool or a
-framework version. Every relevant commit gets a before/after run, and the
-results are committed to `evals/history/`, so quality can be tracked over time.
+framework version. Evals run in two ways:
+
+| When | What runs | Result |
+|---|---|---|
+| A commit changes a **model, model settings, model version, framework version or prompt** | post-commit hook queues a before/after run in the background | committed to `evals/history/`, tracked over time |
+| You run **`uv run pytest --evals`** | the tests, then the suite on your working tree, compared with the last recorded result | fails if any case got worse; nothing committed |
+
+Other changes (tools, MCP, hooks, skills, capabilities, eval cases) don't start
+a run on their own, but are still listed in the next run's "what changed".
 
 Evals are **not** part of CI or the Docker image (`.dockerignore` excludes
 `evals/`). They run on your machine, against your local Ollama models.
@@ -24,8 +31,8 @@ Ollama must be running with each spec's model pulled (`qwen3.6:35b-mlx` for
 git commit
   └─ post-commit hook (under a second, never blocks or fails the commit)
        ├─ diff HEAD~1..HEAD → which change kinds, which agents?
-       └─ nothing relevant → stop
-          relevant         → queue a job, start a background worker
+       └─ no triggering kind → stop
+          triggering kind    → queue a job, start a background worker
 worker (.vikram/evals/logs/worker.log)
   ├─ baseline = the agent's latest committed record on an ancestor commit
   │             with the same suite; if none, run the suite on HEAD~1 first
@@ -76,6 +83,42 @@ uv run python -m evals detect --base main --head HEAD
 `spec/coder/**` affects only `coder`; shared files and Vikram code affect every
 agent. A model re-pulled under the same tag changes no file, so run
 `uv run python -m evals check-models` (by hand or from cron) to catch it.
+
+### Which kinds start a run
+
+By default only `model`, `model_settings`, `model_version`, `framework` and
+`prompt` start a run from the hook. Every kind is still detected and recorded
+when a run happens. Change the set with `VIKRAM_EVALS_TRIGGERS`:
+
+```bash
+VIKRAM_EVALS_TRIGGERS=all                 # every kind, as before
+VIKRAM_EVALS_TRIGGERS=model,model_version # only model swaps and re-pulls
+```
+
+An unknown kind is an error, and the hook then queues nothing.
+`uv run python -m evals detect` shows the kinds a commit changed, the active
+triggers, and whether the hook would queue a run.
+
+## Before you push: `pytest --evals`
+
+```bash
+uv run pytest --evals                                        # all agents, 3 repeats
+uv run pytest --evals --eval-agent coder --eval-repeats 1    # quicker
+```
+
+1. The normal tests run first. If any fails, the evals are skipped.
+2. Each agent's suite runs on the **working tree** (uncommitted edits
+   included), with the usual progress lines.
+3. The result is compared with the newest recorded result on `HEAD` or an
+   ancestor that used the same eval cases, and the before/after table is printed.
+4. The session **fails** if any case got worse beyond the noise margins (see
+   "How scoring works"), or if the model server isn't reachable.
+
+Nothing is committed. The result is kept as a manual run, so
+`uv run python -m evals compare pytest-coder <sha> --agent coder` shows it again.
+If there is no recorded result yet, the run passes and says so.
+
+Plain `uv run pytest` (and CI) never runs evals: tests stay offline and fast.
 
 ## Watching a run
 
@@ -195,6 +238,7 @@ uv run python -m evals record                                       # commit lef
 ## Turning it off
 
 - `VIKRAM_EVALS_DISABLE=1`: the hook does nothing.
+- `VIKRAM_EVALS_TRIGGERS=<kinds>`: narrow or widen what starts a run.
 - `VIKRAM_EVALS_AUTOCOMMIT=0`: results are written but not committed.
 - `uv run pre-commit uninstall -t post-commit`: remove the hook.
 

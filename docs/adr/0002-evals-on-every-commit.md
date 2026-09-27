@@ -1,6 +1,6 @@
 # 0002. Run evals on every relevant commit, locally, with metrics committed
 
-- **Status:** Accepted
+- **Status:** Accepted; which changes trigger a run is superseded by [0011](0011-eval-triggers-and-pytest-gate.md)
 - **Date:** 2026-09-26
 - **PR:** raniendu/vikram#36 (progress reporting: raniendu/vikram#46)
 

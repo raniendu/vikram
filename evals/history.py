@@ -60,16 +60,20 @@ def find_baseline(
     agent: str,
     head: str,
     suite_hash: str,
+    include_head: bool = False,
 ) -> dict[str, Any] | None:
     """The record for ``agent`` on the nearest strict ancestor of ``head`` that
     ran the same suite; the newest run wins on that commit. Records from
-    other branches are ignored."""
+    other branches are ignored. ``include_head`` also accepts a record on
+    ``head`` itself (a working-tree run compares against its own commit)."""
     best: tuple[int, str, dict[str, Any]] | None = None
     for record in records:
         if record.get("agent") != agent or record.get("suite_hash") != suite_hash:
             continue
         sha = record["commit"]["sha"]
-        if sha == head or not gitutil.is_ancestor(repo, sha, head):
+        if (sha == head and not include_head) or not gitutil.is_ancestor(
+            repo, sha, head
+        ):
             continue
         key = (gitutil.distance(repo, sha, head), record["timestamp"])
         if (
