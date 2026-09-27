@@ -11,6 +11,7 @@ import shutil
 import subprocess
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -1119,3 +1120,210 @@ def test_gate_fails_clearly_when_model_is_unreachable(eval_repo):
     )
     assert outcome.failed
     assert "model server not reachable" in outcome.report()
+
+
+# --- busy model server -------------------------------------------------------
+
+
+async def test_model_busy_repeat_is_marked_transient(settings, monkeypatch):
+    from pydantic_ai.exceptions import ModelHTTPError
+
+    from vikram.agent import build_agent as real_build
+
+    monkeypatch.setattr(eval_runner, "ollama_digest", lambda base_url, model: None)
+
+    def busy(messages, info):
+        raise ModelHTTPError(503, "qwen", {"message": "server busy"})
+
+    def build(spec, settings, **kwargs):
+        return _Overridden(real_build(spec, settings, **kwargs), FunctionModel(busy))
+
+    case = next(
+        c for c in load_suite("coder").cases if c.id == "coder.find_expiry_logic"
+    )
+    from vikram.specstore import load_agent
+
+    spec = load_agent("coder", settings)
+    run = await eval_runner.run_case_once(case, spec, settings, None, build_agent=build)
+    assert run.transient_status == 503
+    assert run.error_type == "ModelHTTPError"
+
+
+async def test_busy_repeats_are_retried_then_scored(monkeypatch):
+    results = [
+        eval_runner.RepeatResult(passed=False, transient_status=503),
+        eval_runner.RepeatResult(passed=False, transient_status=503),
+        eval_runner.RepeatResult(passed=True),
+    ]
+    monkeypatch.setattr(
+        eval_runner, "run_case_once", lambda *a, **k: _async(results.pop(0))
+    )
+    slept: list[float] = []
+    notes: list[str] = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+
+    case = SimpleNamespace(id="coder.x")
+    run = await eval_runner.run_case_with_retries(
+        case,
+        None,
+        None,
+        None,
+        progress=SimpleNamespace(note=notes.append),
+        sleep=sleep,
+    )
+    assert run.passed and run.transient_status is None
+    assert slept == [15.0, 45.0]
+    assert "model server busy (HTTP 503); retrying coder.x in 15s" in notes[0]
+
+
+async def test_busy_retries_give_up_after_the_limit(monkeypatch):
+    monkeypatch.setenv(eval_runner.MODEL_RETRIES_ENV, "1")
+    monkeypatch.setattr(
+        eval_runner,
+        "run_case_once",
+        lambda *a, **k: _async(
+            eval_runner.RepeatResult(passed=False, transient_status=503)
+        ),
+    )
+
+    async def sleep(seconds):
+        pass
+
+    run = await eval_runner.run_case_with_retries(
+        SimpleNamespace(id="c"), None, None, None, sleep=sleep
+    )
+    assert run.transient_status == 503
+
+
+def test_busy_repeats_are_left_out_of_the_score():
+    ok = eval_runner.RepeatResult(passed=True)
+    busy = eval_runner.RepeatResult(passed=False, transient_status=503)
+    mixed = eval_runner.aggregate_case("c", [ok, busy])
+    assert mixed["status"] == "ok"
+    assert mixed["pass_rate"] == 1.0  # the busy repeat doesn't count as a fail
+    assert mixed["unscored_repeats"] == 1
+
+    unscored = eval_runner.aggregate_case("c", [busy, busy])
+    assert unscored["status"] == "unscored"
+    summary = eval_runner.summarize([mixed, unscored])
+    assert summary["cases"] == 1 and summary["unscored"] == 1
+
+
+def test_gate_fails_when_cases_could_not_be_scored(eval_repo):
+    from evals import gate
+
+    async def runner(agent, *, repeats, details_dir):
+        from evals.cases import suite_hash
+
+        result = _result(agent, {"coder.x": 1.0})
+        result["cases"].append(
+            {"id": "coder.y", "status": "unscored", "reason": "model_busy"}
+        )
+        result["suite_hash"] = suite_hash(agent)
+        return result
+
+    outcome = gate.run_gate(eval_repo, agents=["coder"], repeats=1, runner=runner)
+    assert outcome.failed
+    assert "could not score coder.y (model server busy)" in outcome.report()
+
+
+def test_foreground_run_waits_for_the_background_worker(eval_repo):
+    import fcntl
+    import threading
+    import time
+
+    lock_file = orchestrate.state_dir(eval_repo) / "worker.lock"
+    holder = open(lock_file, "w")
+    fcntl.flock(holder, fcntl.LOCK_EX)
+    waited: list[bool] = []
+
+    def release():
+        time.sleep(0.3)
+        fcntl.flock(holder, fcntl.LOCK_UN)
+        holder.close()
+
+    threading.Thread(target=release).start()
+    started = time.monotonic()
+    with orchestrate.exclusive_model_use(
+        eval_repo, on_wait=lambda: waited.append(True)
+    ):
+        elapsed = time.monotonic() - started
+    assert waited == [True]
+    assert elapsed >= 0.25
+
+
+async def _async(value):
+    return value
+
+
+# --- one model load per phase ------------------------------------------------
+
+
+async def test_all_agent_runs_happen_before_any_judging(settings, monkeypatch, capsys):
+    """A machine that holds one model at a time must not swap per repeat."""
+    monkeypatch.setattr(eval_runner, "ollama_digest", lambda *a: None)
+    from vikram.agent import build_agent as real_build
+
+    calls: list[str] = []
+
+    def answer(messages, info):
+        calls.append("agent")
+        return ModelResponse(parts=[TextPart("Processes vs threads.")])
+
+    async def fake_judge(**kwargs):
+        calls.append("judge")
+        from evals.judge import Verdict
+
+        return Verdict(score=0.9, passed=True)
+
+    monkeypatch.setattr(eval_runner, "judge", fake_judge)
+    result = await eval_runner.run_suite(
+        "vikram",
+        repeats=2,
+        case_filter=[
+            "vikram.explain_process_vs_thread",
+            "vikram.decline_meeting_email",
+        ],
+        settings=settings,
+        judge_model=JudgeModel(raw=None, provider="test", model="judge"),
+        build_agent=lambda sp, st, **kw: _Overridden(
+            real_build(sp, st, **kw), FunctionModel(answer)
+        ),
+    )
+    assert calls == ["agent"] * 4 + ["judge"] * 4
+    by_id = {c["id"]: c for c in result["cases"]}
+    assert by_id["vikram.explain_process_vs_thread"]["judge_mean"] == 0.9
+    err = capsys.readouterr().err
+    assert "judged later" in err
+    assert "judging 4 answer(s) with test:judge" in err
+
+
+async def test_busy_judge_is_retried_without_rerunning_the_agent(monkeypatch):
+    outcomes = [503, 503, None]
+
+    async def flaky_judge(**kwargs):
+        from pydantic_ai.exceptions import ModelHTTPError
+
+        from evals.judge import Verdict
+
+        status = outcomes.pop(0)
+        if status:
+            raise ModelHTTPError(status, "judge")
+        return Verdict(score=0.8, passed=True)
+
+    monkeypatch.setattr(eval_runner, "judge", flaky_judge)
+    case = SimpleNamespace(
+        id="c", prompt="p", judge=SimpleNamespace(rubric="r", threshold=0.7)
+    )
+    run = eval_runner.RepeatResult(passed=True, output="answer", awaiting_judge=True)
+
+    async def sleep(seconds):
+        pass
+
+    await eval_runner.judge_with_retries(
+        case, run, JudgeModel(raw=None, provider="t", model="j"), sleep=sleep
+    )
+    assert run.passed and run.judge_score == 0.8
+    assert run.transient_status is None and not run.awaiting_judge

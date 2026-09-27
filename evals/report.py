@@ -121,7 +121,8 @@ def _case_table(record: dict[str, Any]) -> str:
         if case.get("status") != "ok":
             rows.append(
                 f"<tr><td><code>{escape(case['id'])}</code></td>"
-                f'<td colspan="5" class="muted">skipped ({escape(case.get("reason", ""))})'
+                f'<td colspan="5" class="muted">{escape(case.get("status", ""))} '
+                f'({escape(case.get("reason", ""))})'
                 "</td></tr>"
             )
             continue

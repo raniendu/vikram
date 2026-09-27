@@ -223,6 +223,8 @@ def one_line_summary(record: dict[str, Any]) -> str:
             parts.append(f"tokens {d['tokens_mean_pct']:+.0f}%")
         if d.get("worse_cases"):
             parts.append(f"worse: {', '.join(d['worse_cases'])}")
+    if s.get("unscored"):
+        parts.append(f"unscored {s['unscored']} (model busy)")
     kinds = record["change"].get("kinds") or []
     if kinds:
         parts.append(f"[{', '.join(kinds)}]")
