@@ -26,8 +26,12 @@ from vikram.settings import VikramSettings
 from vikram.telegram import TelegramAdapter
 from vikram.telegram_config import load_telegram_config
 
-INBOUND_QUEUE = Queue("vikram-inbound", concurrency=1, polling_interval_sec=0.1)
-OUTBOUND_QUEUE = Queue("vikram-outbound", concurrency=1, polling_interval_sec=0.1)
+INBOUND_QUEUE_NAME = "vikram-inbound"
+OUTBOUND_QUEUE_NAME = "vikram-outbound"
+# DBOS 3 persists queues in its system database, so they can only be registered
+# once DBOS has launched; `launch_dbos` fills these in.
+INBOUND_QUEUE: Queue | None = None
+OUTBOUND_QUEUE: Queue | None = None
 TELEGRAM_FAILURE_REPLY = (
     "I hit an internal error while processing that. The issue has been logged."
 )
@@ -47,7 +51,7 @@ class EventDispatcher:
             prompt_length=len(message.prompt),
             **safe_metadata(message.metadata),
         )
-        handle = await INBOUND_QUEUE.enqueue_async(
+        handle = await _require_queue(INBOUND_QUEUE, INBOUND_QUEUE_NAME).enqueue_async(
             process_inbound_message_event,
             cloud_event_to_dict(event),
         )
@@ -96,17 +100,44 @@ def configure_dbos(settings: VikramSettings) -> None:
     _configured = True
 
 
-def launch_dbos(settings: VikramSettings) -> None:
+async def launch_dbos(settings: VikramSettings) -> None:
     configure_dbos(settings)
     DBOS.launch()
+    await _register_queues()
     logger.info("dbos_launched")
 
 
 def shutdown_dbos() -> None:
-    global _configured
+    global _configured, INBOUND_QUEUE, OUTBOUND_QUEUE
     DBOS.destroy()
     _configured = False
+    INBOUND_QUEUE = None
+    OUTBOUND_QUEUE = None
     logger.info("dbos_shutdown")
+
+
+async def _register_queues() -> None:
+    global INBOUND_QUEUE, OUTBOUND_QUEUE
+    # "always_update": a local deployment has one version, and a changed limit
+    # here should take effect on the next start rather than keep the old row.
+    INBOUND_QUEUE = await DBOS.register_queue_async(
+        INBOUND_QUEUE_NAME,
+        global_concurrency=1,
+        polling_interval_sec=0.1,
+        on_conflict="always_update",
+    )
+    OUTBOUND_QUEUE = await DBOS.register_queue_async(
+        OUTBOUND_QUEUE_NAME,
+        global_concurrency=1,
+        polling_interval_sec=0.1,
+        on_conflict="always_update",
+    )
+
+
+def _require_queue(queue: Queue | None, name: str) -> Queue:
+    if queue is None:
+        raise RuntimeError(f"DBOS queue {name!r} used before launch_dbos()")
+    return queue
 
 
 @DBOS.workflow(name="vikram_process_inbound_message")
@@ -159,7 +190,8 @@ async def process_inbound_message_event(event_dict: dict[str, Any]) -> dict[str,
             raise
         reply_event = make_reply_requested_event(message, reply)
         if reply.interface == "telegram" or reply.interface.startswith("telegram:"):
-            handle = await OUTBOUND_QUEUE.enqueue_async(
+            outbound = _require_queue(OUTBOUND_QUEUE, OUTBOUND_QUEUE_NAME)
+            handle = await outbound.enqueue_async(
                 deliver_reply_event,
                 cloud_event_to_dict(reply_event),
             )
