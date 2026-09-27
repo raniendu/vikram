@@ -200,8 +200,9 @@ class VikramSettings(BaseSettings):
     )
     # Checkpoint each model request (and MCP call) of threaded/Telegram runs
     # as a DBOS step, so a restart resumes the run instead of redoing it.
+    # On by default (ADR 0012); set VIKRAM_DURABLE_AGENT_RUNS=false to opt out.
     durable_agent_runs: bool = Field(
-        default=False, validation_alias="VIKRAM_DURABLE_AGENT_RUNS"
+        default=True, validation_alias="VIKRAM_DURABLE_AGENT_RUNS"
     )
     context_window_tokens: int = Field(
         default=256_000,

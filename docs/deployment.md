@@ -86,13 +86,17 @@ VIKRAM_TELEGRAM_ALLOWED_CHAT_IDS=123456789
 VIKRAM_TELEGRAM_BOT_USERNAME=VikramBot
 ```
 
-Optional: checkpoint each model request of threaded and Telegram runs, so a
-restart resumes a run instead of redoing it (see
-[threaded_conversations.md](threaded_conversations.md#durable-agent-runs)):
+Threaded and Telegram runs checkpoint each model request, so a restart resumes
+a run instead of redoing it (see
+[threaded_conversations.md](threaded_conversations.md#durable-agent-runs)). This
+is on by default; to turn it off:
 
 ```env
-VIKRAM_DURABLE_AGENT_RUNS=true
+VIKRAM_DURABLE_AGENT_RUNS=false
 ```
+
+Deploy while the bot is idle when you can: a release that changes an agent's
+steps can't resume a run that the previous release left half-finished.
 
 ## Health And Readiness
 

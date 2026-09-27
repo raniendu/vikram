@@ -15,20 +15,15 @@ unless `DBOS_SYSTEM_DATABASE_URL` overrides it.
 
 ## Durable agent runs
 
-Each inbound message is already a DBOS workflow, so a crash never loses a
-message. By default, though, a workflow that restarts **redoes the whole agent
-run** from the start. With
+Each inbound message is a DBOS workflow, so a crash never loses a message.
+Pydantic AI's `DBOSDurability` capability is also added to threaded agents, so
+every model request, every MCP call and the compaction summary are **DBOS
+steps**: a restarted workflow replays the finished ones from the journal and
+continues from where it stopped, instead of redoing the whole agent run.
 
-```env
-VIKRAM_DURABLE_AGENT_RUNS=true
-```
-
-Pydantic AI's `DBOSDurability` capability is added to threaded agents. Every
-model request, every MCP call and the compaction summary become **DBOS steps**,
-so a restarted workflow replays the finished ones from the journal and
-continues from where it stopped.
-
-- It's off by default while it proves itself. Turn it on per deployment.
+- It's **on by default** ([ADR 0012](adr/0012-durable-agent-runs-on-by-default.md)).
+  Turn it off with `VIKRAM_DURABLE_AGENT_RUNS=false`; no migration is needed
+  either way.
 - Only model requests, MCP I/O and capability operations are checkpointed.
   Plain function tools (`web_search`, `delegate_to_agent`) run again on
   replay, so their results can differ from the first attempt.

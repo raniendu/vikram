@@ -38,8 +38,14 @@ def _capability_names(agent) -> list[str]:
     return [type(c).__name__ for c in getattr(root, "capabilities", [root])]
 
 
-def test_durability_is_off_by_default(settings):
-    assert settings.durable_agent_runs is False
+def test_durability_is_on_by_default_and_can_be_turned_off(settings, monkeypatch):
+    assert settings.durable_agent_runs is True
+    monkeypatch.setenv("VIKRAM_DURABLE_AGENT_RUNS", "false")
+    assert VikramSettings(_env_file=None).durable_agent_runs is False
+
+
+def test_build_agent_alone_is_not_durable(settings):
+    """Only threaded conversations opt in (gateway passes the setting)."""
     agent = build_agent(
         spec=load_spec("vikram", SPEC_ROOT), settings=settings, surface="threaded"
     )
