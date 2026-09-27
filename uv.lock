@@ -1508,6 +1508,9 @@ wheels = [
 coder = [
     { name = "ripgrep", marker = "sys_platform != 'android'" },
 ]
+prompt-injection-defender = [
+    { name = "stackone-defender" },
+]
 skills = [
     { name = "pyyaml" },
 ]
@@ -2222,6 +2225,15 @@ wheels = [
 ]
 
 [[package]]
+name = "stackone-defender"
+version = "0.7.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1d/26/964ccaa630c8ca1d2c55bc7a5981b3972a7325519d53a11613c3ac980e74/stackone_defender-0.7.4.tar.gz", hash = "sha256:cf0e5c0fd4fffec21f33849740b2b05ef9e7ad288cb4f343cc12ad5690f51c2d", size = 18830684, upload-time = "2026-08-14T09:25:55.531Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ac/d9/4abb92ae181c3aa86e0c9569ec79bc5c66d04ca3328bb1934ea57b5cd858/stackone_defender-0.7.4-py3-none-any.whl", hash = "sha256:2c8061475ea934daf6ae5eb2f60e047ce37654b740ddb1e9758641ffe0b0150f", size = 18777035, upload-time = "2026-08-14T09:25:51.732Z" },
+]
+
+[[package]]
 name = "starlette"
 version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2431,7 +2443,7 @@ dependencies = [
     { name = "opentelemetry-sdk" },
     { name = "parallel-web" },
     { name = "prompt-toolkit" },
-    { name = "pydantic-ai-harness", extra = ["coder", "skills"] },
+    { name = "pydantic-ai-harness", extra = ["coder", "prompt-injection-defender", "skills"] },
     { name = "pydantic-ai-slim", extra = ["anthropic", "google", "mcp", "openai"] },
     { name = "pydantic-settings" },
     { name = "python-dateutil" },
@@ -2464,7 +2476,7 @@ requires-dist = [
     { name = "opentelemetry-sdk", specifier = ">=1.44.0" },
     { name = "parallel-web", specifier = ">=0.6.0" },
     { name = "prompt-toolkit", specifier = ">=3.0.52" },
-    { name = "pydantic-ai-harness", extras = ["coder", "skills"], specifier = "==0.35.0" },
+    { name = "pydantic-ai-harness", extras = ["coder", "prompt-injection-defender", "skills"], specifier = "==0.35.0" },
     { name = "pydantic-ai-slim", extras = ["anthropic", "google", "mcp", "openai"], specifier = ">=2.11.0" },
     { name = "pydantic-settings", specifier = ">=2.14.1" },
     { name = "python-dateutil", specifier = ">=2.9.0.post0" },

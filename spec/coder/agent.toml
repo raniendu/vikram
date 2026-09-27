@@ -66,6 +66,13 @@ strategy = "summarizing"           # summarizing | sliding_window
 max_tokens = 24000                 # Compact once the conversation history passes this size.
 keep_messages = 20                 # Recent messages always kept verbatim.
 
+[capabilities.prompt_injection]
+mode = "report"                    # report (log detections) | block (also withhold risky results)
+
+# [capabilities.memory]            # A notebook the agent keeps across runs (stored locally).
+# scope = "conversation"           # conversation (one per chat) | agent (shared)
+# database = ".vikram/memory.sqlite3"
+
 # [capabilities.spend_limits]      # Stop a run past its budget (network surfaces by default).
 # tokens_per_run = 200000          # Local models price at zero, so budget tokens, not USD.
 

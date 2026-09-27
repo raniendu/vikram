@@ -271,6 +271,7 @@ def build_agent(
     approval_ask: ApprovalAsk | None = None,
     approval_request: ApprovalRequestAsk | None = None,
     apply_command_policy: bool = True,
+    durable: bool = False,
 ) -> VikramAgent:
     settings = settings or VikramSettings()
     if spec is None:
@@ -348,6 +349,11 @@ def build_agent(
         *([file_capability] if file_capability is not None else []),
         *harness_capabilities,
     ]
+    if durable:
+        # Only takes effect inside a DBOS workflow; elsewhere it is a no-op.
+        from pydantic_ai.durable_exec.dbos import DBOSDurability
+
+        capabilities.append(DBOSDurability())
     raw_agent = Agent(
         model.raw,
         name=spec.name,
@@ -368,6 +374,7 @@ def build_agent(
         skills=[skill.name for skill in skills],
         hook_events=_configured_hook_events(hooks),
         capabilities=capability_names(harness_capabilities),
+        durable=durable,
         command_policy_deny_rules=len(command_policy.deny),
         approve_all=approve_all,
         system_prompt_length=len(system_prompt),

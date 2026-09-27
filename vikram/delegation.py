@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from pydantic_ai import Tool
+from pydantic_ai import RunContext, Tool
 
 from vikram.logging import get_logger
 from vikram.settings import VikramSettings
@@ -112,7 +112,9 @@ def make_delegate_to_agent_tool(
     surface: str,
     requires_approval: bool,
 ) -> ToolEntry:
-    async def delegate_to_agent(agent_name: str, prompt: str) -> str:
+    async def delegate_to_agent(
+        ctx: RunContext[None], agent_name: str, prompt: str
+    ) -> str:
         """Delegate a self-contained task to another configured Vikram agent.
 
         Use this when a specialized agent is a better fit for a task. The
@@ -172,9 +174,13 @@ def make_delegate_to_agent_tool(
         log.info("delegation_started")
         start = time.perf_counter()
         try:
+            # Shared usage: the subagent's requests and tokens count toward the
+            # parent run (as the harness SubAgents capability does), so usage
+            # reports and spend limits cover delegated work too.
             result = await subagent.run(
                 prompt,
                 conversation_id=f"delegate:{orchestrator_name}:{requested_name}",
+                usage=ctx.usage,
             )
         except DelegatedApprovalRequired as exc:
             log.info(

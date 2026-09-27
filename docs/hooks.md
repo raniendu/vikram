@@ -7,6 +7,11 @@ augment, or block what the agent is about to do. They are declared per agent in
 **every surface** the agent runs on (CLI, ACP, HTTP `/chat`, threaded queues,
 Telegram).
 
+Hooks run **your own scripts or functions**. For the common checks (redacting
+secrets, refusing keywords, flagging prompt injection in tool results) there are
+ready-made `[capabilities]` entries instead; see
+[capabilities.md](capabilities.md). The two can be used together.
+
 This is the same idea as hooks in other CLI agents: a hook is a small handler
 that receives a JSON description of what's happening and can answer back with a
 decision.
