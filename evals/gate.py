@@ -33,11 +33,14 @@ class AgentOutcome:
     result: dict[str, Any] | None = None
     baseline: dict[str, Any] | None = None
     worse_cases: list[str] = field(default_factory=list)
+    unscored_cases: list[str] = field(default_factory=list)
     error: str | None = None
 
     @property
     def failed(self) -> bool:
-        return self.error is not None or bool(self.worse_cases)
+        # An unscored case (model server busy through every retry) proves
+        # nothing either way, so the gate can't pass on it.
+        return self.error is not None or bool(self.worse_cases or self.unscored_cases)
 
 
 @dataclass
@@ -61,16 +64,29 @@ class GateResult:
                 summary = outcome.result["summary"]
                 rate = summary.get("pass_rate")
                 shown = "n/a" if rate is None else f"{rate:.0%}"
-                blocks.append(
+                line = (
                     f"{outcome.agent}: pass {shown} over {summary['cases']} cases. "
                     "No recorded result to compare with yet (run "
                     "`python -m evals enqueue --wait` on a commit to record one)."
                 )
+                if outcome.unscored_cases:
+                    line += (
+                        f"\n{outcome.agent}: FAILED: could not score "
+                        f"{', '.join(outcome.unscored_cases)} (model server busy)"
+                    )
+                blocks.append(line)
                 continue
+            problems = []
+            if outcome.worse_cases:
+                problems.append(f"worse on {', '.join(outcome.worse_cases)}")
+            if outcome.unscored_cases:
+                problems.append(
+                    f"could not score {', '.join(outcome.unscored_cases)} "
+                    "(model server busy; see `ollama ps` and "
+                    "`python -m evals status`)"
+                )
             verdict = (
-                f"FAILED: worse on {', '.join(outcome.worse_cases)}"
-                if outcome.worse_cases
-                else "no case got worse"
+                f"FAILED: {'; '.join(problems)}" if problems else "no case got worse"
             )
             blocks.append(
                 f"{render(outcome.baseline, outcome.result)}"
@@ -90,8 +106,7 @@ def run_gate(
 
     ``runner`` replaces :func:`evals.runner.run_suite` in tests.
     """
-    from evals.orchestrate import _repeats
-    from evals.runner import ModelUnavailableError
+    from evals.orchestrate import _repeats, exclusive_model_use
 
     if runner is None:
         from evals.runner import run_suite as runner
@@ -100,6 +115,28 @@ def run_gate(
     records = history.load_records(repo)
     repeats = _repeats(repeats)
     outcomes: list[AgentOutcome] = []
+    with exclusive_model_use(
+        repo,
+        on_wait=lambda: progress.say(
+            "pytest --evals: a background eval job is using the model; waiting "
+            "for it to finish (`python -m evals status` shows its progress)"
+        ),
+    ):
+        _score_agents(repo, agents, repeats, runner, head, records, outcomes)
+    return GateResult(outcomes)
+
+
+def _score_agents(
+    repo: Path,
+    agents: list[str] | None,
+    repeats: int,
+    runner: Any,
+    head: str | None,
+    records: list[dict[str, Any]],
+    outcomes: list[AgentOutcome],
+) -> None:
+    from evals.runner import ModelUnavailableError
+
     for agent in agents or list_agents(repo / "evals"):
         outcome = AgentOutcome(agent=agent)
         outcomes.append(outcome)
@@ -116,6 +153,9 @@ def run_gate(
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / "result.json").write_text(json.dumps(result, indent=2))
         outcome.result = result
+        outcome.unscored_cases = [
+            c["id"] for c in result["cases"] if c.get("status") == "unscored"
+        ]
         if head is not None:
             outcome.baseline = history.find_baseline(
                 repo,
@@ -133,5 +173,5 @@ def run_gate(
             agent=agent,
             has_baseline=outcome.baseline is not None,
             worse_cases=len(outcome.worse_cases),
+            unscored_cases=len(outcome.unscored_cases),
         )
-    return GateResult(outcomes)

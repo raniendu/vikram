@@ -48,6 +48,14 @@ NEEDS_WEB_TAG = "needs_web"
 APPROVED_TOOLS = frozenset({"write_file", "edit_file", "delegate_to_agent"})
 APPROVED_EXECUTABLES = frozenset({"python", "python3", "pytest"})
 
+# A model server that answers "busy" (Ollama: 503 "maximum pending requests
+# exceeded") says nothing about the agent. Such a repeat is retried after a
+# pause, and if it never gets through it is left unscored rather than failed.
+TRANSIENT_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+MODEL_RETRIES_ENV = "VIKRAM_EVALS_MODEL_RETRIES"
+DEFAULT_MODEL_RETRIES = 3
+RETRY_DELAYS_SECONDS = (15.0, 45.0, 90.0)
+
 
 class ModelUnavailableError(RuntimeError):
     """The model server for this agent cannot be reached."""
@@ -64,6 +72,8 @@ class RepeatResult:
     latency_ms: float = 0.0
     tool_calls: int = 0
     error_type: str | None = None
+    # The model server was busy or erroring (see TRANSIENT_STATUS_CODES).
+    transient_status: int | None = None
     # Local-only detail; never written to committed history.
     output: str = ""
     trace: list[dict[str, str]] = field(default_factory=list)
@@ -243,6 +253,52 @@ def _collect_trace(result: Any, obs: Observation, repeat: RepeatResult) -> None:
     repeat.tool_calls = len(obs.tool_calls)
 
 
+def _transient_status(exc: BaseException) -> int | None:
+    """The HTTP status if ``exc`` is a busy/erroring model server, else None."""
+    from pydantic_ai.exceptions import ModelHTTPError
+
+    if isinstance(exc, ModelHTTPError) and exc.status_code in TRANSIENT_STATUS_CODES:
+        return exc.status_code
+    return None
+
+
+def _model_retries() -> int:
+    try:
+        return max(0, int(os.environ.get(MODEL_RETRIES_ENV, DEFAULT_MODEL_RETRIES)))
+    except ValueError:
+        logger.warning("eval_model_retries_invalid", env=MODEL_RETRIES_ENV)
+        return DEFAULT_MODEL_RETRIES
+
+
+async def run_case_with_retries(
+    case: CaseSpec,
+    spec: Any,
+    settings: Any,
+    judge_model: JudgeModel | None,
+    *,
+    build_agent: Any = None,
+    progress: Any = None,
+    sleep: Any = asyncio.sleep,
+) -> RepeatResult:
+    """One repeat, retried from a fresh workspace while the model is busy."""
+    retries = _model_retries()
+    attempt = 0
+    while True:
+        run = await run_case_once(
+            case, spec, settings, judge_model, build_agent=build_agent
+        )
+        if run.transient_status is None or attempt >= retries:
+            return run
+        delay = RETRY_DELAYS_SECONDS[min(attempt, len(RETRY_DELAYS_SECONDS) - 1)]
+        attempt += 1
+        if progress is not None:
+            progress.note(
+                f"model server busy (HTTP {run.transient_status}); retrying "
+                f"{case.id} in {delay:.0f}s (retry {attempt}/{retries})"
+            )
+        await sleep(delay)
+
+
 async def run_case_once(
     case: CaseSpec,
     spec: Any,
@@ -279,11 +335,20 @@ async def run_case_once(
             except Exception as exc:  # recorded as a failed repeat, not raised
                 repeat.latency_ms = round((time.perf_counter() - started) * 1000, 1)
                 repeat.error_type = type(exc).__name__
-                logger.exception(
-                    "eval_case_run_failed",
-                    case_id=case.id,
-                    error_type=type(exc).__name__,
-                )
+                repeat.transient_status = _transient_status(exc)
+                if repeat.transient_status is not None:
+                    # Expected under load; the retry loop reports it.
+                    logger.warning(
+                        "eval_case_model_busy",
+                        case_id=case.id,
+                        status_code=repeat.transient_status,
+                    )
+                else:
+                    logger.exception(
+                        "eval_case_run_failed",
+                        case_id=case.id,
+                        error_type=type(exc).__name__,
+                    )
                 return repeat
             repeat.latency_ms = round((time.perf_counter() - started) * 1000, 1)
             obs.output = str(result.output)
@@ -306,8 +371,16 @@ async def run_case_once(
                     model=judge_model,
                 )
             except Exception as exc:
-                logger.exception("eval_judge_failed", case_id=case.id)
                 repeat.error_type = f"judge:{type(exc).__name__}"
+                repeat.transient_status = _transient_status(exc)
+                if repeat.transient_status is not None:
+                    logger.warning(
+                        "eval_judge_model_busy",
+                        case_id=case.id,
+                        status_code=repeat.transient_status,
+                    )
+                else:
+                    logger.exception("eval_judge_failed", case_id=case.id)
                 return repeat
             repeat.judge_score = verdict.score
             passed = passed and verdict.passed
@@ -327,6 +400,18 @@ def _median(values: list[float]) -> float | None:
 
 
 def aggregate_case(case_id: str, repeats: list[RepeatResult]) -> dict[str, Any]:
+    # Repeats the model server never answered measure the server, not the
+    # agent: they are left out, and a case with none left is "unscored".
+    busy = [r for r in repeats if r.transient_status is not None]
+    repeats = [r for r in repeats if r.transient_status is None]
+    if not repeats:
+        return {
+            "id": case_id,
+            "status": "unscored",
+            "reason": "model_busy",
+            "repeats": 0,
+            "unscored_repeats": len(busy),
+        }
     failed: dict[str, int] = {}
     for repeat in repeats:
         for check in repeat.checks:
@@ -351,6 +436,7 @@ def aggregate_case(case_id: str, repeats: list[RepeatResult]) -> dict[str, Any]:
         "failed_checks": dict(sorted(failed.items())),
         "errors": sum(r.error_type is not None for r in repeats),
         "error_types": sorted({r.error_type for r in repeats if r.error_type}),
+        "unscored_repeats": len(busy),
     }
 
 
@@ -363,6 +449,7 @@ def summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "cases": len(scored),
         "skipped": sum(c.get("status") == "skipped" for c in cases),
+        "unscored": sum(c.get("status") == "unscored" for c in cases),
         "pass_rate": _mean(values("pass_rate")),
         "judge_mean": _mean(values("judge_mean")),
         "tokens_mean": _mean(values("tokens_mean")),
@@ -411,8 +498,13 @@ async def run_suite(
         for index in range(repeats):
             logger.info("eval_case_started", case_id=case.id, repeat=index + 1)
             progress.run_started(case.id, number, index + 1)
-            run = await run_case_once(
-                case, spec, settings, judge_model, build_agent=build_agent
+            run = await run_case_with_retries(
+                case,
+                spec,
+                settings,
+                judge_model,
+                build_agent=build_agent,
+                progress=progress,
             )
             runs.append(run)
             progress.run_finished(

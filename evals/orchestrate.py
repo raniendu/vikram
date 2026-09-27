@@ -153,6 +153,32 @@ def _worker_lock(repo: Path) -> Iterator[bool]:
         handle.close()
 
 
+@contextmanager
+def exclusive_model_use(repo: Path, on_wait: Any = None) -> Iterator[None]:
+    """Hold the worker lock, waiting for a running background job first.
+
+    Two eval runs at once overload a local model server (Ollama answers 503
+    "maximum pending requests exceeded"), so a foreground run shares the
+    worker's lock. Jobs a commit queued meanwhile are picked up afterwards.
+    """
+    handle = open(state_dir(repo) / "worker.lock", "w")
+    try:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            if on_wait is not None:
+                on_wait()
+            fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+    finally:
+        handle.close()
+    if _pending_path(repo).exists():
+        spawn_worker(repo)
+
+
 def _append_summary(repo: Path, line: str) -> None:
     stamp = datetime.now().astimezone().isoformat(timespec="seconds")
     with summary_log_path(repo).open("a") as fh:

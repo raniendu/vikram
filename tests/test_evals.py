@@ -11,6 +11,7 @@ import shutil
 import subprocess
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -1119,3 +1120,139 @@ def test_gate_fails_clearly_when_model_is_unreachable(eval_repo):
     )
     assert outcome.failed
     assert "model server not reachable" in outcome.report()
+
+
+# --- busy model server -------------------------------------------------------
+
+
+async def test_model_busy_repeat_is_marked_transient(settings, monkeypatch):
+    from pydantic_ai.exceptions import ModelHTTPError
+
+    from vikram.agent import build_agent as real_build
+
+    monkeypatch.setattr(eval_runner, "ollama_digest", lambda base_url, model: None)
+
+    def busy(messages, info):
+        raise ModelHTTPError(503, "qwen", {"message": "server busy"})
+
+    def build(spec, settings, **kwargs):
+        return _Overridden(real_build(spec, settings, **kwargs), FunctionModel(busy))
+
+    case = next(
+        c for c in load_suite("coder").cases if c.id == "coder.find_expiry_logic"
+    )
+    from vikram.specstore import load_agent
+
+    spec = load_agent("coder", settings)
+    run = await eval_runner.run_case_once(case, spec, settings, None, build_agent=build)
+    assert run.transient_status == 503
+    assert run.error_type == "ModelHTTPError"
+
+
+async def test_busy_repeats_are_retried_then_scored(monkeypatch):
+    results = [
+        eval_runner.RepeatResult(passed=False, transient_status=503),
+        eval_runner.RepeatResult(passed=False, transient_status=503),
+        eval_runner.RepeatResult(passed=True),
+    ]
+    monkeypatch.setattr(
+        eval_runner, "run_case_once", lambda *a, **k: _async(results.pop(0))
+    )
+    slept: list[float] = []
+    notes: list[str] = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+
+    case = SimpleNamespace(id="coder.x")
+    run = await eval_runner.run_case_with_retries(
+        case,
+        None,
+        None,
+        None,
+        progress=SimpleNamespace(note=notes.append),
+        sleep=sleep,
+    )
+    assert run.passed and run.transient_status is None
+    assert slept == [15.0, 45.0]
+    assert "model server busy (HTTP 503); retrying coder.x in 15s" in notes[0]
+
+
+async def test_busy_retries_give_up_after_the_limit(monkeypatch):
+    monkeypatch.setenv(eval_runner.MODEL_RETRIES_ENV, "1")
+    monkeypatch.setattr(
+        eval_runner,
+        "run_case_once",
+        lambda *a, **k: _async(
+            eval_runner.RepeatResult(passed=False, transient_status=503)
+        ),
+    )
+
+    async def sleep(seconds):
+        pass
+
+    run = await eval_runner.run_case_with_retries(
+        SimpleNamespace(id="c"), None, None, None, sleep=sleep
+    )
+    assert run.transient_status == 503
+
+
+def test_busy_repeats_are_left_out_of_the_score():
+    ok = eval_runner.RepeatResult(passed=True)
+    busy = eval_runner.RepeatResult(passed=False, transient_status=503)
+    mixed = eval_runner.aggregate_case("c", [ok, busy])
+    assert mixed["status"] == "ok"
+    assert mixed["pass_rate"] == 1.0  # the busy repeat doesn't count as a fail
+    assert mixed["unscored_repeats"] == 1
+
+    unscored = eval_runner.aggregate_case("c", [busy, busy])
+    assert unscored["status"] == "unscored"
+    summary = eval_runner.summarize([mixed, unscored])
+    assert summary["cases"] == 1 and summary["unscored"] == 1
+
+
+def test_gate_fails_when_cases_could_not_be_scored(eval_repo):
+    from evals import gate
+
+    async def runner(agent, *, repeats, details_dir):
+        from evals.cases import suite_hash
+
+        result = _result(agent, {"coder.x": 1.0})
+        result["cases"].append(
+            {"id": "coder.y", "status": "unscored", "reason": "model_busy"}
+        )
+        result["suite_hash"] = suite_hash(agent)
+        return result
+
+    outcome = gate.run_gate(eval_repo, agents=["coder"], repeats=1, runner=runner)
+    assert outcome.failed
+    assert "could not score coder.y (model server busy)" in outcome.report()
+
+
+def test_foreground_run_waits_for_the_background_worker(eval_repo):
+    import fcntl
+    import threading
+    import time
+
+    lock_file = orchestrate.state_dir(eval_repo) / "worker.lock"
+    holder = open(lock_file, "w")
+    fcntl.flock(holder, fcntl.LOCK_EX)
+    waited: list[bool] = []
+
+    def release():
+        time.sleep(0.3)
+        fcntl.flock(holder, fcntl.LOCK_UN)
+        holder.close()
+
+    threading.Thread(target=release).start()
+    started = time.monotonic()
+    with orchestrate.exclusive_model_use(
+        eval_repo, on_wait=lambda: waited.append(True)
+    ):
+        elapsed = time.monotonic() - started
+    assert waited == [True]
+    assert elapsed >= 0.25
+
+
+async def _async(value):
+    return value

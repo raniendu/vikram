@@ -145,6 +145,10 @@ class SuiteProgress:
         remaining = self.total - self.done - self.skipped * self.repeats
         return max(0.0, self._run_seconds / self.done * remaining)
 
+    def note(self, line: str) -> None:
+        """A free-form progress line (e.g. a retry), stamped like the rest."""
+        say(line)
+
     def skip(self, case_id: str, case_index: int, reason: str) -> None:
         self.skipped += 1
         say(f"case {case_index}/{self.cases} {case_id}: skipped ({reason})")

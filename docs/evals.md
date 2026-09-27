@@ -112,7 +112,11 @@ uv run pytest --evals --eval-agent coder --eval-repeats 1    # quicker
 3. The result is compared with the newest recorded result on `HEAD` or an
    ancestor that used the same eval cases, and the before/after table is printed.
 4. The session **fails** if any case got worse beyond the noise margins (see
-   "How scoring works"), or if the model server isn't reachable.
+   "How scoring works"), if a case couldn't be scored because the model server
+   stayed busy, or if the model server isn't reachable.
+
+If a background eval job (from the commit hook) is running, `pytest --evals`
+waits for it first: two runs at once overload a local model server.
 
 Nothing is committed. The result is kept as a manual run, so
 `uv run python -m evals compare pytest-coder <sha> --agent coder` shows it again.
@@ -191,6 +195,14 @@ cases, the judge score reaches the case threshold (default 0.7). A case's
 A case is marked **worse** or **better** only when its pass rate moves by at
 least 0.34 (one flipped repeat out of three is treated as noise) or its judge
 score moves by at least 0.15.
+
+**A busy model server isn't a failed case.** When the model answers "busy" or a
+server error (HTTP 429/500/502/503/504, e.g. Ollama's 503 "maximum pending
+requests exceeded"), the repeat is retried from a fresh workspace after 15s,
+45s and 90s (`VIKRAM_EVALS_MODEL_RETRIES`, default 3). A repeat that never gets
+through is left out of the score; a case with no scored repeat is marked
+`unscored`, shown separately in `compare`, `status` and the report, and never
+counted as "worse".
 
 - **Hard checks** (`evals/checks.py`): the output contains a value, a tool was
   (or was not) called, a file changed, the fixture's tests pass, a hidden

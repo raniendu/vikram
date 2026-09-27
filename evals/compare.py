@@ -149,6 +149,9 @@ def render(before: dict[str, Any], after: dict[str, Any]) -> str:
         )
     skipped = [c["id"] for c in after["cases"] if c.get("status") == "skipped"]
     footer = f"\nskipped: {', '.join(skipped)}\n" if skipped else ""
+    unscored = [c["id"] for c in after["cases"] if c.get("status") == "unscored"]
+    if unscored:
+        footer += f"unscored (model server busy): {', '.join(unscored)}\n"
     return (
         warning
         + header
