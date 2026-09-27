@@ -20,7 +20,6 @@ from vikram.settings import VikramSettings
 
 logger = get_logger(__name__)
 
-MAX_COMMAND_OUTPUT_CHARS = 12_000
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 60
 
 _ACTIVE_POLICY: CommandPolicy | None = None
@@ -121,16 +120,9 @@ def _refusal(message: str, *, tool: str, reason: str) -> str:
     return f"Refusing: {message}"
 
 
-def _truncate_output(text: str, limit: int) -> str:
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "\n... output truncated"
-
-
 async def inspect_command(
     command: str,
     timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
-    max_output_chars: int = MAX_COMMAND_OUTPUT_CHARS,
 ) -> str:
     """Run a read-only inspection command in cwd without an approval prompt.
 
@@ -143,7 +135,6 @@ async def inspect_command(
     Args:
         command: Command string, e.g. "git status --short".
         timeout_seconds: Seconds to wait before killing the process.
-        max_output_chars: Maximum combined output characters to return.
     """
     try:
         argv = shlex.split(command)
@@ -174,7 +165,7 @@ async def inspect_command(
             f"use run_command for {executable}."
         )
     return await _execute_command(
-        command, argv, timeout_seconds, max_output_chars, tool="inspect_command"
+        command, argv, timeout_seconds, tool="inspect_command"
     )
 
 
@@ -182,7 +173,6 @@ async def run_command(
     ctx: RunContext[None],
     command: str,
     timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
-    max_output_chars: int = MAX_COMMAND_OUTPUT_CHARS,
 ) -> str:
     """Run a command in the current working directory, with human approval.
 
@@ -197,7 +187,6 @@ async def run_command(
     Args:
         command: Command string, e.g. "git commit -m \"message\"".
         timeout_seconds: Seconds to wait before killing the process.
-        max_output_chars: Maximum combined output characters to return.
     """
     try:
         argv = shlex.split(command)
@@ -221,9 +210,7 @@ async def run_command(
             executable=Path(argv[0]).name,
         )
         raise ApprovalRequired()
-    return await _execute_command(
-        command, argv, timeout_seconds, max_output_chars, tool="run_command"
-    )
+    return await _execute_command(command, argv, timeout_seconds, tool="run_command")
 
 
 # Environment variables a command the agent runs must not inherit: provider
@@ -256,14 +243,13 @@ async def _execute_command(
     command: str,
     argv: list[str],
     timeout_seconds: int,
-    max_output_chars: int,
     *,
     tool: str,
 ) -> str:
+    # Output length is capped for every tool by the tool_output_limits
+    # capability (docs/capabilities.md), not here.
     if timeout_seconds < 1:
         return "timeout_seconds must be at least 1."
-    if max_output_chars < 1:
-        return "max_output_chars must be at least 1."
 
     # Only the executable and argument count are logged. The full command may
     # carry credentials (tokens passed as flags), so it stays out of the logs.
@@ -301,10 +287,9 @@ async def _execute_command(
         stdout = stdout_bytes.decode("utf-8", errors="replace")
         stderr = stderr_bytes.decode("utf-8", errors="replace")
         log.warning("tool_command_timed_out", duration_ms=_elapsed_ms(start))
-        return _truncate_output(
+        return (
             f"$ {command}\nTimed out after {timeout_seconds}s.\n"
-            f"stdout:\n{stdout}\nstderr:\n{stderr}".rstrip(),
-            max_output_chars,
+            f"stdout:\n{stdout}\nstderr:\n{stderr}".rstrip()
         )
 
     stdout = stdout_bytes.decode("utf-8", errors="replace").strip()
@@ -321,7 +306,7 @@ async def _execute_command(
         sections.append(f"stdout:\n{stdout}")
     if stderr:
         sections.append(f"stderr:\n{stderr}")
-    return _truncate_output("\n".join(sections), max_output_chars)
+    return "\n".join(sections)
 
 
 ToolEntry = Callable[..., Awaitable[str]] | Tool[None] | HarnessFileTool

@@ -44,7 +44,7 @@ capabilities:
 | Capability | Setting | Why |
 |---|---|---|
 | `repair_tool_arguments` | on | Local Ollama models often emit near-JSON tool calls. |
-| `tool_output_limits` | 40,000 chars, head + tail | One cap for every tool. MCP output was previously uncapped. The built-in tools keep their own, smaller limits for now. |
+| `tool_output_limits` | 40,000 chars, head + tail | One cap for every tool: built-in, MCP and delegated. MCP output was previously uncapped, and `run_command`/`inspect_command` no longer cap their own output (they used to stop at 12,000 chars). A spec without this entry gets **uncapped** command output. |
 | `compaction` | summarizing at 24,000 tokens, keep 20 | Long Telegram and API threads previously grew until the model's window overflowed, with only a warning at 85%. |
 
 Both also run `prompt_injection` in **report** mode, so detections are logged
@@ -129,16 +129,24 @@ them as a `framework` change.
 
 ## Migration roadmap
 
-The migration runs as separate work streams, each in its own PR:
+The migration ran as separate work streams, one PR each. **All are done** and
+on `main`. The ADRs in [`docs/adr/`](adr/README.md) record why each ended the
+way it did.
 
-| Stream | What | Status |
-|---|---|---|
-| WS8 | Tracing on the OpenTelemetry SDK (removes OpenLIT, which blocked the upgrade) | PR |
-| WS0 | This foundation: framework upgrade, `[capabilities]` table | PR |
-| WS1 | Turn on repair, output limits and compaction in the shipped specs | PR |
-| WS2 | File tools on harness `FileSystem` | PR |
-| WS4 | Skills on harness `Skills` | kept Vikram's loader (see decision above) |
-| WS3 | Shell on harness `Shell` | kept argv-only executor; adopted credential stripping (see decision above) |
-| WS5 | Delegation on harness `SubAgents` | kept Vikram's tool; adopted usage forwarding (see decision above) |
-| WS7 | Prompt-injection defender, guardrails, memory | PR |
-| WS6 | Durable agent runs on DBOS (`VIKRAM_DURABLE_AGENT_RUNS`, off by default) | PR |
+| Stream | What | Outcome | PR | ADR |
+|---|---|---|---|---|
+| WS8 | Tracing | OpenLIT replaced by the OpenTelemetry SDK (OpenLIT blocked the upgrade) | #37 | [0003](adr/0003-opentelemetry-sdk-instead-of-openlit.md) |
+| WS0 | Foundation | Framework upgrade, harness added, `[capabilities]` table | #38 | [0004](adr/0004-adopt-pydantic-ai-harness-declaratively.md) |
+| WS1 | Quick wins | Argument repair, output limits, compaction on in the shipped specs | #39 | [0004](adr/0004-adopt-pydantic-ai-harness-declaratively.md) |
+| WS2 | File tools | Harness `FileSystem`, behind Vikram's guard | #40 | [0005](adr/0005-file-tools-on-harness-filesystem.md) |
+| WS4 | Skills | Kept Vikram's `load_skill` | #41 | [0006](adr/0006-keep-load-skill.md) |
+| WS3 | Shell | Kept the argv-only executor; commands no longer inherit secrets | #42 | [0007](adr/0007-keep-argv-command-executor.md) |
+| WS5 | Delegation | Kept `delegate_to_agent`; child usage counts toward the parent | #43 → #47 | [0008](adr/0008-keep-delegate-to-agent.md) |
+| WS7 | Safety and memory | Injection scan (report mode), secret redaction; memory opt-in | #44 → #47 | [0009](adr/0009-injection-defence-and-memory-opt-in.md) |
+| WS6 | Durable runs | `VIKRAM_DURABLE_AGENT_RUNS` (off by default) checkpoints threaded runs in DBOS | #45 → #47 | [0010](adr/0010-durable-agent-runs-opt-in.md) |
+
+Follow-ups, not started:
+
+- Turn on durable runs in a staging deployment, then consider making them the default.
+- Switch `prompt_injection` from `report` to `block` once the logs show few false positives.
+- Add `[capabilities]` fields to the desktop app's spec editor (today it round-trips the table but can't edit it).
