@@ -62,6 +62,26 @@ before Ollama cuts the prompt.
 - Logs name the capabilities, never their settings or content.
 - Pydantic AI's first-run banner is disabled, because the CLI and ACP own stdout.
 
+## Decision: skills stay on Vikram's `load_skill` (WS4)
+
+The harness `Skills` capability was evaluated as a replacement for
+`vikram/skills.py` and **not adopted** (harness 0.35.0, pydantic-ai-slim 2.51.0):
+
+| | Vikram `load_skill` | Harness `Skills` |
+|---|---|---|
+| Tool the model calls | `load_skill(name)` | `load_capability` (Pydantic AI's deferred-capability loader). The name is **reserved by the framework and can't be renamed** |
+| What loading returns | the skill body as a tool result, plus a list of the skill's **bundled files** (e.g. `conventional-commits/examples.md`) | the body becomes agent instructions; bundled files aren't mentioned |
+| Spec layout | each spec lists individual skill folders | scans a *library* folder of skill folders |
+
+Switching would rename a tool that the `vikram` and `coder` system prompts and
+two eval cases (`coder.commit_message_skill`, `vikram.research_uses_skill`)
+depend on, and would hide `examples.md` from the commit-message skill.
+`vikram/skills.py` is small and fully tested, so it stays.
+
+**Revisit when** Pydantic AI lets the deferred-loader tool be renamed, or the
+harness lists bundled resources. Then it's a small swap in `build_agent`, and
+the eval hook will score it as an `mcp_hooks_skills` change.
+
 ## Versions
 
 `pydantic-ai-harness` is pinned exactly because it is pre-1.0. It requires
@@ -78,7 +98,7 @@ The migration runs as separate work streams, each in its own PR:
 | WS0 | This foundation: framework upgrade, `[capabilities]` table | PR |
 | WS1 | Turn on repair, output limits and compaction in the shipped specs | PR |
 | WS2 | File tools on harness `FileSystem` | PR |
-| WS4 | Skills on harness `Skills` | planned |
+| WS4 | Skills on harness `Skills` | kept Vikram's loader (see decision above) |
 | WS3 | Shell on harness `Shell`, with the command policy as a guardrail | planned |
 | WS5 | Delegation on harness `SubAgents` | planned |
 | WS7 | Prompt-injection defender, guardrails, memory | planned |
