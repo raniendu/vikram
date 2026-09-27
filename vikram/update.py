@@ -137,6 +137,30 @@ def _has_uncommitted_changes(source: Path) -> bool:
     return bool(_git(["status", "--porcelain"], cwd=source))
 
 
+def _stash_local_changes(source: Path) -> str | None:
+    """Set local edits aside so they cannot block the fast-forward.
+
+    The checkout belongs to the installer, and the usual culprit is a build
+    rewriting a tracked lockfile, so refusing here would leave ``vikram update``
+    unable to update itself. Stash rather than discard: anything a person did
+    change stays recoverable.
+    """
+    if not _has_uncommitted_changes(source):
+        return None
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    _git(
+        [
+            "stash",
+            "push",
+            "--include-untracked",
+            "--message",
+            f"vikram update {stamp}",
+        ],
+        cwd=source,
+    )
+    return _git(["rev-parse", "--short", "stash@{0}"], cwd=source)
+
+
 def _current_branch(source: Path) -> str | None:
     branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=source)
     return None if branch == "HEAD" else branch
@@ -250,13 +274,14 @@ def run(argv: Sequence[str] | None = None) -> int:
         return 1
 
     try:
-        if _has_uncommitted_changes(source):
+        # --check only reads, so it leaves the working tree alone.
+        stash_ref = None if args.check else _stash_local_changes(source)
+        if stash_ref:
             print(
-                f"{source} has uncommitted changes. Commit, stash, or discard "
-                "them and rerun.",
+                f"Stashed local changes in {source} as {stash_ref}; restore "
+                f"them with `git -C {source} stash pop`.",
                 file=sys.stderr,
             )
-            return 1
 
         old_sha = _git(["rev-parse", "HEAD"], cwd=source)
         branch = _current_branch(source)

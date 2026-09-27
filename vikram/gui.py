@@ -129,7 +129,10 @@ def build_bundle(*, install: bool = True) -> int:
         return 1
 
     print(f"Building Vikram Studio from {gui_dir}…", file=sys.stderr)
-    for command in (["npm", "install"], ["npm", "run", "tauri", "build"]):
+    # `npm ci` installs exactly what the lockfile pins and never rewrites it.
+    # `npm install` would, whenever the local npm formats it differently, and a
+    # dirty lockfile in the install checkout would then trip the next update.
+    for command in (["npm", "ci"], ["npm", "run", "tauri", "build"]):
         result = subprocess.run(command, cwd=gui_dir)
         if result.returncode != 0:
             print(f"`{' '.join(command)}` failed.", file=sys.stderr)
