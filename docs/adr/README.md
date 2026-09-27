@@ -39,8 +39,9 @@ A bug fix or a refactor that keeps behaviour needs no ADR.
 | [0007](0007-keep-argv-command-executor.md) | Keep the argv-only command executor; strip secrets from its environment | Accepted |
 | [0008](0008-keep-delegate-to-agent.md) | Keep `delegate_to_agent`; forward usage to the parent | Accepted |
 | [0009](0009-injection-defence-and-memory-opt-in.md) | Prompt-injection defence in report mode; secret redaction on; memory opt-in | Accepted |
-| [0010](0010-durable-agent-runs-opt-in.md) | Durable agent runs on DBOS, off by default | Accepted |
+| [0010](0010-durable-agent-runs-opt-in.md) | Durable agent runs on DBOS, off by default | Accepted; default superseded by 0012 |
 | [0011](0011-eval-triggers-and-pytest-gate.md) | Trigger evals only on model and prompt changes; add `pytest --evals` | Accepted |
+| [0012](0012-durable-agent-runs-on-by-default.md) | Durable agent runs on by default | Accepted |
 
 0008–0010 were reviewed in raniendu/vikram#43–#45, which merged into stacked
 branches; their code reached `main` with raniendu/vikram#47.

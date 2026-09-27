@@ -1,6 +1,6 @@
 # 0010. Durable agent runs on DBOS, off by default
 
-- **Status:** Accepted
+- **Status:** Accepted; the "off by default" part is superseded by [0012](0012-durable-agent-runs-on-by-default.md)
 - **Date:** 2026-09-26
 - **PR:** raniendu/vikram#45 (WS6), landed on `main` via raniendu/vikram#47
 

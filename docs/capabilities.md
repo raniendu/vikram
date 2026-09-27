@@ -143,10 +143,9 @@ way it did.
 | WS3 | Shell | Kept the argv-only executor; commands no longer inherit secrets | #42 | [0007](adr/0007-keep-argv-command-executor.md) |
 | WS5 | Delegation | Kept `delegate_to_agent`; child usage counts toward the parent | #43 → #47 | [0008](adr/0008-keep-delegate-to-agent.md) |
 | WS7 | Safety and memory | Injection scan (report mode), secret redaction; memory opt-in | #44 → #47 | [0009](adr/0009-injection-defence-and-memory-opt-in.md) |
-| WS6 | Durable runs | `VIKRAM_DURABLE_AGENT_RUNS` (off by default) checkpoints threaded runs in DBOS | #45 → #47 | [0010](adr/0010-durable-agent-runs-opt-in.md) |
+| WS6 | Durable runs | `VIKRAM_DURABLE_AGENT_RUNS` checkpoints threaded runs in DBOS; on by default since ADR 0012 | #45 → #47 | [0010](adr/0010-durable-agent-runs-opt-in.md), [0012](adr/0012-durable-agent-runs-on-by-default.md) |
 
 Follow-ups, not started:
 
-- Turn on durable runs in a staging deployment, then consider making them the default.
 - Switch `prompt_injection` from `report` to `block` once the logs show few false positives.
 - Add `[capabilities]` fields to the desktop app's spec editor (today it round-trips the table but can't edit it).
