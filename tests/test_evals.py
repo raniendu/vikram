@@ -768,6 +768,13 @@ def test_report_renders_history(spec_repo):
     assert "<svg" in html and "coder" in html
     assert "prompt_lines" in html
     assert "+50pt" in html
+    assert "How to read this report" in html
+    assert "2 runs" in html
+
+    latest = report.render([base, after], last=1)
+    assert "Last 1 of 2 runs" in latest
+    assert "+50pt" in latest  # the kept run still shows its delta
+    assert '<abbr title="How often the agent passed' in html
 
 
 # --- review follow-ups: rule order, timeouts, dry run ------------------------------
