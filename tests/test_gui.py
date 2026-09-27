@@ -288,7 +288,7 @@ def test_build_installs_over_a_stale_bundle(monkeypatch, tmp_path):
     assert not (stale / "stale-marker").exists()
 
 
-def test_build_stops_when_npm_install_fails(monkeypatch, tmp_path):
+def test_build_stops_when_npm_ci_fails(monkeypatch, tmp_path):
     gui_dir = tmp_path / "gui"
     gui_dir.mkdir()
     (gui_dir / "package.json").write_text("{}")
@@ -304,7 +304,7 @@ def test_build_stops_when_npm_install_fails(monkeypatch, tmp_path):
     )
 
     assert gui.build_bundle() == 3
-    assert calls == [["npm", "install"]]  # never reached `tauri build`
+    assert calls == [["npm", "ci"]]  # never reached `tauri build`
 
 
 def test_build_flag_does_not_require_the_api(monkeypatch):

@@ -100,8 +100,8 @@ class GitFake:
         self.calls.append(key)
         if key in self.responses:
             return self.responses[key]
-        # Mutating commands (fetch, pull, checkout) — return empty by default.
-        if args and args[0] in {"fetch", "pull", "checkout"}:
+        # Mutating commands (fetch, pull, checkout, stash) — return empty by default.
+        if args and args[0] in {"fetch", "pull", "checkout", "stash"}:
             return ""
         raise AssertionError(f"Unexpected git call: {key}")
 
@@ -183,20 +183,56 @@ def test_run_check_reports_pending_commits(
     }
 
 
-def test_run_aborts_on_dirty_tree(
+def test_run_stashes_a_dirty_tree_before_pulling(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     source, _ = _wire_source(monkeypatch, tmp_path)
     _stub_path_with_git_and_uv(monkeypatch)
 
-    git = GitFake({("status", "--porcelain"): " M vikram/cli.py"})
+    sha = "a" * 40
+    git = GitFake(
+        {
+            ("status", "--porcelain"): " M gui/package-lock.json",
+            ("rev-parse", "--short", "stash@{0}"): "1234abc",
+            ("rev-parse", "HEAD"): sha,
+            ("rev-parse", "--abbrev-ref", "HEAD"): "main",
+            ("rev-parse", "origin/main"): sha,
+        }
+    )
     monkeypatch.setattr(update_module, "_git", git)
+    monkeypatch.setattr(update_module, "load_metadata", lambda: {"git_sha": sha})
 
     rc = update_module.run(["--source", str(source)])
 
-    assert rc == 1
+    assert rc == 0
+    stash = [call for call in git.calls if call[0] == "stash"]
+    assert len(stash) == 1
+    assert stash[0][:3] == ("stash", "push", "--include-untracked")
+    # The stash has to happen before anything touches the working tree.
+    assert git.calls.index(stash[0]) < git.calls.index(("fetch", "--quiet", "origin"))
     err = capsys.readouterr().err
-    assert "uncommitted changes" in err
+    assert "1234abc" in err and "stash pop" in err
+
+
+def test_check_leaves_a_dirty_tree_alone(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source, _ = _wire_source(monkeypatch, tmp_path)
+    _stub_path_with_git_and_uv(monkeypatch)
+
+    sha = "a" * 40
+    git = GitFake(
+        {
+            ("status", "--porcelain"): " M gui/package-lock.json",
+            ("rev-parse", "HEAD"): sha,
+            ("rev-parse", "--abbrev-ref", "HEAD"): "main",
+            ("rev-parse", "origin/main"): sha,
+        }
+    )
+    monkeypatch.setattr(update_module, "_git", git)
+
+    assert update_module.run(["--check", "--source", str(source)]) == 0
+    assert not any(call[0] == "stash" for call in git.calls)
 
 
 def test_run_aborts_when_git_missing(
