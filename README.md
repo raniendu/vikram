@@ -550,6 +550,7 @@ metrics committed to `evals/history/`. See [docs/evals.md](docs/evals.md).
 | --- | --- |
 | [docs/current_architecture.md](docs/current_architecture.md) | Detailed module table and request flow documentation |
 | [docs/capabilities.md](docs/capabilities.md) | `[capabilities]` reference and the Harness migration roadmap |
+| [docs/adr/](docs/adr/README.md) | Architecture Decision Records: what was decided, why, and what was given up |
 | [docs/evals.md](docs/evals.md) | Before/after eval suite, change tracking and history |
 | [docs/deployment.md](docs/deployment.md) | Deployment, logging, and tracing details |
 | [docs/desktop_app.md](docs/desktop_app.md) | Desktop app install and build instructions |
