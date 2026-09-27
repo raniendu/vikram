@@ -245,7 +245,7 @@ async def test_commands_do_not_inherit_credentials(monkeypatch, tmp_path):
 
     script = "import os; print(sorted(os.environ))"
     result = await tools._execute_command(
-        "python -c ...", ["python", "-c", script], 10, 12_000, tool="run_command"
+        "python -c ...", ["python", "-c", script], 10, tool="run_command"
     )
 
     for name in (
@@ -257,3 +257,19 @@ async def test_commands_do_not_inherit_credentials(monkeypatch, tmp_path):
         assert name not in result
     assert "GITHUB_TOKEN" in result
     assert "HARMLESS_SETTING" in result
+
+
+@pytest.mark.asyncio
+async def test_command_output_is_not_capped_by_the_tool(monkeypatch, tmp_path):
+    """Length capping belongs to the tool_output_limits capability, which
+    covers every tool (see tests/test_capabilities.py), not to run_command."""
+    monkeypatch.chdir(tmp_path)
+    result = await tools.run_command(
+        _ctx(approved=True), "python3 -c \"print('x' * 20000)\""
+    )
+    assert "x" * 20000 in result
+    assert "truncated" not in result
+    import inspect
+
+    for fn in (tools.run_command, tools.inspect_command):
+        assert "max_output_chars" not in inspect.signature(fn).parameters
