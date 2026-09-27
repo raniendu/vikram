@@ -82,6 +82,22 @@ depend on, and would hide `examples.md` from the commit-message skill.
 harness lists bundled resources. Then it's a small swap in `build_agent`, and
 the eval hook will score it as an `mcp_hooks_skills` change.
 
+## Decision: commands keep Vikram's argv-only executor (WS3)
+
+The harness `Shell` capability runs every command through `/bin/sh -c`.
+Vikram's `run_command`/`inspect_command` execute an argument list with no
+shell, and the command policy (read-only classification, the deny backstop,
+Tier-2 approval) is written for that. Under a shell, `git status; rm -rf ~`,
+`$(curl …)` or `> file` would become live, and a deny list on raw shell text
+is, in the harness's own words, "best-effort guardrails, not security
+boundaries". So the executor stays.
+
+What was adopted instead: the harness's `LLM_API_KEY_ENV_PATTERNS`. Commands the
+agent runs no longer inherit provider API keys or Vikram's own secrets.
+
+**Revisit when** the harness offers argv execution, or Vikram runs commands
+inside an OS sandbox (container or Modal), where a shell is safe to allow.
+
 ## Versions
 
 `pydantic-ai-harness` is pinned exactly because it is pre-1.0. It requires
@@ -99,7 +115,7 @@ The migration runs as separate work streams, each in its own PR:
 | WS1 | Turn on repair, output limits and compaction in the shipped specs | PR |
 | WS2 | File tools on harness `FileSystem` | PR |
 | WS4 | Skills on harness `Skills` | kept Vikram's loader (see decision above) |
-| WS3 | Shell on harness `Shell`, with the command policy as a guardrail | planned |
+| WS3 | Shell on harness `Shell` | kept argv-only executor; adopted credential stripping (see decision above) |
 | WS5 | Delegation on harness `SubAgents` | planned |
 | WS7 | Prompt-injection defender, guardrails, memory | planned |
 | WS6 | Durable agent runs on DBOS | planned |

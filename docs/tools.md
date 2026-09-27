@@ -61,6 +61,15 @@ served by the Pydantic AI Harness `FileSystem` capability, wrapped by
 - **ripgrep:** `grep` uses the `rg` binary installed with Vikram; if `rg` isn't
   on `PATH`, Vikram appends its own install folder to `PATH`.
 
+Commands run **without a shell**: the command string is split with `shlex` and
+executed as an argument list, so `;`, `&&`, pipes, `$(...)` and globbing are
+inert. The command policy relies on that. Commands also **don't inherit
+credentials**: provider API keys (`ANTHROPIC_*`, `OPENAI_*`, `GEMINI_*`,
+`GOOGLE_*`, `OPENROUTER_*`, `GATEWAY_*`), every `VIKRAM_*` variable, and
+`OLLAMA_API_KEY`, `PARALLEL_API_KEY`, `SARVAM_API_KEY`,
+`DIGITALOCEAN_ACCESS_TOKEN` are removed from their environment.
+`GITHUB_TOKEN`/`GH_TOKEN` are kept for `gh`.
+
 Command policy lives in `spec/shared/command_policy.toml`. Deny rules are a
 hard backstop and cannot be bypassed by approval.
 
