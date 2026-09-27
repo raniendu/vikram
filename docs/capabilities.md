@@ -145,7 +145,5 @@ way it did.
 | WS7 | Safety and memory | Injection scan (report mode), secret redaction; memory opt-in | #44 → #47 | [0009](adr/0009-injection-defence-and-memory-opt-in.md) |
 | WS6 | Durable runs | `VIKRAM_DURABLE_AGENT_RUNS` checkpoints threaded runs in DBOS; on by default since ADR 0012 | #45 → #47 | [0010](adr/0010-durable-agent-runs-opt-in.md), [0012](adr/0012-durable-agent-runs-on-by-default.md) |
 
-Follow-ups, not started:
-
-- Switch `prompt_injection` from `report` to `block` once the logs show few false positives.
-- Add `[capabilities]` fields to the desktop app's spec editor (today it round-trips the table but can't edit it).
+Follow-ups (blocking prompt injections, a `[capabilities]` editor in the
+desktop app) are tracked in [backlog.md](backlog.md).

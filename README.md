@@ -552,6 +552,7 @@ also scores your working tree and fails on a regression. See
 | --- | --- |
 | [docs/current_architecture.md](docs/current_architecture.md) | Detailed module table and request flow documentation |
 | [docs/capabilities.md](docs/capabilities.md) | `[capabilities]` reference and the Harness migration roadmap |
+| [docs/backlog.md](docs/backlog.md) | Agreed work not started yet, and decisions to revisit |
 | [docs/adr/](docs/adr/README.md) | Architecture Decision Records: what was decided, why, and what was given up |
 | [docs/evals.md](docs/evals.md) | Before/after eval suite, change tracking and history |
 | [docs/deployment.md](docs/deployment.md) | Deployment, logging, and tracing details |
