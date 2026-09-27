@@ -33,6 +33,7 @@ from evals.checks import (
     snapshot_workspace,
 )
 from evals.judge import JudgeModel, build_judge_model, judge
+from evals.progress import SuiteProgress
 from vikram.logging import get_logger
 
 logger = get_logger(__name__)
@@ -398,19 +399,29 @@ async def run_suite(
     if judge_model is None and any(c.judge for c in cases):
         judge_model = build_judge_model(settings)
 
+    progress = SuiteProgress.from_env(agent, cases=len(cases), repeats=repeats)
     results: list[dict[str, Any]] = []
-    for case in cases:
+    for number, case in enumerate(cases, start=1):
         if NEEDS_WEB_TAG in case.tags and not _web_available(settings):
             results.append({"id": case.id, "status": "skipped", "reason": "needs_web"})
             logger.info("eval_case_skipped", case_id=case.id, reason="needs_web")
+            progress.skip(case.id, number, "needs PARALLEL_API_KEY for web search")
             continue
         runs: list[RepeatResult] = []
         for index in range(repeats):
             logger.info("eval_case_started", case_id=case.id, repeat=index + 1)
-            runs.append(
-                await run_case_once(
-                    case, spec, settings, judge_model, build_agent=build_agent
-                )
+            progress.run_started(case.id, number, index + 1)
+            run = await run_case_once(
+                case, spec, settings, judge_model, build_agent=build_agent
+            )
+            runs.append(run)
+            progress.run_finished(
+                case.id,
+                number,
+                index + 1,
+                passed=run.passed,
+                judge_score=run.judge_score,
+                error_type=run.error_type,
             )
         aggregated = aggregate_case(case.id, runs)
         results.append(aggregated)
@@ -422,6 +433,7 @@ async def run_suite(
         )
         if details_dir is not None:
             _write_details(details_dir, case, runs)
+    progress.finish()
 
     return {
         "agent": agent,

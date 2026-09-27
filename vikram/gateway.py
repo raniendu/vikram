@@ -372,7 +372,10 @@ class ConversationService:
             spec = load_agent(name, self.settings)
             ensure_surface_allowed(spec, "threaded")
             self._agent_cache[name] = build_agent(
-                spec=spec, settings=self.settings, surface="threaded"
+                spec=spec,
+                settings=self.settings,
+                surface="threaded",
+                durable=self.settings.durable_agent_runs,
             )
         return self._agent_cache[name]
 

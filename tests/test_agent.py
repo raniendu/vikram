@@ -5,6 +5,7 @@ from pydantic_ai import Agent, Tool
 from pydantic_ai.capabilities import HandleDeferredToolCalls
 from pydantic_ai.models.ollama import OllamaModel
 from pydantic_ai.models.test import TestModel
+from pydantic_ai.usage import RunUsage
 
 from tests.conftest import find_log_event
 from vikram.agent import VikramAgent, _approval_handler, build_agent
@@ -13,6 +14,9 @@ from vikram.hooks import HookSet
 from vikram.mcp import MCPServerSpec
 from vikram.settings import VikramModel, VikramSettings, build_model, map_model_settings
 from vikram.spec import AgentSpec, load_spec
+
+# RunContext stand-in for calling the delegation tool function directly.
+_CTX = SimpleNamespace(usage=RunUsage())
 
 VIKRAM_ENV_VARS = (
     "VIKRAM_MODEL",
@@ -672,8 +676,8 @@ async def test_delegate_to_agent_runs_target_agent(monkeypatch, tmp_path):
     calls = []
 
     class FakeAgent:
-        async def run(self, prompt, *, conversation_id):
-            calls.append((prompt, conversation_id))
+        async def run(self, prompt, *, conversation_id, usage):
+            calls.append((prompt, conversation_id, usage))
             return SimpleNamespace(output="implemented")
 
     def fake_build_agent(**kwargs):
@@ -688,9 +692,16 @@ async def test_delegate_to_agent_runs_target_agent(monkeypatch, tmp_path):
         requires_approval=False,
     )
 
-    result = await tool.function("coder", "Implement the requested code change.")
+    parent_usage = RunUsage()
+    result = await tool.function(
+        SimpleNamespace(usage=parent_usage),
+        "coder",
+        "Implement the requested code change.",
+    )
 
     assert result == "Subagent Coder completed.\n\nimplemented"
+    # The subagent shares the parent run's usage (tokens, requests).
+    assert calls[1][2] is parent_usage
     assert calls[0]["spec"].name == "Coder"
     assert calls[0]["settings"] is settings
     assert calls[0]["surface"] == "cli"
@@ -737,7 +748,7 @@ async def test_delegate_to_agent_rejects_path_like_agent_names(monkeypatch, tmp_
         "..",
         str((tmp_path / "evil").resolve()),
     ):
-        result = await tool.function(agent_name, "Do not load this spec.")
+        result = await tool.function(_CTX, agent_name, "Do not load this spec.")
         assert "Unknown agent" in result
         assert "coder" in result
 
@@ -759,7 +770,7 @@ async def test_delegate_to_agent_fails_when_subagent_requests_approval(
             return SimpleNamespace(approvals=approvals, calls=calls)
 
     class FakeAgent:
-        async def run(self, prompt, *, conversation_id):
+        async def run(self, prompt, *, conversation_id, usage):
             raise DelegatedApprovalRequired(
                 "requested approval-gated tool calls: write_file"
             )
@@ -772,7 +783,7 @@ async def test_delegate_to_agent_fails_when_subagent_requests_approval(
         requires_approval=False,
     )
 
-    result = await tool.function("coder", "Edit a file.")
+    result = await tool.function(_CTX, "coder", "Edit a file.")
 
     assert "requested approval-gated tool calls" in result
     assert "write_file" in result
@@ -790,7 +801,7 @@ async def test_delegate_to_agent_rejects_cli_only_agent_on_http_surface(
         requires_approval=False,
     )
 
-    result = await tool.function("coder", "Implement a code change.")
+    result = await tool.function(_CTX, "coder", "Implement a code change.")
 
     assert "Cannot delegate to 'coder'" in result
     assert "local-only" in result
@@ -805,7 +816,7 @@ async def test_delegate_to_agent_refuses_self_delegation(monkeypatch, tmp_path):
         requires_approval=False,
     )
 
-    result = await tool.function("vikram", "Do this yourself.")
+    result = await tool.function(_CTX, "vikram", "Do this yourself.")
 
     assert "cannot delegate to itself" in result
 
@@ -1008,3 +1019,52 @@ async def test_approval_ask_still_receives_the_legacy_string():
 
     assert approvals == {"call-2": False}
     assert prompts[0].startswith('Tool "edit_file" requires human approval. Input: ')
+
+
+async def test_subagent_tokens_count_toward_the_parent_run(monkeypatch, tmp_path):
+    """Delegated work shows up in the parent's usage (and so its spend limits)."""
+    from pydantic_ai.messages import (
+        ModelResponse,
+        TextPart,
+        ToolCallPart,
+        ToolReturnPart,
+    )
+    from pydantic_ai.models.function import FunctionModel
+
+    settings = _local_model_settings(monkeypatch, tmp_path)
+    from vikram.agent import build_agent as real_build
+
+    def child_model(messages, info):
+        return ModelResponse(parts=[TextPart("child " * 50)])
+
+    def build_child(**kwargs):
+        child = real_build(**kwargs)
+        child.raw_agent._model = FunctionModel(child_model)  # noqa: SLF001
+        child.raw_agent.model = FunctionModel(child_model)
+        return child
+
+    monkeypatch.setattr("vikram.agent.build_agent", build_child)
+
+    def parent_model(messages, info):
+        returned = [
+            p for m in messages for p in m.parts if isinstance(p, ToolReturnPart)
+        ]
+        if not returned:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "delegate_to_agent",
+                        {"agent_name": "coder", "prompt": "list files"},
+                    )
+                ]
+            )
+        return ModelResponse(parts=[TextPart("done")])
+
+    spec = load_spec("vikram", settings.spec_root)
+    parent = real_build(spec=spec, settings=settings, surface="cli", approve_all=True)
+    with parent.raw_agent.override(model=FunctionModel(parent_model)):
+        result = await parent.run("delegate please")
+
+    # Parent: 2 requests. Child: 1 request, counted into the same usage.
+    usage = result.usage() if callable(result.usage) else result.usage
+    assert usage.requests == 3
