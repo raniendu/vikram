@@ -2,7 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-09-26
-- **PR:** raniendu/vikram#44 (WS7)
+- **PR:** raniendu/vikram#44 (WS7), landing on `main` via raniendu/vikram#47
 
 ## Context
 

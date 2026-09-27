@@ -36,10 +36,11 @@ A bug fix or a refactor that keeps behaviour needs no ADR.
 | [0004](0004-adopt-pydantic-ai-harness-declaratively.md) | Adopt Pydantic AI Harness through a declarative `[capabilities]` table | Accepted |
 | [0005](0005-file-tools-on-harness-filesystem.md) | Serve file tools from the harness `FileSystem`, behind Vikram's guard | Accepted |
 | [0006](0006-keep-load-skill.md) | Keep Vikram's `load_skill` instead of harness `Skills` | Accepted |
-| [0007](0007-keep-argv-command-executor.md) | Keep the argv-only command executor; strip secrets from its environment | Proposed |
+| [0007](0007-keep-argv-command-executor.md) | Keep the argv-only command executor; strip secrets from its environment | Accepted |
 | [0008](0008-keep-delegate-to-agent.md) | Keep `delegate_to_agent`; forward usage to the parent | Proposed |
 | [0009](0009-injection-defence-and-memory-opt-in.md) | Prompt-injection defence in report mode; secret redaction on; memory opt-in | Proposed |
 | [0010](0010-durable-agent-runs-opt-in.md) | Durable agent runs on DBOS, off by default | Proposed |
 
-**Proposed** ADRs belong to PRs still open in the harness stack
-(raniendu/vikram#42–#45). They become **Accepted** as those PRs merge.
+**Proposed** ADRs (0008–0010) were reviewed in raniendu/vikram#43–#45, which
+merged into stacked branches; they reach `main` with raniendu/vikram#47 and
+become **Accepted** when it merges.

@@ -1,6 +1,6 @@
 # 0007. Keep the argv-only command executor; strip secrets from its environment
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-26
 - **PR:** raniendu/vikram#42 (WS3)
 
