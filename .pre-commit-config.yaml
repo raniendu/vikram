@@ -14,10 +14,11 @@ repos:
       - id: isort
         args: ["--profile", "black"]
 
-  # After each commit, queue before/after evals when the commit changes
-  # prompts, models, tools, skills, MCP, hooks or framework versions. Runs in
-  # the background against local Ollama; never blocks or fails a commit.
-  # See docs/evals.md. Disable with VIKRAM_EVALS_DISABLE=1.
+  # After each commit, queue before/after evals when the commit changes a
+  # model, model settings, model version, framework version or prompt
+  # (VIKRAM_EVALS_TRIGGERS changes the set). Runs in the background against
+  # local Ollama; never blocks or fails a commit. See docs/evals.md.
+  # Disable with VIKRAM_EVALS_DISABLE=1.
   - repo: local
     hooks:
       - id: vikram-evals

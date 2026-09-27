@@ -89,3 +89,71 @@ def find_log_event(events: list[dict[str, Any]], name: str) -> dict[str, Any]:
     if len(matches) > 1:
         raise AssertionError(f"Expected one {name!r} log event, got {len(matches)}.")
     return matches[0]
+
+
+# --- pytest --evals ---------------------------------------------------------
+# Opt-in agent quality gate (evals/gate.py). Plain `pytest` never touches it,
+# so the default suite stays offline and fast, as CI runs it.
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    group = parser.getgroup("vikram evals")
+    group.addoption(
+        "--evals",
+        action="store_true",
+        default=False,
+        help="After the tests pass, score the agents on the working tree with "
+        "the eval suite (needs Ollama) and fail if any case got worse.",
+    )
+    group.addoption(
+        "--eval-agent",
+        action="append",
+        default=None,
+        help="Agent to score (repeatable). Default: every agent with cases.",
+    )
+    group.addoption(
+        "--eval-repeats",
+        type=int,
+        default=None,
+        help="Repeats per case (default: VIKRAM_EVALS_REPEATS or 3).",
+    )
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    config = session.config
+    if not config.getoption("--evals"):
+        return
+    reporter = config.pluginmanager.get_plugin("terminalreporter")
+
+    def say(line: str) -> None:
+        if reporter is not None:
+            reporter.write_line(line)
+
+    if exitstatus != 0:
+        say("pytest --evals: tests failed, so the evals were skipped.")
+        return
+
+    import os
+    from contextlib import nullcontext
+
+    from evals.gate import run_gate
+    from vikram.logging import configure_logging
+
+    configure_logging(
+        os.environ.get("VIKRAM_EVALS_LOG_LEVEL", "WARNING"), stream=sys.stderr
+    )
+    say("")
+    capture = config.pluginmanager.get_plugin("capturemanager")
+    # Show the progress lines live instead of buffering them.
+    with capture.global_and_fixture_disabled() if capture else nullcontext():
+        outcome = run_gate(
+            config.rootpath,
+            agents=config.getoption("--eval-agent"),
+            repeats=config.getoption("--eval-repeats"),
+        )
+    say("")
+    for line in outcome.report().splitlines():
+        say(line)
+    if outcome.failed:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED

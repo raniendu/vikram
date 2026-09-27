@@ -59,7 +59,7 @@ def _cmd_hook(args: argparse.Namespace) -> int:
 def _cmd_detect(args: argparse.Namespace) -> int:
     from evals import gitutil
     from evals.cases import list_agents
-    from evals.changes import detect_changes
+    from evals.changes import detect_changes, trigger_kinds
 
     repo = _repo()
     base = gitutil.rev_parse(repo, args.base)
@@ -82,7 +82,20 @@ def _cmd_detect(args: argparse.Namespace) -> int:
             sys.stdout.write(f"  file  {path}\n")
         for key, value in described["details"].items():
             sys.stdout.write(f"  {key}: {json.dumps(value)}\n")
-    sys.stdout.write(f"the hook would queue: {', '.join(agents)}\n")
+    try:
+        triggers = trigger_kinds()
+    except ValueError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 1
+    queued = changeset.agents(triggers)
+    sys.stdout.write(f"triggers: {', '.join(sorted(triggers))}\n")
+    if queued:
+        sys.stdout.write(f"the hook would queue: {', '.join(queued)}\n")
+    else:
+        sys.stdout.write(
+            "none of these kinds trigger a run; the hook would not queue one "
+            "(run by hand with `enqueue` or `pytest --evals`)\n"
+        )
     return 0
 
 

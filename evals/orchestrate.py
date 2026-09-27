@@ -176,8 +176,19 @@ def hook(repo: Path) -> Job | None:
         return None
     agents = list_agents(repo / "evals")
     changeset = changes.detect_changes(repo, parent, head, agents)
-    triggered = changeset.agents()
+    try:
+        triggers = changes.trigger_kinds()
+    except ValueError:
+        logger.exception("eval_triggers_invalid", env=changes.TRIGGERS_ENV)
+        return None
+    triggered = changeset.agents(triggers)
     if not triggered:
+        if changeset.agents():
+            logger.info(
+                "eval_job_not_triggered",
+                sha=head[:7],
+                change_kinds=sorted({k for ks in changeset.kinds.values() for k in ks}),
+            )
         return None
     job = enqueue(
         repo,

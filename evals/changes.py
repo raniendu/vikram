@@ -36,6 +36,33 @@ ALL_KINDS = (
     EVAL_SUITE,
 )
 
+# Kinds that start a run from the post-commit hook. Every kind is still
+# detected and recorded in a run's "what changed"; this only decides whether a
+# commit is worth a (slow) run on its own. VIKRAM_EVALS_TRIGGERS overrides it:
+# "all", or a comma-separated list of kinds.
+TRIGGERS_ENV = "VIKRAM_EVALS_TRIGGERS"
+DEFAULT_TRIGGERS = (MODEL, MODEL_SETTINGS, MODEL_VERSION, FRAMEWORK, PROMPT)
+
+
+def trigger_kinds(value: str | None = None) -> frozenset[str]:
+    """The change kinds that make the hook queue a run."""
+    import os
+
+    raw = os.environ.get(TRIGGERS_ENV) if value is None else value
+    if not raw or not raw.strip():
+        return frozenset(DEFAULT_TRIGGERS)
+    if raw.strip().lower() == "all":
+        return frozenset(ALL_KINDS)
+    kinds = {part.strip() for part in raw.split(",") if part.strip()}
+    unknown = kinds - set(ALL_KINDS)
+    if unknown:
+        raise ValueError(
+            f"Unknown eval trigger kind(s) in {TRIGGERS_ENV}: "
+            f"{', '.join(sorted(unknown))}. Known: {', '.join(ALL_KINDS)}."
+        )
+    return frozenset(kinds)
+
+
 ALL = "*"  # every evaluated agent
 
 # (glob, kind, agent). ``{agent}`` takes the second path segment of spec/.
@@ -85,8 +112,13 @@ class ChangeSet:
     def detail(self, agent: str, key: str, value: Any) -> None:
         self.details.setdefault(agent, {})[key] = value
 
-    def agents(self) -> list[str]:
-        return sorted(agent for agent, kinds in self.kinds.items() if kinds)
+    def agents(self, triggers: frozenset[str] | None = None) -> list[str]:
+        """Agents with changes; only changes of ``triggers`` kinds if given."""
+        return sorted(
+            agent
+            for agent, kinds in self.kinds.items()
+            if kinds and (triggers is None or kinds & triggers)
+        )
 
     def for_agent(self, agent: str) -> dict[str, Any]:
         return {
