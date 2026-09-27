@@ -74,6 +74,8 @@ class RepeatResult:
     error_type: str | None = None
     # The model server was busy or erroring (see TRANSIENT_STATUS_CODES).
     transient_status: int | None = None
+    # Checks are done; the judge runs later, batched (see run_suite).
+    awaiting_judge: bool = False
     # Local-only detail; never written to committed history.
     output: str = ""
     trace: list[dict[str, str]] = field(default_factory=list)
@@ -279,13 +281,19 @@ async def run_case_with_retries(
     build_agent: Any = None,
     progress: Any = None,
     sleep: Any = asyncio.sleep,
+    defer_judge: bool = False,
 ) -> RepeatResult:
     """One repeat, retried from a fresh workspace while the model is busy."""
     retries = _model_retries()
     attempt = 0
     while True:
         run = await run_case_once(
-            case, spec, settings, judge_model, build_agent=build_agent
+            case,
+            spec,
+            settings,
+            judge_model,
+            build_agent=build_agent,
+            defer_judge=defer_judge,
         )
         if run.transient_status is None or attempt >= retries:
             return run
@@ -306,7 +314,10 @@ async def run_case_once(
     judge_model: JudgeModel | None,
     *,
     build_agent: Any = None,
+    defer_judge: bool = False,
 ) -> RepeatResult:
+    """Run ``case`` once. With ``defer_judge`` a judged case stops after its
+    checks (``awaiting_judge``) and :func:`judge_repeat` finishes it later."""
     if build_agent is None:
         from vikram.agent import build_agent
 
@@ -358,34 +369,76 @@ async def run_case_once(
 
             repeat.checks = [run_check(check, obs) for check in case.checks]
 
-        passed = all(check.passed for check in repeat.checks)
+        repeat.passed = all(check.passed for check in repeat.checks)
         if case.judge is not None:
-            if judge_model is None:
+            if judge_model is None and not defer_judge:
                 raise RuntimeError(f"Case {case.id} needs a judge model.")
-            try:
-                verdict = await judge(
-                    prompt=case.prompt,
-                    output=obs.output,
-                    rubric=case.judge.rubric,
-                    threshold=case.judge.threshold,
-                    model=judge_model,
-                )
-            except Exception as exc:
-                repeat.error_type = f"judge:{type(exc).__name__}"
-                repeat.transient_status = _transient_status(exc)
-                if repeat.transient_status is not None:
-                    logger.warning(
-                        "eval_judge_model_busy",
-                        case_id=case.id,
-                        status_code=repeat.transient_status,
-                    )
-                else:
-                    logger.exception("eval_judge_failed", case_id=case.id)
-                return repeat
-            repeat.judge_score = verdict.score
-            passed = passed and verdict.passed
-        repeat.passed = passed
+            repeat.awaiting_judge = True
+            if not defer_judge:
+                await judge_repeat(case, repeat, judge_model)
     return repeat
+
+
+async def judge_repeat(
+    case: CaseSpec, repeat: RepeatResult, judge_model: JudgeModel | None
+) -> None:
+    """Grade a repeat that finished its checks; updates it in place."""
+    if judge_model is None:
+        raise RuntimeError(f"Case {case.id} needs a judge model.")
+    try:
+        verdict = await judge(
+            prompt=case.prompt,
+            output=repeat.output,
+            rubric=case.judge.rubric,
+            threshold=case.judge.threshold,
+            model=judge_model,
+        )
+    except Exception as exc:
+        repeat.error_type = f"judge:{type(exc).__name__}"
+        repeat.transient_status = _transient_status(exc)
+        repeat.passed = False
+        if repeat.transient_status is not None:
+            logger.warning(
+                "eval_judge_model_busy",
+                case_id=case.id,
+                status_code=repeat.transient_status,
+            )
+        else:
+            logger.exception("eval_judge_failed", case_id=case.id)
+        return
+    finally:
+        repeat.awaiting_judge = False
+    repeat.judge_score = verdict.score
+    repeat.passed = repeat.passed and verdict.passed
+
+
+async def judge_with_retries(
+    case: CaseSpec,
+    repeat: RepeatResult,
+    judge_model: JudgeModel | None,
+    *,
+    progress: Any = None,
+    sleep: Any = asyncio.sleep,
+) -> None:
+    """:func:`judge_repeat`, retried while the model server is busy."""
+    checks_passed = repeat.passed
+    retries = _model_retries()
+    for attempt in range(retries + 1):
+        repeat.passed, repeat.error_type, repeat.transient_status = (
+            checks_passed,
+            None,
+            None,
+        )
+        await judge_repeat(case, repeat, judge_model)
+        if repeat.transient_status is None or attempt >= retries:
+            return
+        delay = RETRY_DELAYS_SECONDS[min(attempt, len(RETRY_DELAYS_SECONDS) - 1)]
+        if progress is not None:
+            progress.note(
+                f"judge model busy (HTTP {repeat.transient_status}); retrying "
+                f"{case.id} in {delay:.0f}s (retry {attempt + 1}/{retries})"
+            )
+        await sleep(delay)
 
 
 # --- aggregation ----------------------------------------------------------
@@ -487,10 +540,14 @@ async def run_suite(
         judge_model = build_judge_model(settings)
 
     progress = SuiteProgress.from_env(agent, cases=len(cases), repeats=repeats)
-    results: list[dict[str, Any]] = []
+    # Two phases, so a machine that holds one model at a time loads each model
+    # once per suite: every agent run first (the agent's model), then every
+    # judge call together (the judge's model). Judging inline swapped models
+    # twice per judged repeat.
+    ran: list[tuple[CaseSpec, list[RepeatResult]] | dict[str, Any]] = []
     for number, case in enumerate(cases, start=1):
         if NEEDS_WEB_TAG in case.tags and not _web_available(settings):
-            results.append({"id": case.id, "status": "skipped", "reason": "needs_web"})
+            ran.append({"id": case.id, "status": "skipped", "reason": "needs_web"})
             logger.info("eval_case_skipped", case_id=case.id, reason="needs_web")
             progress.skip(case.id, number, "needs PARALLEL_API_KEY for web search")
             continue
@@ -505,6 +562,7 @@ async def run_suite(
                 judge_model,
                 build_agent=build_agent,
                 progress=progress,
+                defer_judge=True,
             )
             runs.append(run)
             progress.run_finished(
@@ -514,7 +572,32 @@ async def run_suite(
                 passed=run.passed,
                 judge_score=run.judge_score,
                 error_type=run.error_type,
+                awaiting_judge=run.awaiting_judge,
             )
+        ran.append((case, runs))
+
+    pending = [
+        (case, run)
+        for item in ran
+        if isinstance(item, tuple)
+        for case, runs in [item]
+        for run in runs
+        if run.awaiting_judge
+    ]
+    if pending:
+        progress.judging_started(
+            len(pending), judge_model.label if judge_model else "?"
+        )
+        for index, (case, run) in enumerate(pending, start=1):
+            await judge_with_retries(case, run, judge_model, progress=progress)
+            progress.judged(case.id, index, len(pending), run)
+
+    results: list[dict[str, Any]] = []
+    for item in ran:
+        if isinstance(item, dict):
+            results.append(item)
+            continue
+        case, runs = item
         aggregated = aggregate_case(case.id, runs)
         results.append(aggregated)
         logger.info(

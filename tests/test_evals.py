@@ -1256,3 +1256,74 @@ def test_foreground_run_waits_for_the_background_worker(eval_repo):
 
 async def _async(value):
     return value
+
+
+# --- one model load per phase ------------------------------------------------
+
+
+async def test_all_agent_runs_happen_before_any_judging(settings, monkeypatch, capsys):
+    """A machine that holds one model at a time must not swap per repeat."""
+    monkeypatch.setattr(eval_runner, "ollama_digest", lambda *a: None)
+    from vikram.agent import build_agent as real_build
+
+    calls: list[str] = []
+
+    def answer(messages, info):
+        calls.append("agent")
+        return ModelResponse(parts=[TextPart("Processes vs threads.")])
+
+    async def fake_judge(**kwargs):
+        calls.append("judge")
+        from evals.judge import Verdict
+
+        return Verdict(score=0.9, passed=True)
+
+    monkeypatch.setattr(eval_runner, "judge", fake_judge)
+    result = await eval_runner.run_suite(
+        "vikram",
+        repeats=2,
+        case_filter=[
+            "vikram.explain_process_vs_thread",
+            "vikram.decline_meeting_email",
+        ],
+        settings=settings,
+        judge_model=JudgeModel(raw=None, provider="test", model="judge"),
+        build_agent=lambda sp, st, **kw: _Overridden(
+            real_build(sp, st, **kw), FunctionModel(answer)
+        ),
+    )
+    assert calls == ["agent"] * 4 + ["judge"] * 4
+    by_id = {c["id"]: c for c in result["cases"]}
+    assert by_id["vikram.explain_process_vs_thread"]["judge_mean"] == 0.9
+    err = capsys.readouterr().err
+    assert "judged later" in err
+    assert "judging 4 answer(s) with test:judge" in err
+
+
+async def test_busy_judge_is_retried_without_rerunning_the_agent(monkeypatch):
+    outcomes = [503, 503, None]
+
+    async def flaky_judge(**kwargs):
+        from pydantic_ai.exceptions import ModelHTTPError
+
+        from evals.judge import Verdict
+
+        status = outcomes.pop(0)
+        if status:
+            raise ModelHTTPError(status, "judge")
+        return Verdict(score=0.8, passed=True)
+
+    monkeypatch.setattr(eval_runner, "judge", flaky_judge)
+    case = SimpleNamespace(
+        id="c", prompt="p", judge=SimpleNamespace(rubric="r", threshold=0.7)
+    )
+    run = eval_runner.RepeatResult(passed=True, output="answer", awaiting_judge=True)
+
+    async def sleep(seconds):
+        pass
+
+    await eval_runner.judge_with_retries(
+        case, run, JudgeModel(raw=None, provider="t", model="j"), sleep=sleep
+    )
+    assert run.passed and run.judge_score == 0.8
+    assert run.transient_status is None and not run.awaiting_judge

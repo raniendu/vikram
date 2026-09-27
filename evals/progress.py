@@ -171,12 +171,17 @@ class SuiteProgress:
         passed: bool,
         judge_score: float | None,
         error_type: str | None,
+        awaiting_judge: bool = False,
     ) -> None:
         took = self._clock() - self._run_began
         self._run_seconds += took
         self.done += 1
-        self.passed += passed
-        verdict = "passed" if passed else "failed"
+        if awaiting_judge:
+            # Counted as passed once the judge agrees (see judged()).
+            verdict = "checks " + ("passed" if passed else "failed") + ", judged later"
+        else:
+            self.passed += passed
+            verdict = "passed" if passed else "failed"
         extras = [format_duration(took)]
         if judge_score is not None:
             extras.append(f"judge {judge_score:.2f}")
@@ -188,6 +193,28 @@ class SuiteProgress:
             f"{self._counts()}"
         )
         self._save(case_id=case_id, case_index=case_index, repeat=repeat)
+
+    def judging_started(self, answers: int, judge_label: str) -> None:
+        self.judge_total = answers
+        self.judged_count = 0
+        say(
+            f"{self.agent}: judging {answers} answer(s) with {judge_label}, "
+            "all together so the judge model loads once"
+        )
+        self._save(case_id=None, case_index=self.cases, repeat=self.repeats)
+
+    def judged(self, case_id: str, index: int, total: int, run: Any) -> None:
+        self.judged_count = index
+        self.passed += bool(run.passed)
+        extras = []
+        if run.judge_score is not None:
+            extras.append(f"judge {run.judge_score:.2f}")
+        if run.error_type:
+            extras.append(f"error {run.error_type}")
+        verdict = "passed" if run.passed else "failed"
+        detail = f" ({', '.join(extras)})" if extras else ""
+        say(f"judged {index}/{total} {case_id}: {verdict}{detail}")
+        self._save(case_id=case_id, case_index=self.cases, repeat=self.repeats)
 
     def finish(self) -> None:
         rate = f"{self.passed / self.done:.0%}" if self.done else "n/a"
@@ -222,6 +249,11 @@ class SuiteProgress:
             "runs_done": self.done,
             "runs_passed": self.passed,
             "cases_skipped": self.skipped,
+            "judging": (
+                {"done": self.judged_count, "total": self.judge_total}
+                if getattr(self, "judge_total", 0)
+                else None
+            ),
             "eta_seconds": None if eta is None else round(eta),
             "updated_at": _now_iso(),
         }
@@ -284,5 +316,8 @@ def describe(path: Path, *, now: datetime | None = None) -> list[str]:
             runs += f", about {format_duration(suite['eta_seconds'])} left"
             if step["index"] < step["total"]:
                 runs += " in this step"
+        judging = suite.get("judging")
+        if judging:
+            where = f"judging answers {judging['done']}/{judging['total']}"
         lines += [f"  {where}", f"  {runs}"]
     return lines

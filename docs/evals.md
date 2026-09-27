@@ -196,6 +196,23 @@ A case is marked **worse** or **better** only when its pass rate moves by at
 least 0.34 (one flipped repeat out of three is treated as noise) or its judge
 score moves by at least 0.15.
 
+**Each model loads once per suite.** A suite runs in two phases: every agent
+run first (on the agent's model), then every judge call together (on the judge
+model). On a machine that can hold one model at a time, a `coder` suite costs
+two model loads, not two per judged repeat:
+
+```
+before: qwen → gemma (judge case 6) → qwen → … → gemma (judge) → qwen …
+after:  qwen (all 12 cases × repeats) → gemma (all judge calls)
+```
+
+`pytest --evals` scores agents in name order (`coder`, then `vikram`), so the
+judge model is already loaded when `vikram`, which uses it too, starts. A case
+that delegates to another agent (`vikram.delegates_coding_task_locally`) still
+loads that agent's model for its own run. To avoid swaps entirely, judge with
+the agent's own model: `VIKRAM_EVAL_JUDGE_MODEL=<model>` (scores then aren't
+comparable with runs judged by another model).
+
 **A busy model server isn't a failed case.** When the model answers "busy" or a
 server error (HTTP 429/500/502/503/504, e.g. Ollama's 503 "maximum pending
 requests exceeded"), the repeat is retried from a fresh workspace after 15s,
