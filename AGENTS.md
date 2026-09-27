@@ -6,7 +6,10 @@
 shared policy/context lives under `spec/shared/`. Tests live in `tests/`. Runtime
 state belongs under `.vikram/` and must not be committed. Agent quality evals
 live in `evals/` (cases, fixtures, runner) and their metrics-only results in
-`evals/history/`, which the post-commit hook commits.
+`evals/history/`, which the post-commit hook commits. Architecture Decision
+Records live in `docs/adr/`: when a change adopts, replaces or rejects a
+framework, or moves a security boundary, add an ADR in the same PR (see
+`docs/adr/README.md`).
 
 Key modules:
 - `agent.py`: builds Pydantic AI agents from specs, tools, MCP servers, skills, and hooks.
