@@ -141,7 +141,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         model=model,
         db_path=str(settings.vikram_db_path),
     )
-    launch_dbos(settings)
+    await launch_dbos(settings)
     _get_agent(settings.default_agent)
     try:
         yield

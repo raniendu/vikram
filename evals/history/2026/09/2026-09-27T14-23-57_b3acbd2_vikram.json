@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "run_id": "2026-09-27T14-23-57_b3acbd2_vikram",
+  "timestamp": "2026-09-27T14:23:57.863556+00:00",
+  "agent": "vikram",
+  "trigger": "manual",
+  "commit": {
+    "sha": "b3acbd24f9de93a4ebbcea9f6bea4a6195256582",
+    "parent": "01339626102e522c5c8236b75876d3e6e27cfb06",
+    "subject": "evals: coder results for 0133962",
+    "committed_at": "2026-09-27T07:21:36-07:00"
+  },
+  "change": {
+    "kinds": [],
+    "files": [],
+    "details": {},
+    "base": "01339626102e522c5c8236b75876d3e6e27cfb06"
+  },
+  "suite_hash": "04aaff21fd353af4",
+  "repeats": 1,
+  "env": {
+    "provider": "ollama",
+    "model": "gemma4:26b-a4b-it-qat",
+    "model_digest": "2dd70431afed94dd3688d790443768c1487ed086b57147ff083851116ae4c4e4",
+    "judge_model": "ollama:gemma4:26b-a4b-it-qat",
+    "versions": {
+      "pydantic-ai-slim": "2.51.0",
+      "pydantic-ai-harness": "0.35.0",
+      "pydantic-evals": "2.51.0"
+    }
+  },
+  "baseline_run_id": "2026-09-27T14-21-37_0133962_vikram",
+  "summary": {
+    "cases": 7,
+    "skipped": 0,
+    "pass_rate": 0.7143,
+    "judge_mean": 0.5,
+    "tokens_mean": 4721.0,
+    "latency_p50_ms": 10548.6,
+    "tool_calls_mean": 0.4286,
+    "errors": 0
+  },
+  "delta": {
+    "summary": {
+      "pass_rate": -0.1428,
+      "judge_mean": -0.5,
+      "tokens_mean_pct": 22.7,
+      "latency_p50_pct": -26.4,
+      "tool_calls_mean": 0.1429,
+      "worse_cases": [
+        "vikram.decline_meeting_email"
+      ],
+      "better_cases": []
+    },
+    "cases": {
+      "vikram.explain_process_vs_thread": {
+        "pass_rate": 0.0,
+        "judge_mean": 0.0,
+        "tokens_mean_pct": -29.1,
+        "status": "same"
+      },
+      "vikram.arithmetic_word_problem": {
+        "pass_rate": 0.0,
+        "judge_mean": null,
+        "tokens_mean_pct": 0.9,
+        "status": "same"
+      },
+      "vikram.decline_meeting_email": {
+        "pass_rate": -1.0,
+        "judge_mean": -1.0,
+        "tokens_mean_pct": 15.3,
+        "status": "worse"
+      },
+      "vikram.knows_today": {
+        "pass_rate": 0.0,
+        "judge_mean": null,
+        "tokens_mean_pct": -0.6,
+        "status": "same"
+      },
+      "vikram.delegates_coding_task_locally": {
+        "pass_rate": 0.0,
+        "judge_mean": null,
+        "tokens_mean_pct": 67.4,
+        "status": "same"
+      },
+      "vikram.coder_unreachable_from_network": {
+        "pass_rate": 0.0,
+        "judge_mean": null,
+        "tokens_mean_pct": -9.9,
+        "status": "same"
+      },
+      "vikram.research_uses_skill": {
+        "pass_rate": 0.0,
+        "judge_mean": null,
+        "tokens_mean_pct": 21.0,
+        "status": "same"
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "vikram.explain_process_vs_thread",
+      "status": "ok",
+      "repeats": 1,
+      "pass_rate": 1.0,
+      "judge_mean": 1.0,
+      "tokens_mean": 2137.0,
+      "latency_p50_ms": 10548.6,
+      "tool_calls_mean": 0.0,
+      "requests_mean": 1.0,
+      "failed_checks": {},
+      "errors": 0,
+      "error_types": []
+    },
+    {
+      "id": "vikram.arithmetic_word_problem",
+      "status": "ok",
+      "repeats": 1,
+      "pass_rate": 1.0,
+      "judge_mean": null,
+      "tokens_mean": 1749.0,
+      "latency_p50_ms": 3567.3,
+      "tool_calls_mean": 0.0,
+      "requests_mean": 1.0,
+      "failed_checks": {},
+      "errors": 0,
+      "error_types": []
+    },
+    {
+      "id": "vikram.decline_meeting_email",
+      "status": "ok",
+      "repeats": 1,
+      "pass_rate": 0.0,
+      "judge_mean": 0.0,
+      "tokens_mean": 2467.0,
+      "latency_p50_ms": 15239.1,
+      "tool_calls_mean": 0.0,
+      "requests_mean": 1.0,
+      "failed_checks": {},
+      "errors": 0,
+      "error_types": []
+    },
+    {
+      "id": "vikram.knows_today",
+      "status": "ok",
+      "repeats": 1,
+      "pass_rate": 1.0,
+      "judge_mean": null,
+      "tokens_mean": 1724.0,
+      "latency_p50_ms": 3332.6,
+      "tool_calls_mean": 0.0,
+      "requests_mean": 1.0,
+      "failed_checks": {},
+      "errors": 0,
+      "error_types": []
+    },
+    {
+      "id": "vikram.delegates_coding_task_locally",
+      "status": "ok",
+      "repeats": 1,
+      "pass_rate": 1.0,
+      "judge_mean": null,
+      "tokens_mean": 12762.0,
+      "latency_p50_ms": 29070.3,
+      "tool_calls_mean": 2.0,
+      "requests_mean": 5.0,
+      "failed_checks": {},
+      "errors": 0,
+      "error_types": []
+    },
+    {
+      "id": "vikram.coder_unreachable_from_network",
+      "status": "ok",
+      "repeats": 1,
+      "pass_rate": 1.0,
+      "judge_mean": null,
+      "tokens_mean": 2121.0,
+      "latency_p50_ms": 10114.6,
+      "tool_calls_mean": 0.0,
+      "requests_mean": 1.0,
+      "failed_checks": {},
+      "errors": 0,
+      "error_types": []
+    },
+    {
+      "id": "vikram.research_uses_skill",
+      "status": "ok",
+      "repeats": 1,
+      "pass_rate": 0.0,
+      "judge_mean": null,
+      "tokens_mean": 10087.0,
+      "latency_p50_ms": 33729.8,
+      "tool_calls_mean": 1.0,
+      "requests_mean": 2.0,
+      "failed_checks": {
+        "tool_called:load_skill": 1
+      },
+      "errors": 0,
+      "error_types": []
+    }
+  ]
+}

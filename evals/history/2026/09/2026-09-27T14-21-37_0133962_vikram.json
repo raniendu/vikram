@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "run_id": "2026-09-27T14-21-37_0133962_vikram",
+  "timestamp": "2026-09-27T14:21:37.553162+00:00",
+  "agent": "vikram",
+  "trigger": "baseline",
+  "commit": {
+    "sha": "01339626102e522c5c8236b75876d3e6e27cfb06",
+    "parent": "867b73e8f4a8880821e40e59e701dc178318402f",
+    "subject": "evals: reset history",
+    "committed_at": "2026-09-27T07:14:54-07:00"
+  },
+  "change": {
+    "kinds": [],
+    "files": [],
+    "details": {}
+  },
+  "suite_hash": "04aaff21fd353af4",
+  "repeats": 1,
+  "env": {
+    "provider": "ollama",
+    "model": "gemma4:26b-a4b-it-qat",
+    "model_digest": "2dd70431afed94dd3688d790443768c1487ed086b57147ff083851116ae4c4e4",
+    "judge_model": "ollama:gemma4:26b-a4b-it-qat",
+    "versions": {
+      "pydantic-ai-slim": "2.51.0",
+      "pydantic-ai-harness": "0.35.0",
+      "pydantic-evals": "2.51.0"
+    }
+  },
+  "baseline_run_id": null,
+  "summary": {
+    "cases": 7,
+    "skipped": 0,
+    "pass_rate": 0.8571,
+    "judge_mean": 1.0,
+    "tokens_mean": 3847.5714,
+    "latency_p50_ms": 14325.7,
+    "tool_calls_mean": 0.2857,
+    "errors": 0
+  },
+  "delta": null,
+  "cases": [
+    {
+      "id": "vikram.explain_process_vs_thread",
+      "status": "ok",
+      "repeats": 1,
+      "pass_rate": 1.0,
+      "judge_mean": 1.0,
+      "tokens_mean": 3014.0,
+      "latency_p50_ms": 32843.2,
+      "tool_calls_mean": 0.0,
+      "requests_mean": 1.0,
+      "failed_checks": {},
+      "errors": 0,
+      "error_types": []
+    },
+    {
+      "id": "vikram.arithmetic_word_problem",
+      "status": "ok",
+      "repeats": 1,
+      "pass_rate": 1.0,
+      "judge_mean": null,
+      "tokens_mean": 1734.0,
+      "latency_p50_ms": 3334.2,
+      "tool_calls_mean": 0.0,
+      "requests_mean": 1.0,
+      "failed_checks": {},
+      "errors": 0,
+      "error_types": []
+    },
+    {
+      "id": "vikram.decline_meeting_email",
+      "status": "ok",
+      "repeats": 1,
+      "pass_rate": 1.0,
+      "judge_mean": 1.0,
+      "tokens_mean": 2139.0,
+      "latency_p50_ms": 9479.6,
+      "tool_calls_mean": 0.0,
+      "requests_mean": 1.0,
+      "failed_checks": {},
+      "errors": 0,
+      "error_types": []
+    },
+    {
+      "id": "vikram.knows_today",
+      "status": "ok",
+      "repeats": 1,
+      "pass_rate": 1.0,
+      "judge_mean": null,
+      "tokens_mean": 1734.0,
+      "latency_p50_ms": 3085.8,
+      "tool_calls_mean": 0.0,
+      "requests_mean": 1.0,
+      "failed_checks": {},
+      "errors": 0,
+      "error_types": []
+    },
+    {
+      "id": "vikram.delegates_coding_task_locally",
+      "status": "ok",
+      "repeats": 1,
+      "pass_rate": 1.0,
+      "judge_mean": null,
+      "tokens_mean": 7623.0,
+      "latency_p50_ms": 25853.3,
+      "tool_calls_mean": 1.0,
+      "requests_mean": 3.0,
+      "failed_checks": {},
+      "errors": 0,
+      "error_types": []
+    },
+    {
+      "id": "vikram.coder_unreachable_from_network",
+      "status": "ok",
+      "repeats": 1,
+      "pass_rate": 1.0,
+      "judge_mean": null,
+      "tokens_mean": 2353.0,
+      "latency_p50_ms": 14325.7,
+      "tool_calls_mean": 0.0,
+      "requests_mean": 1.0,
+      "failed_checks": {},
+      "errors": 0,
+      "error_types": []
+    },
+    {
+      "id": "vikram.research_uses_skill",
+      "status": "ok",
+      "repeats": 1,
+      "pass_rate": 0.0,
+      "judge_mean": null,
+      "tokens_mean": 8336.0,
+      "latency_p50_ms": 21874.4,
+      "tool_calls_mean": 1.0,
+      "requests_mean": 2.0,
+      "failed_checks": {
+        "tool_called:load_skill": 1
+      },
+      "errors": 0,
+      "error_types": []
+    }
+  ]
+}

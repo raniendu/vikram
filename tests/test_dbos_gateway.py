@@ -3,11 +3,14 @@ from types import SimpleNamespace
 
 import pytest
 
+from vikram import dbos_gateway
 from vikram.dbos_gateway import (
     TELEGRAM_FAILURE_REPLY,
     _send_processing_failure_reply,
     deliver_reply_event,
+    launch_dbos,
     process_inbound_message_event,
+    shutdown_dbos,
 )
 from vikram.gateway import (
     ConversationReply,
@@ -16,6 +19,39 @@ from vikram.gateway import (
     make_message_received_event,
     make_reply_requested_event,
 )
+from vikram.settings import VikramSettings
+
+
+@pytest.mark.asyncio
+async def test_launch_dbos_registers_queues(tmp_path):
+    # Real DBOS on a throwaway SQLite file: DBOS 3 refuses module-level Queue()
+    # and only registers queues against a launched system database.
+    settings = VikramSettings(
+        dbos_system_database_url=f"sqlite:///{tmp_path / 'dbos.sqlite3'}"
+    )
+    await launch_dbos(settings)
+    try:
+        inbound = dbos_gateway.INBOUND_QUEUE
+        outbound = dbos_gateway.OUTBOUND_QUEUE
+        assert inbound is not None and inbound.name == "vikram-inbound"
+        assert outbound is not None and outbound.name == "vikram-outbound"
+    finally:
+        shutdown_dbos()
+    assert dbos_gateway.INBOUND_QUEUE is None
+    assert dbos_gateway.OUTBOUND_QUEUE is None
+
+
+@pytest.mark.asyncio
+async def test_enqueue_before_launch_fails_clearly():
+    message = InboundMessage(
+        interface="http",
+        external_thread_id="t",
+        prompt="hi",
+        agent_name=None,
+        default_agent="vikram",
+    )
+    with pytest.raises(RuntimeError, match="before launch_dbos"):
+        await dbos_gateway.EventDispatcher().enqueue_message(message)
 
 
 @pytest.mark.asyncio
