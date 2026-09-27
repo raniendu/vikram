@@ -8,12 +8,103 @@ from pathlib import Path
 from typing import Any
 
 from evals import history
+from evals.cases import JudgeSpec
 
 # Categorical slots 1 and 2 of the validated reference palette (light, dark).
 _SERIES = {
     "pass_rate": ("Pass rate", "#2a78d6", "#3987e5"),
     "judge_mean": ("Judge score", "#eb6834", "#d95926"),
 }
+
+_PASS_NOISE_PT = round(history.PASS_RATE_NOISE * 100)
+_JUDGE_THRESHOLD = JudgeSpec.model_fields["threshold"].default
+
+# Column tooltips: one short line each; the glossary says more.
+_TIPS = {
+    "pass": "How often the agent passed. Grey number: change since the last run",
+    "judge": "Grade from 0 to 1 given by another AI. Grey number: change since "
+    "the last run",
+    "tokens": "How much more or less text the model read and wrote than last run",
+    "tokens_case": "Text the model read and wrote for this test, on average",
+    "change": "What changed in the code since the last run",
+    "model": "The AI model that was tested",
+    "worse": "Tests that clearly did worse than last run",
+    "status": "Did this test do better or worse than last run?",
+    "failed": "Checks that failed. ×2 means it failed in 2 of the tries",
+}
+
+# Term, meaning, example (trusted HTML: static text and numbers from constants).
+_GLOSSARY = [
+    (
+        "Run",
+        "One full test of an agent. Every test is tried 3 times, because a "
+        "local model can answer differently each time.",
+        "The coder agent has 12 tests, so one run is 12 × 3 = 36 answers.",
+    ),
+    (
+        "Last run",
+        "Each run is compared with the one before it. The small grey numbers "
+        "show that difference. The first run has nothing to compare with.",
+        "<code>92% +8pt</code>: 92% now, 84% last run.",
+    ),
+    (
+        "Pass",
+        "How often the agent got it right. 100% means every try passed. "
+        "Higher is better.",
+        "A test that passed 2 of its 3 tries scores 67%. The run's Pass is "
+        "the average over all its tests.",
+    ),
+    (
+        "Judge",
+        "Some answers can't be checked by a simple rule, so another AI grades "
+        f"them from 0 (bad) to 1 (great). Below {_JUDGE_THRESHOLD} counts as a "
+        "fail. Higher is better.",
+        "Asked to decline a meeting politely, an email that is polite but "
+        "forgets to offer another time might get 0.6, which is a fail.",
+    ),
+    (
+        "Tokens",
+        "How much text the model read and wrote. Fewer is cheaper and faster, "
+        "but not always better: if Pass also dropped, the agent may have "
+        "given up early.",
+        "<code>+23%</code>: the model used about a quarter more text than " "last run.",
+    ),
+    (
+        "Failed checks",
+        "Simple yes/no checks, like <em>did it call the right tool?</em> or "
+        "<em>did it edit the right file?</em>",
+        "<code>tool_called:run_command×2</code>: the agent should have run a "
+        "command but didn't, in 2 of the 3 tries.",
+    ),
+    (
+        "Worse / better",
+        "A test only counts as worse or better when the change is big enough "
+        f"to matter: Pass moves by {_PASS_NOISE_PT} points or more, or Judge "
+        f"by {history.JUDGE_NOISE:.2f} or more. One unlucky try out of 3 "
+        "doesn't count. <em>Mixed</em>: one went up, the other down. "
+        "<em>Same</em>: no real change.",
+        "Pass 100% → 67%: one try flipped, still <em>same</em>. "
+        "Pass 100% → 33%: <em>worse</em>. Judge 0.80 → 0.60: <em>worse</em>.",
+    ),
+    (
+        "Unscored / skipped",
+        "<em>Unscored</em>: the model was too busy to answer, so the test "
+        "couldn't be graded. <em>Skipped</em>: the test needs something "
+        "that wasn't available. Neither counts as a fail.",
+        "Unscored: another program was using the model at the same time. "
+        "Skipped: a web-search test run without internet access.",
+    ),
+    (
+        "Change",
+        "What was different about this run: <code>prompt</code> (the "
+        "agent's instructions), <code>model</code> (a different AI model), "
+        "<code>model_version</code> (a new download of the same model), "
+        "<code>tools</code>, <code>framework</code> (library updates), "
+        "<code>eval_suite</code> (the tests themselves changed), and so on.",
+        "<code>prompt</code> <code>tools</code>: someone edited the agent's "
+        "instructions and changed a tool in the same commit.",
+    ),
+]
 
 _W, _H = 760, 240
 _PAD_L, _PAD_R, _PAD_T, _PAD_B = 44, 16, 16, 34
@@ -100,6 +191,24 @@ def _chart(records: list[dict[str, Any]]) -> str:
     return "".join(parts)
 
 
+def _th(label: str, tip: str | None = None) -> str:
+    if tip is None:
+        return f"<th>{escape(label)}</th>"
+    return f'<th><abbr title="{escape(tip)}">{escape(label)}</abbr></th>'
+
+
+def _glossary() -> str:
+    items = "".join(
+        f'<dt>{escape(term)}</dt><dd>{meaning}<div class="eg">Example: {example}'
+        "</div></dd>"
+        for term, meaning, example in _GLOSSARY
+    )
+    return (
+        '<details class="glossary" open><summary>How to read this report</summary>'
+        f"<dl>{items}</dl></details>"
+    )
+
+
 def _change_cell(record: dict[str, Any]) -> str:
     change = record["change"]
     kinds = change.get("kinds") or []
@@ -137,9 +246,16 @@ def _case_table(record: dict[str, Any]) -> str:
             f"<td>{escape(status)}</td><td class='muted'>{escape(failed)}</td></tr>"
         )
     return (
-        '<div class="scroll"><table class="cases"><thead><tr><th>Case</th><th>Pass</th>'
-        "<th>Judge</th><th>Tokens</th><th>vs baseline</th><th>Failed checks</th>"
-        "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>"
+        '<div class="scroll"><table class="cases"><thead><tr>'
+        + _th("Case")
+        + _th("Pass", _TIPS["pass"])
+        + _th("Judge", _TIPS["judge"])
+        + _th("Tokens", _TIPS["tokens_case"])
+        + _th("vs baseline", _TIPS["status"])
+        + _th("Failed checks", _TIPS["failed"])
+        + "</tr></thead><tbody>"
+        + "".join(rows)
+        + "</tbody></table></div>"
     )
 
 
@@ -167,9 +283,16 @@ def _runs_table(records: list[dict[str, Any]]) -> str:
             f"{_case_table(record)}</details></td></tr>"
         )
     return (
-        '<div class="scroll"><table class="runs"><thead><tr><th>When (UTC)</th>'
-        "<th>Commit</th><th>Change</th><th>Pass</th><th>Judge</th><th>Tokens</th>"
-        "<th>Model</th><th>Worse cases</th></tr></thead><tbody>"
+        '<div class="scroll"><table class="runs"><thead><tr>'
+        + _th("When (UTC)")
+        + _th("Commit")
+        + _th("Change", _TIPS["change"])
+        + _th("Pass", _TIPS["pass"])
+        + _th("Judge", _TIPS["judge"])
+        + _th("Tokens", _TIPS["tokens"])
+        + _th("Model", _TIPS["model"])
+        + _th("Worse cases", _TIPS["worse"])
+        + "</tr></thead><tbody>"
         + "".join(rows)
         + "</tbody></table></div>"
     )
@@ -204,6 +327,16 @@ margin:0 4px 2px 0;font-size:12px}
 tr.more td{border-bottom:1px solid var(--line);padding-top:0}
 details summary{cursor:pointer;color:var(--ink2);font-size:13px}
 code{font-size:12.5px}
+abbr[title]{text-decoration:underline dotted;text-underline-offset:3px;cursor:help}
+.glossary{border:1px solid var(--line);border-radius:8px;padding:12px 16px}
+.glossary summary{font-size:15px;color:var(--ink);font-weight:600}
+.glossary dl{display:grid;grid-template-columns:max-content 1fr;gap:8px 20px;
+margin:12px 0 0;font-size:14px}
+.glossary dt{font-weight:600}.glossary dd{margin:0;color:var(--ink2)}
+.count{margin:-4px 0 8px;font-size:13px}
+.glossary .eg{margin-top:2px;font-size:13px;font-style:italic}
+@media (max-width:640px){.glossary dl{grid-template-columns:1fr;gap:2px}
+.glossary dd{margin-bottom:8px}}
 """ % (
     _SERIES["pass_rate"][1],
     _SERIES["judge_mean"][1],
@@ -212,17 +345,27 @@ code{font-size:12.5px}
 )
 
 
-def render(records: list[dict[str, Any]]) -> str:
+def render(records: list[dict[str, Any]], last: int | None = None) -> str:
+    """Render the page; ``last`` keeps only each agent's most recent N runs."""
     agents = sorted({r["agent"] for r in records})
     sections = []
     for agent in agents:
         runs = [r for r in records if r["agent"] == agent]
+        total = len(runs)
+        if last is not None:
+            runs = runs[-last:]
+        shown = (
+            f"Last {len(runs)} of {total} runs"
+            if len(runs) < total
+            else f"{total} run{'s' if total != 1 else ''}"
+        )
         legend = "".join(
             f'<span><i style="background:var(--s{i + 1})"></i>{escape(label)}</span>'
             for i, (label, _, _) in enumerate(_SERIES.values())
         )
         sections.append(
             f"<section><h2>{escape(agent)}</h2>"
+            f'<p class="muted count">{shown}</p>'
             f'<div class="legend">{legend}</div>'
             f'<div class="scroll">{_chart(runs)}</div>'
             f"{_runs_table(runs)}</section>"
@@ -237,14 +380,16 @@ def render(records: list[dict[str, Any]]) -> str:
         "<title>Vikram eval history</title>"
         f"<style>{_CSS}</style></head><body><main>"
         "<header><h1>Vikram eval history</h1>"
-        '<p class="muted">Each point is one run. Hover a point for the commit and '
-        "what changed. Pass rate = share of cases passing, averaged over repeats.</p>"
-        "</header>" + "".join(sections) + "</main></body></html>"
+        '<p class="muted">How well each agent does on its tests, over time. '
+        "Each dot on a chart is one run: hover it to see what changed. Hover "
+        "a column name to see what it means. Click <em>Cases</em> under a run "
+        "to see each test.</p>"
+        "</header>" + _glossary() + "".join(sections) + "</main></body></html>"
     )
 
 
-def write_report(repo: Path, out: Path) -> Path:
+def write_report(repo: Path, out: Path, last: int | None = None) -> Path:
     records = history.load_records(repo)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render(records))
+    out.write_text(render(records, last=last))
     return out

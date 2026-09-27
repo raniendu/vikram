@@ -210,12 +210,19 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _positive_int(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be 1 or more")
+    return number
+
+
 def _cmd_report(args: argparse.Namespace) -> int:
     from evals.report import write_report
 
     repo = _repo()
     out = Path(args.out) if args.out else repo / STATE_RELPATH / "report.html"
-    write_report(repo, out)
+    write_report(repo, out, last=args.last)
     sys.stdout.write(f"{out}\n")
     return 0
 
@@ -289,6 +296,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("report")
     p.add_argument("--out")
+    p.add_argument(
+        "--last",
+        type=_positive_int,
+        metavar="N",
+        help="show only each agent's N most recent runs (default: all)",
+    )
     p.set_defaults(fn=_cmd_report)
 
     p = sub.add_parser("status")

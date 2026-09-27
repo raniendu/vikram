@@ -164,6 +164,7 @@ running: job 3a1b2c4 for coder, vikram, 3 repeats, 14m 10s so far
 uv run python -m evals status                    # progress, queue, last results
 uv run python -m evals compare 9f8e7d6 ab12cd3 --agent coder
 uv run python -m evals report                    # .vikram/evals/report.html
+uv run python -m evals report --last 20          # only each agent's 20 latest runs
 ```
 
 `compare` accepts commit shas, run ids, manual run labels or JSON paths, and
