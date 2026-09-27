@@ -86,6 +86,47 @@ fixture (plus `find_log_event`) for unit-level assertions, and
 chain, such as request-id correlation. `caplog` does not work for structlog
 events unless `configure_logging` has already run.
 
+## Evals
+
+Evals measure answer quality; `tests/` proves the code works. They need a local
+Ollama and never run in CI. Details: `docs/evals.md`; decisions: ADRs 0002, 0011.
+
+- **When they run.** The post-commit hook queues a background before/after run
+  only for `model`, `model_settings`, `model_version`, `framework` and
+  `prompt` changes (`VIKRAM_EVALS_TRIGGERS=all` widens it). For any other
+  change that can affect answers (tools, MCP, hooks, skills, capabilities),
+  run `uv run pytest --evals` before pushing. It fails on a case that got
+  worse or couldn't be scored.
+- **Quick check:** `uv run pytest --evals --eval-agent coder --eval-repeats 1`.
+  Use the same repeat count as the recorded baseline when comparing.
+- **One model at a time.** Many machines hold one Ollama model at once. A suite
+  runs every agent case first, then all judge calls, so each model loads once;
+  keep new eval code in that shape (never judge inline). `pytest --evals` and
+  the background worker share `.vikram/evals/worker.lock`, so they never hit
+  the model server together.
+- **A busy model server isn't a failure.** HTTP 429/5xx from the model is
+  retried (15s, 45s, 90s; `VIKRAM_EVALS_MODEL_RETRIES`); a case that never gets
+  through is `unscored`, never "worse".
+- **Watching:** `uv run python -m evals status` (step, case, time left);
+  `.vikram/evals/logs/worker.log` for background jobs.
+- **Committed vs local.** `evals/history/*.json` holds metrics only and is
+  committed by the hook. Prompts, outputs and traces stay in `.vikram/evals/`
+  and must never be committed.
+- **Adding a case:** `evals/cases/<agent>.yaml`. Changing the cases changes
+  the suite hash, so old results are no longer compared: the next run scores
+  the parent commit with the new cases first.
+
+To wipe history and start over:
+
+```bash
+uv run python -m evals status                 # nothing running or queued (else stop it)
+rm -rf .vikram/evals && git worktree prune    # local state and stale eval checkouts
+find evals/history -name '*.json' -delete     # committed scores; keep .gitkeep
+git add -A evals/history && VIKRAM_EVALS_SKIP=1 git commit -m "evals: reset history"
+uv run python -m evals enqueue --agent coder --repeats 1 --wait   # new baseline
+uv run python -m evals enqueue --agent vikram --repeats 1 --wait
+```
+
 ## Security
 
 Do not commit secrets, populated `.env` files, Telegram tokens, webhook secrets,
