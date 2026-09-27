@@ -1,8 +1,8 @@
 # 0008. Keep `delegate_to_agent`; forward usage to the parent
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-26
-- **PR:** raniendu/vikram#43 (WS5), landing on `main` via raniendu/vikram#47
+- **PR:** raniendu/vikram#43 (WS5), landed on `main` via raniendu/vikram#47
 
 ## Context
 

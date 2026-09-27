@@ -1,8 +1,8 @@
 # 0010. Durable agent runs on DBOS, off by default
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-26
-- **PR:** raniendu/vikram#45 (WS6), landing on `main` via raniendu/vikram#47
+- **PR:** raniendu/vikram#45 (WS6), landed on `main` via raniendu/vikram#47
 
 ## Context
 
