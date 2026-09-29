@@ -695,34 +695,6 @@ async def post_mcp_test(spec: MCPServerSpec) -> dict[str, Any]:
     return {"ok": True, "error": None, "tools": names, "server": _redact_mcp(spec)}
 
 
-# --- playground --------------------------------------------------------
-
-
-class PlaygroundRunRequest(BaseModel):
-    agent_id: str
-    workspace: str
-    prompt: str = Field(min_length=1)
-    columns: list[dict[str, str]] = Field(min_length=2, max_length=4)
-
-
-@router.post("/playground/runs", status_code=201)
-async def post_playground_run(request: PlaygroundRunRequest) -> dict[str, Any]:
-    """Open a comparison: one agent, 2-4 models, one shared worker."""
-    models = [f"{c['provider']}/{c['model']}" for c in request.columns]
-    try:
-        session = await _registry.create(
-            agent_id=request.agent_id,
-            workspace=Path(request.workspace),
-            models=models,
-        )
-    except (SessionError, KeyError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    turn_id = await session.prompt(request.prompt)
-    info = _session_info(session)
-    info["turn_id"] = turn_id
-    return info
-
-
 async def shutdown_sessions() -> None:
     """Reap every worker. Wired to the app's lifespan."""
     await _registry.close_all()

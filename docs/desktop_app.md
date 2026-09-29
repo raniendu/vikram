@@ -61,7 +61,6 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 | **New agent** | One page rather than a section rail: identity, model, system prompt, tools, MCP servers under a bar that does not scroll. A **TOML** tab holds the same draft as text -- the server renders and parses it, so the two tabs cannot drift. Nothing is written until Create. |
 | **Editor** | Identity, system prompt, tool picker with approval badges, model and `model_settings`, MCP servers with a Test button, raw TOML. Validate dry-runs the spec and shows the assembled prompt. |
 | **Chat** | Pick a workspace folder, run the agent, answer approvals in a native dialog. |
-| **Playground** | One agent, one prompt, 2–4 models side by side with time-to-first-token, total time and token counts. |
 | **Settings** | Providers, models, base URLs, API keys. Keys are written to config and never sent back to the window. |
 | **Doctor** | The same checks as `vikram doctor`. |
 
@@ -82,7 +81,7 @@ than re-emitting it.
 
 ## Choosing a model
 
-The editor, the create screen and the Playground all list models from the
+The editor and the create screen list models from the
 provider rather than asking you to type a name from memory:
 `GET /v1/providers/<id>/models`, cached for a minute and refetched whenever the
 provider changes.
@@ -136,22 +135,6 @@ once rather than per turn.
 Approvals arrive as structured events — tool name and typed arguments — and the
 worker waits on the answer for up to 300 seconds before denying, so a closed
 window cannot leave it holding a `sequential` tool lock.
-
-## Why the playground can share one process
-
-It varies only the *model*, holding the agent and workspace constant, so every
-column has an identical command policy and cwd — the two hazards that force
-separate processes elsewhere. Fanning out over *agents* would not be safe and
-the app does not do it.
-
-Approval-gated tools are disabled for comparisons. Four columns approving the
-same `write_file` and then each executing it against one workspace is both poor
-UX and a correctness hazard, so the runtime's existing auto-deny branch applies
-and each column reports the refusal.
-
-Expect columns to run slower than they would alone — they contend for the same
-GPU. Time-to-first-token is measured inside the worker, so HTTP and SSE latency
-do not pollute the comparison.
 
 ## Troubleshooting
 

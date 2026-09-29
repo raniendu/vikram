@@ -223,8 +223,7 @@ def _approve(request: Any) -> str:
 
 
 def _read_usage(result: Any, repeat: RepeatResult) -> None:
-    # Same tolerant read as vikram.playground._read_usage: usage is a method
-    # on some result types and an attribute on others.
+    # Usage is a method on some result types and an attribute on others.
     usage = getattr(result, "usage", None)
     if callable(usage):
         usage = usage()

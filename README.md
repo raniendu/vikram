@@ -242,7 +242,6 @@ request.
 
 - Building and editing agents from tools, MCP servers, and skills (visual agent editor)
 - Running agents against a workspace with native approval dialogs
-- Comparing one agent across 2–4 models side-by-side (playground)
 - Doctor checks for agent health inspection
 - Settings management for providers and agent specs
 
@@ -480,10 +479,9 @@ priority chain: env vars → per-agent spec pin → global config default.
 
 | Component | Description |
 | --- | --- |
-| `gui/src/` | React UI — agent editor, chat sessions, playground, doctor checks, settings |
+| `gui/src/` | React UI — agent editor, chat sessions, doctor checks, settings |
 | `gui/src-tauri/` | Rust backend — API binary resolution, session management, native dialogs |
 | Agent Editor | Visual TOML editing with validation from `vikram/introspect.py` |
-| Multi-Model Playground | Compare 2–4 models side-by-side on the same prompt via `vikram/playground.py` |
 | Approval Dialogs | Native OS approval for safety-gated tool calls (write, edit, run_command) |
 
 The desktop starts via the CLI command `vikram gui`, which locates the running

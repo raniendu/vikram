@@ -333,13 +333,6 @@ pre.source {
 
 .issues { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
 
-/* ---- playground -------------------------------------------------- */
-
-.columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 20px; }
-.column { border-top: 1px solid var(--fg); padding-top: 10px; display: flex; flex-direction: column; gap: 7px; }
-.column-metrics { display: flex; gap: 12px; }
-.column-body { font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; overflow-y: auto; max-height: 52vh; }
-
 /* ---- diagnostics ------------------------------------------------- */
 
 .diagnostics { border-collapse: collapse; width: 100%; }
@@ -386,7 +379,7 @@ pre.source {
 
 /* ---- one-page form ------------------------------------------------ */
 
-/* Sections are separated by the full-ink rule the Playground columns use,
+/* Sections are separated by the full-ink rule used across the app,
    not by a second navigation rail: the whole draft is one scroll. */
 .sec { border-top: 1px solid var(--fg); padding-top: 10px; }
 .sec + .sec { margin-top: 26px; }

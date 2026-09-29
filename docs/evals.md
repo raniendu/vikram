@@ -1,5 +1,10 @@
 # Evals: before/after quality tracking
 
+The experimental local multi-model benchmark runner has been retired. Its
+previous reports and metrics remain under `~/.vikram/benchmarks/` (or
+`VIKRAM_STATE_DIR/benchmarks/`), but the desktop, CLI and backend no longer
+start benchmark runs. Commit regression evals remain active.
+
 `tests/` proves the code works. `evals/` measures **how well the agents
 answer**, and how that changes when you change a prompt, a model, a tool or a
 framework version. Evals run in two ways:

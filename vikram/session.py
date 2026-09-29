@@ -274,16 +274,13 @@ class SessionRegistry:
     def list(self) -> list[Session]:
         return list(self._sessions.values())
 
-    async def create(
-        self, *, agent_id: str, workspace: Path, models: list[str] | None = None
-    ) -> Session:
-        """Start a worker. ``models`` puts it in playground fan-out mode."""
+    async def create(self, *, agent_id: str, workspace: Path) -> Session:
+        """Start one worker for an agent and workspace."""
         workspace = workspace.expanduser().resolve()
         if not workspace.is_dir():
             raise SessionError(f"Workspace is not a directory: {workspace}")
 
         session_id = uuid.uuid4().hex[:12]
-        extra = ["--models", ",".join(models)] if models else []
         process = await asyncio.create_subprocess_exec(
             sys.executable,
             "-m",
@@ -294,7 +291,6 @@ class SessionRegistry:
             agent_id,
             "--workspace",
             str(workspace),
-            *extra,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=None,
