@@ -13,7 +13,6 @@ import { Chat } from "./screens/Chat";
 import { Doctor } from "./screens/Doctor";
 import { NewAgent } from "./screens/NewAgent";
 import { NewSession } from "./screens/NewSession";
-import { Playground } from "./screens/Playground";
 import { Settings } from "./screens/Settings";
 
 const THEME_KEY = "vikram.theme";
@@ -119,7 +118,6 @@ export function App() {
           onCreate={() => setPane({ kind: "create" })}
         />
       )}
-      {pane.kind === "view" && pane.view === "playground" && <Playground />}
       {pane.kind === "view" && pane.view === "settings" && <Settings />}
       {pane.kind === "view" && pane.view === "doctor" && <Doctor />}
 

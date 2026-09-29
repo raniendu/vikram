@@ -30,10 +30,6 @@ EventType = Literal[
     "turn.finished",
     "turn.failed",
     "turn.cancelled",
-    # Playground fan-out: one per column, alongside the shared turn.* events.
-    "column.finished",
-    "column.failed",
-    "column.cancelled",
     "session.ready",
     "session.closed",
     "heartbeat",
@@ -41,18 +37,16 @@ EventType = Literal[
 
 
 class Event(BaseModel):
-    """One event on a session (or playground) stream.
+    """One event on a session stream.
 
     ``seq`` is monotonic per stream so a reconnecting client can resume from a
-    ``Last-Event-ID``. ``column_id`` is set only by playground fan-out, where
-    several models share one stream.
+    ``Last-Event-ID``.
     """
 
     type: EventType
     seq: int
     session_id: str
     turn_id: str | None = None
-    column_id: str | None = None
     ts: float = Field(default_factory=time.time)
     payload: dict[str, Any] = Field(default_factory=dict)
 
@@ -63,7 +57,6 @@ def map_stream_event(
     seq: int,
     session_id: str,
     turn_id: str | None = None,
-    column_id: str | None = None,
 ) -> Event | None:
     """Map one ``stream_events`` dict onto an :class:`Event`.
 
@@ -78,7 +71,6 @@ def map_stream_event(
             seq=seq,
             session_id=session_id,
             turn_id=turn_id,
-            column_id=column_id,
             payload=payload,
         )
 

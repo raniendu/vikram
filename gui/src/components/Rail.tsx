@@ -8,11 +8,10 @@ import { Dot, Eyebrow } from "./primitives";
  * activity text a session is doing lives in its own header instead.
  */
 
-export type View = "agents" | "playground" | "settings" | "doctor";
+export type View = "agents" | "settings" | "doctor";
 
 const NAV: [View, string][] = [
   ["agents", "Agents"],
-  ["playground", "Playground"],
   ["settings", "Settings"],
   ["doctor", "Doctor"],
 ];

@@ -27,7 +27,6 @@ export interface StreamEvent {
   seq: number;
   session_id: string;
   turn_id: string | null;
-  column_id: string | null;
   ts: number;
   payload: Record<string, any>;
 }
