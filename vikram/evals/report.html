@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vikram · Agent benchmark</title>
+  <style>
+    :root { color-scheme:light; --paper:#f7f8fa; --ink:#202c3a; --muted:#596574; --line:#dce2e9; --blue:#376d9e; --amber:#a56112; --green:#22654c; --series:var(--ink); }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { max-width:1120px; margin:auto; padding:28px 26px 48px; }
+    header { display:flex; justify-content:space-between; gap:24px; align-items:end; margin-bottom:30px; }
+    h1 { font-size:27px; line-height:1.25; letter-spacing:-.6px; margin:8px 0; }
+    h2 { font-size:21px; line-height:1.3; margin:0 0 8px; }
+    h3 { font-size:15px; margin:0 0 8px; }
+    p { margin:8px 0; }
+    .eyebrow { font-size:11px; font-weight:750; letter-spacing:1.8px; text-transform:uppercase; }
+    .caption { color:var(--muted); font-size:12px; line-height:1.6; }
+    .panel { border:1px solid var(--line); border-radius:10px; background:#fff; padding:19px 22px; margin-bottom:16px; min-width:0; }
+    .benchmark { margin:38px 0 48px; border-top:2px solid var(--ink); padding-top:24px; }
+    [data-role="series-note"] { margin-bottom:22px; }
+    [data-layout="metrics"], [data-layout="charts"], [data-role="verdicts"] { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; margin:16px 0; }
+    [data-layout="metrics"] > section, [data-role="verdicts"] > section { background:#f8fafc; border:1px solid var(--line); padding:15px; border-radius:8px; }
+    [data-layout="metrics"] strong { display:block; font-size:27px; line-height:1.4; }
+    [data-role="verdicts"] strong { display:block; font-size:17px; margin:5px 0; }
+    [data-role="findings"] { padding-left:19px; font-size:13px; }
+    [data-role="findings"] li { margin:5px 0; }
+    [data-layout="charts"] > section { min-width:0; }
+    [data-status] { display:inline-block; padding:3px 8px; border:1px solid var(--line); border-radius:20px; font-size:11px; white-space:nowrap; }
+    [data-status="complete"] { color:var(--green); background:#eaf4eb; }
+    [data-status="incomplete"], [data-status="interrupted"], [data-status="not run"] { color:var(--amber); background:#fff0dc; }
+    .table-scroll { overflow-x:auto; }
+    table { width:100%; border-collapse:collapse; font-size:13px; text-align:left; }
+    th { font-weight:650; font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); white-space:nowrap; }
+    th, td { padding:10px; border-bottom:1px solid #e8ece8; vertical-align:top; }
+    th:first-child, td:first-child { padding-left:0; }
+    td { font-variant-numeric:tabular-nums; }
+    [data-role="board"] td[data-metric] { min-width:140px; }
+    td[data-metric] { white-space:nowrap; }
+    [data-direction="up"] { color:var(--green); }
+    [data-direction="down"] { color:#a13730; }
+    [data-changed="true"] { color:var(--amber); font-weight:600; }
+    [data-role="board"] strong { font-size:15px; }
+    [data-role="paired-bars"] > div { display:grid; grid-template-columns:minmax(210px,1fr) minmax(280px,1.7fr); align-items:center; gap:16px; border-bottom:1px solid var(--line); padding:12px 0; }
+    [data-role="paired-bars"] button { font-weight:600; overflow-wrap:anywhere; }
+    [data-role="paired-bars"] svg { min-width:280px; }
+    [data-role="heatmap"] th { white-space:normal; min-width:100px; }
+    [data-role="heatmap"] th:first-child { min-width:160px; }
+    [data-role="heatmap"] td { border:3px solid white; font-size:12px; }
+    [data-role="heatmap"] td:first-child { border-left:0; }
+    [data-role="speed"] svg { max-width:780px; margin:0 auto; }
+    [data-role="speed"] ul { list-style:none; padding:0; font-size:12px; overflow-wrap:anywhere; }
+    [data-role="speed"] li { --line-style:solid; margin:12px 0; padding-left:28px; position:relative; }
+    [data-role="speed"] li::before { content:""; position:absolute; left:0; top:8px; width:20px; border-top:2px var(--line-style,solid) var(--series); }
+    [data-role="verdicts"] .caption, [data-role="heatmap"] th { overflow-wrap:anywhere; }
+    button { font:inherit; border:0; background:none; color:var(--blue); padding:0; cursor:pointer; text-align:left; text-decoration:underline; text-underline-offset:3px; }
+    a { color:var(--blue); text-underline-offset:3px; }
+    :focus-visible { outline:3px solid #62a3c3; outline-offset:4px; }
+    .legend { display:flex; flex-wrap:wrap; gap:16px; font-size:12px; margin:12px 0; }
+    .legend span::before { content:""; display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; background:var(--series); }
+    svg { display:block; width:100%; height:auto; overflow:visible; }
+    svg text { fill:var(--muted); font-size:11px; }
+    svg circle[role="button"] { cursor:pointer; }
+    details { margin:20px 0; }
+    summary { cursor:pointer; font-weight:650; }
+    details[open] > summary { margin-bottom:18px; }
+    [data-layout="comparison"] { display:flex; flex-wrap:wrap; gap:20px; margin:18px 0; }
+    label { flex:1; min-width:240px; font-size:13px; font-weight:600; }
+    select { display:block; width:100%; max-width:520px; margin-top:7px; padding:9px 12px; font:inherit; color:inherit; border:1px solid #bcc6c7; border-radius:6px; background:white; }
+    dl { display:grid; grid-template-columns:155px 1fr; gap:8px; font-size:12px; }
+    dt { color:var(--muted); }
+    dd { margin:0; overflow-wrap:anywhere; font-family:ui-monospace,monospace; }
+    code { font-size:12px; overflow-wrap:anywhere; }
+    .definitions { display:grid; grid-template-columns:repeat(3,1fr); gap:20px 28px; margin-top:22px; }
+    .definitions h3 { font-size:15px; }
+    .definitions p { color:var(--muted); font-size:13px; }
+    footer { font-size:12px; color:var(--muted); }
+    [hidden] { display:none !important; }
+    @media(max-width:800px) { main { padding:22px 16px; } h1 { font-size:24px; } header { display:block; } .definitions { grid-template-columns:1fr 1fr; } }
+    @media(max-width:640px) { [data-role="paired-bars"] > div { grid-template-columns:1fr; gap:4px; } [data-role="paired-bars"] svg { min-width:0; } }
+    @media(max-width:520px) { .definitions { grid-template-columns:1fr; } .panel { padding:14px; } }
+    @media print { body { background:white; } main { padding:0; } .panel, [data-layout="metrics"] { break-inside:avoid; } }
+  </style>
+</head>
+<body>
+<main>
+  <header><div><div class="eyebrow">Vikram / Benchmark history</div><h1>Agent benchmark · pass@1 / pass@3</h1><p class="caption">Compare configurations. See what changed. Follow progress over time.</p></div><p id="run-count" class="caption"></p></header>
+  <p id="report-summary" class="caption"></p>
+  <noscript>Enable JavaScript to explore this report. Its metrics and charts are embedded locally; no network connection is required.</noscript>
+  <section id="empty" class="panel" hidden><h2>Start your benchmark history.</h2><p>Run <code>uv run vikram-eval run --label "Baseline"</code> to evaluate all thinking levels advertised by your local model. Run it again after changing the agent.</p></section>
+  <div id="benchmarks"></div>
+  <section id="terms" class="panel"><div class="eyebrow">Reading guide</div><h2>What the benchmark tells you</h2><p>This starter suite gives an initial signal. Better observed scores can come from an agent change, sampling variation, or imperfect grading.</p>
+    <div class="definitions">
+      <div><h3>Pass@1 and pass@k</h3><p>Pass@1 estimates success in one fresh attempt. Pass@k estimates at least one success in k independent attempts. Each starts with no earlier answers or grader feedback. Pass@k does not identify which answer to choose.</p></div>
+      <div><h3>Thinking level</h3><p>A model setting, such as off/on or low/medium/high. Supported values come from Ollama’s model metadata. Each is a separate benchmark configuration. Unspecified model defaults and untested levels are labeled explicitly.</p></div>
+      <div><h3>Eval suite</h3><p>A fixed set of cases, success criteria, and judge settings. Agent changes stay on the same timeline. Changing the cases or grading starts a separate section, so unrelated scores are not mixed.</p></div>
+      <div><h3>Configuration and repeat</h3><p>A configuration includes model, thinking, prompt, runtime/tool code, dependencies, harness versions, and generation settings. The table averages complete repeat runs equally; latest scores are also shown.</p></div>
+      <div><h3>Baseline, latest, and best</h3><p>Progress cards compare the latest complete score to the first complete score for each metric. Best is the highest observed score. The optional comparison panel lets you choose another baseline.</p></div>
+      <div><h3>Case and attempt</h3><p>A case is one task with explicit success criteria. An attempt is one fresh response. Scores average cases equally. At least k scored attempts per case are needed for pass@k.</p></div>
+      <div><h3>Objective check / judge</h3><p>Objective checks compare answers with expected text or structure. A local Ollama judge checks written rubrics after all models finish generating. Judge model and thinking settings stay fixed within a suite. A judge can make mistakes or favor its own model; graphs show objective and judged scores separately.</p></div>
+      <div><h3>Unavailable / not run</h3><p>Errors and interrupted attempts are unscored, not wrong answers. An overall score needs every case complete. “Not run” means a supported thinking level has no run for that configuration. Neither is zero.</p></div>
+      <div><h3>Percentage points</h3><p>60% to 70% is +10 percentage points. History shows changes from the previous run in that suite. Comparisons can involve different models or thinking levels; they are observed differences, not causal proof.</p></div>
+      <div><h3>Controlled comparison</h3><p>Keep cases, grading, sample budget, and the working tree fixed when comparing models or thinking levels. The comparison panel lists recorded differences. Experiment labels describe intent without hiding other runs.</p></div>
+      <div><h3>Provenance</h3><p>Fingerprints record code and settings without saving their content. Legacy records lack some fingerprints and thinking metadata. External services, environment variables, non-Python resources, and mutable model tags are not fully captured.</p></div>
+      <div><h3>Evaluation time / uncertainty</h3><p>Time per attempt is recorded run duration divided by its attempt count, including grading and setup overhead. Waiting for other configurations is excluded. It is not model-only latency. Small samples and timing variation limit conclusions; no statistical significance is claimed.</p></div>
+    </div>
+    <details><summary>The calculation, with an example</summary><p><code>pass@k = 1 − C(n − c, k) / C(n, k)</code>, where n is attempts, c is passes, and 1 ≤ k ≤ n. C counts combinations and is zero when its first argument is smaller than k. Case scores are averaged equally.</p><p>Two passes in five attempts give pass@1 = 40%, pass@3 = 90%, and pass@5 = 100%. A sample’s 100% score is not a guarantee.</p></details>
+  </section>
+  <footer>Offline report. Metrics and configuration metadata only; no prompts, answers, thinking traces, judge explanations, source content, or credentials. Times use your browser’s timezone. Rebuild to include new runs.</footer>
+</main>
+<template id="benchmark-section">
+  <section class="benchmark">
+    <div class="eyebrow" data-role="suite-label"></div><h2 data-role="title"></h2><p class="caption" data-role="series-note"></p>
+    <section class="panel"><h3>Benchmark findings</h3><div data-role="verdicts"></div><ul data-role="findings"></ul><p class="caption">Observed results on this suite, not guarantees or significance tests. Ties are shown explicitly. Retry gains use the same runs for both metrics.</p></section>
+    <section class="panel"><h3>pass@1 vs pass@3 · every configuration</h3><p class="caption">Blue: pass@1. Amber: pass@3. Each row holds model, thinking level, and agent revision fixed; bars average complete runs. See the table for repeat counts and sample budgets.</p><div data-role="paired-bars"></div></section>
+    <section class="panel"><h3>Progress over time</h3><p class="caption">From the first complete baseline to the latest result, across agent changes.</p><div data-layout="metrics" data-role="metrics"></div><div class="legend" data-role="legend"></div><div data-layout="charts" data-role="charts"></div><p class="caption">Each point is a run. Select a point to inspect it. Gaps mark incomplete results or insufficient samples; missing scores never count as zero. A change in model or thinking level is also a configuration change, not necessarily an improvement to the code.</p></section>
+    <section class="panel"><h3>Quality and evaluation time</h3><p class="caption">Each model line connects Off → On or its advertised thinking levels in order. Points show pass@1 versus evaluation seconds per attempt, including grading and overhead; upper left is better. Agent revisions have separate lines. Missing levels break a line, and a single measured level is shown as one point. Exact values and all supported levels appear below.</p><div data-role="speed"></div></section>
+    <section class="panel"><h3>Per-case results</h3><p class="caption">Each cell shows pass@1 and pass@3; the background shades pass@1. Values use the same complete-run cohorts as the benchmark table. Untested levels and unavailable scores stay blank of color.</p><div class="table-scroll"><table data-role="heatmap"><thead></thead><tbody></tbody></table></div></section>
+    <section class="panel"><h3>Configuration benchmark</h3><p class="caption">Each thinking level has its own row. Scores are means of complete runs, with the latest result underneath. Configuration fingerprints keep prompt, tool, or harness changes separate. Different metrics may have different eligible run counts when sample budgets vary.</p><p class="caption" data-role="coverage"></p>
+      <div class="table-scroll"><table data-role="board"><thead></thead><tbody></tbody></table></div>
+    </section>
+    <section class="panel"><h3>Changes and results</h3><p class="caption">All runs in chronological order. Each score includes its change from the previous run. Labels and experiment names appear alongside the results.</p><div class="table-scroll"><table data-role="history"><thead></thead><tbody></tbody></table></div></section>
+    <details class="panel" data-role="comparison"><summary>Compare two runs in detail</summary><div data-layout="comparison"><label>Baseline<select data-role="baseline" aria-label="Baseline"></select></label><label>Candidate<select data-role="candidate" aria-label="Candidate"></select></label></div>
+      <p data-role="comparison-note"></p><div class="table-scroll"><table data-role="comparison-scores"><thead></thead><tbody></tbody></table></div>
+      <h3 style="margin-top:24px">Recorded differences</h3><div class="table-scroll"><table data-role="settings"><thead><tr><th>Setting</th><th>Baseline</th><th>Candidate</th><th>Comparison</th></tr></thead><tbody></tbody></table></div>
+      <h3 style="margin-top:24px">Per-case changes</h3><div class="table-scroll"><table data-role="deltas"><thead></thead><tbody></tbody></table></div>
+    </details>
+    <details class="panel" data-role="run-details"><summary data-role="run-title">Inspect an individual run</summary><p data-role="run-summary"></p><dl data-role="provenance"></dl><div class="table-scroll"><table data-role="cases"><thead></thead><tbody></tbody></table></div></details>
+  </section>
+</template>
+<script id="run-data" type="application/json">"__RUN_DATA__"</script>
+<script>/*__REPORT_SCRIPT__*/</script>
+</body>
+</html>

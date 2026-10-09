@@ -1,30 +1,15 @@
-# `uv run pre-commit install` installs both hook types below.
-default_install_hook_types: [pre-commit, post-commit]
+default_install_hook_types: [pre-commit]
 
 repos:
-  - repo: https://github.com/psf/black
-    rev: 24.10.0
-    hooks:
-      - id: black
-        language_version: python3.13
-
-  - repo: https://github.com/pycqa/isort
-    rev: 5.13.2
-    hooks:
-      - id: isort
-        args: ["--profile", "black"]
-
-  # After each commit, queue before/after evals when the commit changes a
-  # model, model settings, model version, framework version or prompt
-  # (VIKRAM_EVALS_TRIGGERS changes the set). Runs in the background against
-  # local Ollama; never blocks or fails a commit. See docs/evals.md.
-  # Disable with VIKRAM_EVALS_DISABLE=1.
   - repo: local
     hooks:
-      - id: vikram-evals
-        name: vikram evals (queue before/after run)
-        entry: uv run python -m evals hook
+      - id: black
+        name: black
+        entry: uv run black
         language: system
-        stages: [post-commit]
-        always_run: true
-        pass_filenames: false
+        types: [python]
+      - id: isort
+        name: isort
+        entry: uv run isort
+        language: system
+        types: [python]
