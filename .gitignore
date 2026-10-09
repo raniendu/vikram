@@ -5,7 +5,6 @@ __pycache__/
 *.so
 .Python
 *.egg-info/
-.pytest_cache/
 .mypy_cache/
 .ruff_cache/
 
@@ -38,11 +37,3 @@ credentials.json
 
 # Stray local DBOS/state dirs from ad-hoc runs
 /tmp/
-
-# Desktop app build artifacts
-gui/node_modules/
-gui/dist/
-gui/src-tauri/target/
-gui/src-tauri/gen/
-gui/openapi.json
-gui/src/api/schema.gen.ts

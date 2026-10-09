@@ -1,141 +1,90 @@
 # Repository Guidelines
 
-## Project Structure
+## Scope
 
-`vikram/` contains the package code. Agent specs live under `spec/<agent>/` and
-shared policy/context lives under `spec/shared/`. Tests live in `tests/`. Runtime
-state belongs under `.vikram/` and must not be committed. Agent quality evals
-live in `evals/` (cases, fixtures, runner) and their metrics-only results in
-`evals/history/`, which the post-commit hook commits. Architecture Decision
-Records live in `docs/adr/`: when a change adopts, replaces or rejects a
-framework, or moves a security boundary, add an ADR in the same PR (see
-`docs/adr/README.md`).
+Vikram is one local assistant built with Pydantic AI and Ollama. Keep the
+implementation small. Do not introduce additional agents, agent registries,
+tools, delegation, integrations, server surfaces, persistence, or configuration
+frameworks unless explicitly requested.
 
-Key modules:
-- `agent.py`: builds Pydantic AI agents from specs, tools, MCP servers, skills, and hooks.
-- `mcp.py`: declarative `[[mcp_servers]]` specs and MCP toolset construction.
-- `skills.py`: Agent Skills discovery and the `load_skill` progressive-disclosure tool.
-- `capabilities.py`: declarative `[capabilities]` specs built into Pydantic AI
-  Harness capabilities (see `docs/capabilities.md`).
-- `hooks.py`: declarative `[[hooks]]` specs compiled into a Pydantic AI wrapper
-  toolset plus prompt/stop callbacks.
-- `cli.py`: `vikram` command, including interactive and one-shot modes.
-- `acp.py`: `vikram-acp` editor-facing Agent Client Protocol adapter.
-- `api.py`: FastAPI app for `/chat`, threaded events, Telegram webhooks, and health.
-- `gateway.py` and `dbos_gateway.py`: SQLite thread history and DBOS queues.
-- `telegram.py` and `telegram_config.py`: Telegram parsing, allowlists, commands, and delivery.
-- `tools.py` and `command_policy.py`: web search, command tools and command policy.
-- `file_tools.py`: the workspace file tools, served by the harness `FileSystem`
-  capability with Vikram's path rules, approvals and hooks.
-- `settings.py`: environment-driven settings and model provider construction.
-- `logging.py` and `observability.py`: structlog configuration, redaction
-  helpers, and OpenTelemetry tracer/propagation helpers.
+## Structure
+
+- `vikram/agent.py`: the single agent definition, inline instructions, default
+  model, and `build_agent(model: str = DEFAULT_MODEL) -> Agent`.
+- `vikram/cli.py`: interactive and one-shot command-line conversations.
+- `vikram/__main__.py`: entry point for `python -m vikram`.
+- `vikram/evals/`: manually invoked Pydantic Evals, local Ollama rubric grading,
+  metrics-only history, and a self-contained HTML report.
+
+The model endpoint is fixed to `http://localhost:11434/v1`. Model selection is
+`--model`, then `OLLAMA_MODEL`, then the default in `agent.py`. The application
+does not load configuration files or `.env` files. Interactive history stays
+in memory for the current process.
+
+Evaluations reuse this agent with fresh history per attempt. Both answers and
+rubric grading use local Ollama; no API key is needed. Generate all cases and
+thinking levels for each model in sequence, then grade all queued answers with
+one fixed judge (default Gemma 4 26B, thinking off). Never interleave judge calls
+with agent generation. Keep pending answers only in memory and save only metrics.
+On cancellation, preserve scored counts and mark unjudged answers unscored.
+Evaluation artifacts live under the Git-ignored `.vikram/evals/v1/`. Preserve
+older local state, including historical cloud-judge records.
 
 ## Commands
 
 - `uv sync --locked`: install dependencies.
-- `uv run vikram`: start the default interactive CLI agent.
-- `uv run vikram --agent coder`: start the local CLI-only coding agent.
-- `uv run vikram --once --prompt "..." --json`: run one prompt and emit JSON.
-- `uv run vikram-api`: serve FastAPI on `http://127.0.0.1:8000`.
-- `uv run vikram-acp --agent coder`: start ACP over stdio.
-- `uv run pytest`: run the offline test suite.
-- `uv run pytest --evals`: tests, then score the agents on the working tree
-  against the last recorded eval result (needs Ollama; fails on a regression).
-- `uv run pre-commit install`: also installs the post-commit eval hook.
-- `uv run python -m evals status|compare|report`: eval progress and queue, before/after
-  table, and trend page (see `docs/evals.md`).
-- `uv run pre-commit run --all-files`: run Black and isort.
-- `docker compose -f compose.example.yml config`: validate the example Compose file.
+- `uv run vikram`: start an interactive conversation.
+- `uv run vikram "Hello"`: run one prompt.
+- `uv run vikram --model MODEL_NAME "Hello"`: use another local Ollama model.
+- `uv run vikram --help`: check CLI startup without calling Ollama.
+- `uv run vikram-eval run`: benchmark the eight cases, five attempts per thinking
+  level advertised by Ollama. Repeat `--model` to benchmark multiple local models.
+- `uv run vikram-eval run --label "Change description" --experiment "Comparison"`:
+  annotate a run and group deliberate comparisons.
+- `uv run vikram-eval run --judge-model MODEL --judge-thinking off`: use a fixed
+  local judge independently of the models and thinking levels being benchmarked.
+- `uv run vikram-eval run --case arithmetic --samples 1 --k 1 --thinking default`:
+  local smoke eval without a thinking sweep.
+- `uv run vikram-eval report`: rebuild the offline HTML report from metrics.
+- `uv run vikram-eval --help`: check evaluation CLI startup without model calls.
+- `uv run black --check vikram`: check formatting.
+- `uv run isort --check-only vikram`: check import ordering.
+- `uv run pre-commit install`: install optional formatting hooks.
 
-## Style
+## Working Style
 
-Use Python 3.13+ features with type hints on public boundaries. Formatting is
-Black with an 88-character line length; imports are sorted by isort using the
-Black profile. Keep tool names stable because specs reference
-`vikram.tools.TOOL_REGISTRY`.
+Inspect relevant files first and prefer small, maintainable changes. Preserve
+unrelated local work. Do not commit, push, open pull requests, or delete user
+state unless explicitly asked.
 
-## Logging And Observability
+Use Python 3.13 or later, type hints at public boundaries, Black's 88-character
+line length, and isort's Black profile. Keep documentation consistent with the
+code.
 
-Log through `vikram.logging.get_logger`, never stdlib `logging` or `print`, and
-use structlog's keyword style (`log.info("event_name", key=value)`) with
-snake_case event names in the past tense where an action completed. `event` is
-reserved by structlog — name a field `hook_event` or similar instead.
+Do not add a test suite or a separate agent-spec system unless requested.
+Validate changes with the CLI startup check and formatters. When model behavior
+changes, check it with a short local Ollama prompt. Report what was validated
+and any limitations.
 
-Log identifiers and sizes, never content: use `prompt_length` over the prompt,
-`thread_hash`/`chat_hash` over raw ids, and an executable name plus argument
-count over a full command string. Never log tokens, secrets, API keys, MCP
-`url`/`env` values, or anything derived from them.
+Never commit credentials, private keys, populated environment files, or local
+runtime state. Do not add logging of prompts, conversation content, or secrets.
+Evaluation history must contain only typed metrics and provenance, never full
+Pydantic Evals reports, prompts, outputs, judge reasons, or exception bodies.
+Keep cases and graders explicit. Do not run live evaluations automatically in CI
+or Git hooks. Treat model/evaluator errors as unscored, not incorrect answers.
 
-Do not swallow an exception silently. Either log it (`log.exception(...)`) or
-narrow the `except` clause so genuine bugs still surface.
+Keep eval-series identity separate from agent configuration identity. The same
+cases and grading policy remain comparable across model, prompt, runtime/tool,
+dependency, and harness changes. Record fingerprints and versions without source
+content; do not infer complete provenance for legacy runs. Experiment labels
+group runs but never establish that only one variable changed. Preserve history
+when generating the report, and keep incomplete scores distinct from zero.
 
-Front-ends whose stdout is the product — the CLI and ACP — must pass
-`stream=sys.stderr` to `configure_logging`.
-
-## Testing
-
-Tests use `pytest` with `pytest-asyncio` in auto mode. Keep default tests offline
-and deterministic. Gate live model calls, web search, Telegram, or tracing behind
-explicit environment variables. For threaded/API tests, patch
-`vikram.api._get_dispatcher` rather than booting real DBOS workflows.
-
-To assert on logs, use the helpers in `tests/conftest.py`: the `log_events`
-fixture (plus `find_log_event`) for unit-level assertions, and
-`captured_json_logs()` when the assertion depends on the configured processor
-chain, such as request-id correlation. `caplog` does not work for structlog
-events unless `configure_logging` has already run.
-
-## Evals
-
-Evals measure answer quality; `tests/` proves the code works. They need a local
-Ollama and never run in CI. Details: `docs/evals.md`; decisions: ADRs 0002, 0011.
-
-- **When they run.** The post-commit hook queues a background before/after run
-  only for `model`, `model_settings`, `model_version`, `framework` and
-  `prompt` changes (`VIKRAM_EVALS_TRIGGERS=all` widens it). For any other
-  change that can affect answers (tools, MCP, hooks, skills, capabilities),
-  run `uv run pytest --evals` before pushing. It fails on a case that got
-  worse or couldn't be scored.
-- **Quick check:** `uv run pytest --evals --eval-agent coder --eval-repeats 1`.
-  Use the same repeat count as the recorded baseline when comparing.
-- **One model at a time.** Many machines hold one Ollama model at once. A suite
-  runs every agent case first, then all judge calls, so each model loads once;
-  keep new eval code in that shape (never judge inline). `pytest --evals` and
-  the background worker share `.vikram/evals/worker.lock`, so they never hit
-  the model server together.
-- **A busy model server isn't a failure.** HTTP 429/5xx from the model is
-  retried (15s, 45s, 90s; `VIKRAM_EVALS_MODEL_RETRIES`); a case that never gets
-  through is `unscored`, never "worse".
-- **Watching:** `uv run python -m evals status` (step, case, time left);
-  `.vikram/evals/logs/worker.log` for background jobs.
-- **Committed vs local.** `evals/history/*.json` holds metrics only and is
-  committed by the hook. Prompts, outputs and traces stay in `.vikram/evals/`
-  and must never be committed.
-- **Adding a case:** `evals/cases/<agent>.yaml`. Changing the cases changes
-  the suite hash, so old results are no longer compared: the next run scores
-  the parent commit with the new cases first.
-
-To wipe history and start over:
-
-```bash
-uv run python -m evals status                 # nothing running or queued (else stop it)
-rm -rf .vikram/evals && git worktree prune    # local state and stale eval checkouts
-find evals/history -name '*.json' -delete     # committed scores; keep .gitkeep
-git add -A evals/history && VIKRAM_EVALS_SKIP=1 git commit -m "evals: reset history"
-uv run python -m evals enqueue --agent coder --repeats 1 --wait   # new baseline
-uv run python -m evals enqueue --agent vikram --repeats 1 --wait
-```
-
-## Security
-
-Do not commit secrets, populated `.env` files, Telegram tokens, webhook secrets,
-chat IDs from real deployments, private keys, or local state. Logs and tests
-should avoid raw prompt text, bot tokens, and private identifiers.
-
-The `coder` agent must remain **local-only**: reachable from surfaces driven by
-someone at this machine's keyboard (`cli`, `acp`, `gui` — see `LOCAL_SURFACES`
-in `vikram/spec.py`), and never from a network surface (`http`, `threaded`,
-`telegram`). It has file-write and shell tools, so exposing it over the network
-would hand those to any caller. `vikram-api` is a deployment target that
-`Dockerfile` serves on `0.0.0.0`; keep it that way.
+Show pass@1 and pass@3 together in the benchmark report. Keep suites visible in
+separate sections and thinking levels in separate rows; avoid display filters.
+Label charts, findings, and tables with actual model names, not C1/C2 aliases.
+In the quality/time chart, connect thinking levels within each model and agent
+revision. Show every supported level, leaving gaps for missing results.
+Discover supported thinking controls from Ollama metadata. Never infer missing
+levels, pool different levels, or store thinking traces. Explicit defaults and
+untested supported levels must remain distinguishable from scored results.

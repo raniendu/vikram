@@ -1,8 +1,1 @@
-from importlib.metadata import PackageNotFoundError, version
-
-try:
-    __version__ = version("vikram")
-except PackageNotFoundError:
-    __version__ = "0.0.0+dev"
-
-__all__ = ["__version__"]
+"""A single local assistant powered by Pydantic AI and Ollama."""
