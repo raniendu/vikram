@@ -5,63 +5,78 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Vikram · Agent benchmark</title>
   <style>
-    :root { color-scheme:light; --paper:#f7f8fa; --ink:#202c3a; --muted:#596574; --line:#dce2e9; --blue:#376d9e; --amber:#a56112; --green:#22654c; --series:var(--ink); }
+    :root { color-scheme:light; --paper:#fff; --ink:#1b1e24; --muted:#5c6470; --line:#d8dce2; --blue:#3b6ea5; --amber:#a56112; --green:#22654c; --series:var(--ink); }
     * { box-sizing:border-box; }
-    body { margin:0; background:var(--paper); color:var(--ink); font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-    main { max-width:1120px; margin:auto; padding:28px 26px 48px; }
-    header { display:flex; justify-content:space-between; gap:24px; align-items:end; margin-bottom:30px; }
-    h1 { font-size:27px; line-height:1.25; letter-spacing:-.6px; margin:8px 0; }
-    h2 { font-size:21px; line-height:1.3; margin:0 0 8px; }
-    h3 { font-size:15px; margin:0 0 8px; }
-    p { margin:8px 0; }
-    .eyebrow { font-size:11px; font-weight:750; letter-spacing:1.8px; text-transform:uppercase; }
-    .caption { color:var(--muted); font-size:12px; line-height:1.6; }
-    .panel { border:1px solid var(--line); border-radius:10px; background:#fff; padding:19px 22px; margin-bottom:16px; min-width:0; }
-    .benchmark { margin:38px 0 48px; border-top:2px solid var(--ink); padding-top:24px; }
-    [data-role="series-note"] { margin-bottom:22px; }
-    [data-layout="metrics"], [data-layout="charts"], [data-role="verdicts"] { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; margin:16px 0; }
-    [data-layout="metrics"] > section, [data-role="verdicts"] > section { background:#f8fafc; border:1px solid var(--line); padding:15px; border-radius:8px; }
-    [data-layout="metrics"] strong { display:block; font-size:27px; line-height:1.4; }
-    [data-role="verdicts"] strong { display:block; font-size:17px; margin:5px 0; }
-    [data-role="findings"] { padding-left:19px; font-size:13px; }
-    [data-role="findings"] li { margin:5px 0; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { max-width:1000px; margin:auto; padding:22px 20px 40px; }
+    header { display:flex; justify-content:space-between; gap:20px; align-items:end; margin-bottom:6px; }
+    h1 { font-size:23px; line-height:1.25; letter-spacing:-.4px; margin:0 0 4px; }
+    h2 { font-size:17px; line-height:1.3; margin:0 0 6px; }
+    h3 { font-size:14px; margin:0 0 9px; }
+    p { margin:6px 0; }
+    .eyebrow { font-size:10px; font-weight:650; letter-spacing:.6px; text-transform:uppercase; color:var(--muted); }
+    .caption { color:var(--muted); font-size:12px; line-height:1.5; }
+    .panel { border:1px solid var(--line); border-radius:12px; background:#fff; padding:14px 18px; margin:14px 0; min-width:0; }
+    .benchmark { margin:24px 0 32px; scroll-margin-top:16px; }
+    .benchmark + .benchmark { border-top:1px solid var(--line); padding-top:24px; }
+    [data-role="series-note"] { margin-bottom:12px; }
+    nav { display:flex; flex-wrap:wrap; gap:8px 18px; margin:10px 0 16px; font-size:12px; }
+    [data-layout="metrics"], [data-layout="charts"], [data-role="verdicts"] { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:10px; margin:10px 0; }
+    [data-layout="metrics"] > section, [data-role="verdicts"] > section { border:1px solid var(--line); padding:9px 12px; border-radius:10px; min-width:0; }
+    [data-layout="metrics"] strong { display:block; font-size:21px; line-height:1.4; }
+    [data-layout="metrics"] p { font-size:12px; overflow-wrap:anywhere; }
+    [data-role="verdicts"] strong { display:block; font-size:20px; margin:2px 0; }
+    [data-role="verdicts"] details { margin:4px 0 0; font-size:11px; }
+    [data-role="verdicts"] details ul { padding-left:16px; }
+    [data-role="verdicts"] details[open] > summary { margin-bottom:4px; }
+    [data-role="findings"] { padding-left:19px; font-size:12.5px; margin:10px 0 4px; }
+    [data-role="findings"] li { margin:3px 0; }
     [data-layout="charts"] > section { min-width:0; }
     [data-status] { display:inline-block; padding:3px 8px; border:1px solid var(--line); border-radius:20px; font-size:11px; white-space:nowrap; }
     [data-status="complete"] { color:var(--green); background:#eaf4eb; }
     [data-status="incomplete"], [data-status="interrupted"], [data-status="not run"] { color:var(--amber); background:#fff0dc; }
     .table-scroll { overflow-x:auto; }
-    table { width:100%; border-collapse:collapse; font-size:13px; text-align:left; }
-    th { font-weight:650; font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); white-space:nowrap; }
-    th, td { padding:10px; border-bottom:1px solid #e8ece8; vertical-align:top; }
-    th:first-child, td:first-child { padding-left:0; }
-    td { font-variant-numeric:tabular-nums; }
-    [data-role="board"] td[data-metric] { min-width:140px; }
+    table { width:100%; border-collapse:collapse; font-size:12px; text-align:left; margin-top:8px; }
+    th { font-weight:650; font-size:11px; color:var(--muted); white-space:nowrap; background:#f7f8fa; }
+    th, td { padding:6px 9px; border:1px solid var(--line); vertical-align:top; }
+    td { font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+    td:first-child { min-width:170px; max-width:260px; }
+    [data-role="board"] td[data-metric] { min-width:100px; }
     td[data-metric] { white-space:nowrap; }
     [data-direction="up"] { color:var(--green); }
     [data-direction="down"] { color:#a13730; }
     [data-changed="true"] { color:var(--amber); font-weight:600; }
-    [data-role="board"] strong { font-size:15px; }
-    [data-role="paired-bars"] > div { display:grid; grid-template-columns:minmax(210px,1fr) minmax(280px,1.7fr); align-items:center; gap:16px; border-bottom:1px solid var(--line); padding:12px 0; }
-    [data-role="paired-bars"] button { font-weight:600; overflow-wrap:anywhere; }
-    [data-role="paired-bars"] svg { min-width:280px; }
-    [data-role="heatmap"] th { white-space:normal; min-width:100px; }
-    [data-role="heatmap"] th:first-child { min-width:160px; }
-    [data-role="heatmap"] td { border:3px solid white; font-size:12px; }
-    [data-role="heatmap"] td:first-child { border-left:0; }
+    [data-role="board"] strong { font-size:12px; }
+    [data-role="board"] .caption, [data-role="models"] .caption { font-size:11px; }
+    .score-key { display:flex; flex-wrap:wrap; gap:16px; margin:8px 0; font-size:11px; }
+    .score-key span::before { content:""; display:inline-block; width:14px; height:8px; margin-right:5px; background:var(--blue); }
+    .score-key span:last-child::before { background:#c47a22; }
+    [data-role="paired-bars"] > div { display:grid; grid-template-columns:minmax(190px,1fr) minmax(280px,1.75fr); align-items:center; gap:18px; border-bottom:1px solid #edf0f3; padding:5px 0; }
+    [data-role="paired-bars"] > [data-role="bar-axis"] { border:0; padding:0; }
+    [data-role="paired-bars"] button { display:block; font-weight:600; font-size:12px; overflow-wrap:anywhere; }
+    [data-role="paired-bars"] svg { min-width:0; }
+    [data-role="paired-bars"] .caption { font-size:11px; }
+    [data-role="heatmap"] th { white-space:normal; min-width:82px; }
+    [data-role="heatmap"] th:first-child { min-width:220px; }
+    [data-role="heatmap"] td { font-size:11px; text-align:center; vertical-align:middle; }
+    [data-role="heatmap"] td:first-child { text-align:left; background:white; }
+    [data-role="heatmap"] th:first-child, [data-role="heatmap"] td:first-child { position:sticky; left:0; z-index:1; }
+    [data-role="heatmap"] button { font-size:11px; font-weight:600; }
+    [data-role="models"] td:last-child { min-width:130px; }
     [data-role="speed"] svg { max-width:780px; margin:0 auto; }
-    [data-role="speed"] ul { list-style:none; padding:0; font-size:12px; overflow-wrap:anywhere; }
-    [data-role="speed"] li { --line-style:solid; margin:12px 0; padding-left:28px; position:relative; }
+    [data-role="speed"] ul { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 22px; list-style:none; padding:0; font-size:11px; overflow-wrap:anywhere; }
+    [data-role="speed"] li { --line-style:solid; margin:0; padding-left:28px; position:relative; }
     [data-role="speed"] li::before { content:""; position:absolute; left:0; top:8px; width:20px; border-top:2px var(--line-style,solid) var(--series); }
     [data-role="verdicts"] .caption, [data-role="heatmap"] th { overflow-wrap:anywhere; }
-    button { font:inherit; border:0; background:none; color:var(--blue); padding:0; cursor:pointer; text-align:left; text-decoration:underline; text-underline-offset:3px; }
+    button { font:inherit; border:0; background:none; color:var(--blue); padding:0; cursor:pointer; text-align:left; text-decoration:underline; text-underline-offset:3px; overflow-wrap:anywhere; }
     a { color:var(--blue); text-underline-offset:3px; }
     :focus-visible { outline:3px solid #62a3c3; outline-offset:4px; }
-    .legend { display:flex; flex-wrap:wrap; gap:16px; font-size:12px; margin:12px 0; }
+    .legend { display:flex; flex-wrap:wrap; gap:16px; font-size:11px; margin:10px 0; }
     .legend span::before { content:""; display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; background:var(--series); }
     svg { display:block; width:100%; height:auto; overflow:visible; }
-    svg text { fill:var(--muted); font-size:11px; }
+    svg text { fill:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
     svg circle[role="button"] { cursor:pointer; }
-    details { margin:20px 0; }
+    details { margin:14px 0; }
     summary { cursor:pointer; font-weight:650; }
     details[open] > summary { margin-bottom:18px; }
     [data-layout="comparison"] { display:flex; flex-wrap:wrap; gap:20px; margin:18px 0; }
@@ -71,21 +86,23 @@
     dt { color:var(--muted); }
     dd { margin:0; overflow-wrap:anywhere; font-family:ui-monospace,monospace; }
     code { font-size:12px; overflow-wrap:anywhere; }
-    .definitions { display:grid; grid-template-columns:repeat(3,1fr); gap:20px 28px; margin-top:22px; }
-    .definitions h3 { font-size:15px; }
-    .definitions p { color:var(--muted); font-size:13px; }
+    .definitions { display:grid; gap:9px; margin-top:14px; }
+    .definitions > div { display:grid; grid-template-columns:170px 1fr; gap:14px; }
+    .definitions h3 { font-size:12px; margin:0; }
+    .definitions p { color:var(--muted); font-size:12px; margin:0; }
     footer { font-size:12px; color:var(--muted); }
     [hidden] { display:none !important; }
-    @media(max-width:800px) { main { padding:22px 16px; } h1 { font-size:24px; } header { display:block; } .definitions { grid-template-columns:1fr 1fr; } }
-    @media(max-width:640px) { [data-role="paired-bars"] > div { grid-template-columns:1fr; gap:4px; } [data-role="paired-bars"] svg { min-width:0; } }
-    @media(max-width:520px) { .definitions { grid-template-columns:1fr; } .panel { padding:14px; } }
+    @media(max-width:800px) { main { padding:18px 14px; } header { display:block; } }
+    @media(max-width:640px) { [data-role="paired-bars"] > div { grid-template-columns:1fr; gap:2px; padding:8px 0; } [data-role="paired-bars"] > [data-role="bar-axis"] > :first-child { display:none; } [data-role="speed"] ul { grid-template-columns:1fr; } [data-role="heatmap"] th:first-child { min-width:150px; } [data-role="heatmap"] td:first-child { min-width:150px; max-width:150px; } button { min-height:32px; } }
+    @media(max-width:520px) { .definitions > div { grid-template-columns:1fr; gap:2px; } .panel { padding:12px; } h1 { font-size:21px; } [data-layout="charts"] { grid-template-columns:1fr; } }
     @media print { body { background:white; } main { padding:0; } .panel, [data-layout="metrics"] { break-inside:avoid; } }
   </style>
 </head>
 <body>
 <main>
-  <header><div><div class="eyebrow">Vikram / Benchmark history</div><h1>Agent benchmark · pass@1 / pass@3</h1><p class="caption">Compare configurations. See what changed. Follow progress over time.</p></div><p id="run-count" class="caption"></p></header>
+  <header><div><h1>Vikram benchmark · pass@1 / pass@3</h1><p class="caption">Local models, every thinking level, and the agent’s progress over time.</p></div><p id="run-count" class="caption"></p></header>
   <p id="report-summary" class="caption"></p>
+  <nav aria-label="Report sections"><a href="#benchmarks">Model comparison</a><a id="history-link" href="#benchmarks">History</a><a href="#terms">Metric guide</a></nav>
   <noscript>Enable JavaScript to explore this report. Its metrics and charts are embedded locally; no network connection is required.</noscript>
   <section id="empty" class="panel" hidden><h2>Start your benchmark history.</h2><p>Run <code>uv run vikram-eval run --label "Baseline"</code> to evaluate all thinking levels advertised by your local model. Run it again after changing the agent.</p></section>
   <div id="benchmarks"></div>
@@ -111,14 +128,15 @@
 <template id="benchmark-section">
   <section class="benchmark">
     <div class="eyebrow" data-role="suite-label"></div><h2 data-role="title"></h2><p class="caption" data-role="series-note"></p>
-    <section class="panel"><h3>Benchmark findings</h3><div data-role="verdicts"></div><ul data-role="findings"></ul><p class="caption">Observed results on this suite, not guarantees or significance tests. Ties are shown explicitly. Retry gains use the same runs for both metrics.</p></section>
-    <section class="panel"><h3>pass@1 vs pass@3 · every configuration</h3><p class="caption">Blue: pass@1. Amber: pass@3. Each row holds model, thinking level, and agent revision fixed; bars average complete runs. See the table for repeat counts and sample budgets.</p><div data-role="paired-bars"></div></section>
-    <section class="panel"><h3>Progress over time</h3><p class="caption">From the first complete baseline to the latest result, across agent changes.</p><div data-layout="metrics" data-role="metrics"></div><div class="legend" data-role="legend"></div><div data-layout="charts" data-role="charts"></div><p class="caption">Each point is a run. Select a point to inspect it. Gaps mark incomplete results or insufficient samples; missing scores never count as zero. A change in model or thinking level is also a configuration change, not necessarily an improvement to the code.</p></section>
-    <section class="panel"><h3>Quality and evaluation time</h3><p class="caption">Each model line connects Off → On or its advertised thinking levels in order. Points show pass@1 versus evaluation seconds per attempt, including grading and overhead; upper left is better. Agent revisions have separate lines. Missing levels break a line, and a single measured level is shown as one point. Exact values and all supported levels appear below.</p><div data-role="speed"></div></section>
-    <section class="panel"><h3>Per-case results</h3><p class="caption">Each cell shows pass@1 and pass@3; the background shades pass@1. Values use the same complete-run cohorts as the benchmark table. Untested levels and unavailable scores stay blank of color.</p><div class="table-scroll"><table data-role="heatmap"><thead></thead><tbody></tbody></table></div></section>
-    <section class="panel"><h3>Configuration benchmark</h3><p class="caption">Each thinking level has its own row. Scores are means of complete runs, with the latest result underneath. Configuration fingerprints keep prompt, tool, or harness changes separate. Different metrics may have different eligible run counts when sample budgets vary.</p><p class="caption" data-role="coverage"></p>
+    <section class="panel"><h3>Verdicts</h3><div data-role="verdicts"></div><ul data-role="findings"></ul><p class="caption">Observed results on this suite. Ties are listed; small samples and judge variability limit conclusions.</p></section>
+    <section class="panel"><h3>pass@1 vs pass@3 · per model and thinking level</h3><p class="caption">Mean of complete runs for each fixed agent configuration. Select a model row to inspect its latest run.</p><div class="score-key"><span>pass@1</span><span>pass@3</span></div><div data-role="paired-bars"></div></section>
+    <section class="panel"><h3>Quality and evaluation time</h3><div data-role="speed"></div><p class="caption">Upper left = higher pass@1 with less evaluation time. One color per model; lines connect Off → On or advertised named levels. Separate agent revisions keep separate lines. Missing scores break a line. Time includes grading and setup, not just model generation.</p></section>
+    <section class="panel"><h3>Per-case heatmap</h3><p class="caption">Each cell: pass@1 / pass@3. Color shows pass@1. The same complete-run cohorts are used in the summary; unavailable results are not zero.</p><div class="table-scroll"><table data-role="heatmap"><thead></thead><tbody></tbody></table></div></section>
+    <section class="panel"><h3>Model setup</h3><p class="caption">Recorded settings for each agent revision. Full prompt, runtime, dependency, and harness fingerprints are available in run details.</p><div class="table-scroll"><table data-role="models"><thead></thead><tbody></tbody></table></div></section>
+    <section class="panel"><h3>Summary table</h3><p class="caption">Scores average complete runs equally; latest scores and repeat counts appear underneath. Thinking settings and agent revisions stay separate.</p><p class="caption" data-role="coverage"></p>
       <div class="table-scroll"><table data-role="board"><thead></thead><tbody></tbody></table></div>
     </section>
+    <section class="panel" data-role="progress"><h3>History · progress over time</h3><p class="caption">From the first complete baseline to the latest result, across agent changes.</p><div data-layout="metrics" data-role="metrics"></div><div class="legend" data-role="legend"></div><div data-layout="charts" data-role="charts"></div><p class="caption">Each point is a run; select it to inspect. Gaps mark unavailable scores. Model and thinking changes also change the configuration, so a higher score does not by itself establish code improvement.</p></section>
     <section class="panel"><h3>Changes and results</h3><p class="caption">All runs in chronological order. Each score includes its change from the previous run. Labels and experiment names appear alongside the results.</p><div class="table-scroll"><table data-role="history"><thead></thead><tbody></tbody></table></div></section>
     <details class="panel" data-role="comparison"><summary>Compare two runs in detail</summary><div data-layout="comparison"><label>Baseline<select data-role="baseline" aria-label="Baseline"></select></label><label>Candidate<select data-role="candidate" aria-label="Candidate"></select></label></div>
       <p data-role="comparison-note"></p><div class="table-scroll"><table data-role="comparison-scores"><thead></thead><tbody></tbody></table></div>
