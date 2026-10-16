@@ -17,7 +17,7 @@
   const name = (run) => run.label || run.config.model;
   const thinking = (value) => value == null ? "Default / unspecified" : value === true ? "On" : value === false ? "Off" : value;
   const levelKey = (value) => JSON.stringify(value ?? null);
-  const title = (run) => `${date(run)} · ${name(run)} · ${thinking(run.config.thinking)} · ${run.run_id.slice(-8)}`;
+  const title = (run) => `${date(run)} · ${run.config.model} · ${thinking(run.config.thinking)}${run.label ? ` · ${run.label}` : ""} · ${run.run_id.slice(-8)}`;
   const versions = (run) => run.revision ? Object.entries(run.revision.harness)
     .sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => `${key} ${value}`).join("; ") : null;
   const settings = [
@@ -125,21 +125,29 @@
   }
 
   function pairedBars(target, entries, inspect) {
+    const width = window.innerWidth < 640 ? 350 : 440;
+    const left = 10, right = width-60;
+    const axis = node("div");
+    axis.dataset.role="bar-axis";
+    const ticks = svgNode("svg",{viewBox:`0 0 ${width} 22`,role:"img","aria-label":"Success probability from 0 to 100 percent"});
+    for (const value of [0,.25,.5,.75,1]) ticks.append(svgNode("text",{x:left+(right-left)*value,y:15,"text-anchor":value===0 ? "start" : value===1 ? "end" : "middle"},`${value*100}%`));
+    axis.append(node("span"),ticks); target.append(axis);
     for (const entry of entries) {
       const row = node("div"), label = node("div");
-      const heading = node(entry.runs.length ? "button" : "strong", entryTitle(entry));
+      row.dataset.thinking = thinking(entry.level);
+      const heading = node(entry.runs.length ? "button" : "strong", entry.run.config.model);
       if (entry.runs.length) heading.addEventListener("click", () => inspect(entry.runs.at(-1)));
       const values = metricColors.map(([k]) => `pass@${k}: ${entry.runs.length ? pct(average(entry,k)) : "Not run"}`);
-      label.append(heading, node("div", entry.run.label || "Unlabeled configuration", "caption"), node("div", values.join(" · "), "caption"));
-      const svg = svgNode("svg", {viewBox:"0 0 440 78", role:"img", "aria-label":`${entryTitle(entry)} · ${values.join(" · ")}`});
+      label.append(heading, node("div", `Thinking ${thinking(entry.level)}${entry.revisionLabel ? ` · ${entry.revisionLabel}` : ""}`, "caption"));
+      const svg = svgNode("svg", {viewBox:`0 0 ${width} 42`, role:"img", "aria-label":`${entryTitle(entry)} · ${values.join(" · ")}`});
+      for (const value of [0,.25,.5,.75,1]) svg.append(svgNode("line",{x1:left+(right-left)*value,x2:left+(right-left)*value,y1:0,y2:40,stroke:"#e8ecf1","stroke-width":.75}));
       for (const [index,[k,color]] of metricColors.entries()) {
-        const y = 12 + index*29, value = average(entry,k);
-        svg.append(svgNode("text", {x:0,y:y+11}, `pass@${k}`));
-        svg.append(svgNode("rect", {x:62,y,width:300,height:14,rx:2,fill:"#edf1f5"}));
-        if (value != null) svg.append(svgNode("rect", {x:62,y,width:300*value,height:14,rx:2,fill:color,"data-k":k}));
-        svg.append(svgNode("text", {x:372,y:y+11}, value == null ? "—" : pct(value)));
+        const y = 5 + index*20, value = average(entry,k);
+        svg.append(svgNode("rect", {x:left,y,width:right-left,height:10,rx:1,fill:"#f1f3f6"}));
+        if (value != null) svg.append(svgNode("rect", {x:left,y,width:(right-left)*value,height:10,rx:1,fill:color,"data-k":k}));
+        svg.append(svgNode("text", {x:right+8,y:y+9}, value == null ? "—" : pct(value)));
       }
-      for (const value of [0,.5,1]) svg.append(svgNode("text", {x:62+300*value,y:76,"text-anchor":"middle"}, `${value*100}%`));
+      if (!entry.runs.length || metricColors.some(([k]) => average(entry,k)==null)) label.append(node("div",values.join(" · "),"caption"));
       row.append(label,svg); target.append(row);
     }
   }
@@ -151,7 +159,12 @@
       const winners = measured.filter((entry) => Math.abs(value(entry)-best) < 1e-9);
       const card = node("section");
       card.append(node("div",label,"eyebrow"), node("strong", best == null ? "Not available" : format(best)),
-        node("p", winners.length === 1 ? entryTitle(winners[0]) : winners.length ? `${winners.length} configurations tied · ${winners.map(entryTitle).join("; ")}` : "Needs complete, eligible runs.","caption"));
+        node("p", winners.length === 1 ? entryTitle(winners[0]) : winners.length ? `${winners.length} configurations tied` : "Needs complete, eligible runs.","caption"));
+      if (winners.length>1) {
+        const details=node("details"), list=node("ul");
+        list.append(...winners.map((entry)=>node("li",entryTitle(entry))));
+        details.append(node("summary","View tied models"),list); card.append(details);
+      }
       part("verdicts").append(card);
     };
     verdict("Best observed pass@1", entries, (entry) => average(entry,1), pct);
@@ -202,7 +215,7 @@
       series.get(key).push(entry);
     }
     const legend = node("ul");
-    const colors = ["#376d9e", "#c47a22", "#22654c", "#88549f", "#a13730"];
+    const colors = ["#376d9e", "#c47a22", "#22654c", "#88549f", "#a13730", "#317c88", "#786126"];
     const models = [...new Set(runs.map((run) => run.config.model))].sort();
     const revisions = new Map(), labelBoxes = [];
     const labels = svgNode("g");
@@ -267,18 +280,25 @@
     target.append(legend);
   }
 
-  function heatmap(table, entries, cases) {
-    header(table,["Case",...entries.map(entryTitle)]);
-    for (const spec of cases) {
-      const row=node("tr"); cell(row,spec.label).append(node("div",spec.group,"caption"));
-      for (const entry of entries) {
+  function heatmap(table, entries, cases, inspect) {
+    header(table,["Model / thinking",...cases.map((spec)=>spec.label)]);
+    for (const entry of entries) {
+      const row=node("tr"), label=cell(row);
+      row.dataset.thinking=thinking(entry.level);
+      const heading=node(entry.runs.length ? "button" : "strong",entry.run.config.model);
+      if (entry.runs.length) heading.addEventListener("click",()=>inspect(entry.runs.at(-1)));
+      label.append(heading,node("div",`Thinking ${thinking(entry.level)}${entry.revisionLabel ? ` · ${entry.revisionLabel}` : ""}`,"caption"));
+      for (const spec of cases) {
         const td=cell(row);
+        const scores=[];
         for (const [k] of metricColors) {
           const values=eligible(entry,k).map((run)=>run.cases.find((item)=>item.id===spec.id)?.scores?.[k]).filter((value)=>value!=null);
           const value=mean(values);
-          td.append(node("div",`pass@${k}: ${entry.runs.length ? pct(value) : "Not run"}`));
+          scores.push(entry.runs.length ? pct(value) : "Not run");
           if (k===1 && value!=null) td.style.backgroundColor=`hsl(${Math.round(12+value*130)} 38% 92%)`;
         }
+        td.textContent=scores.join(" / ");
+        td.setAttribute("aria-label",`${spec.label} · pass@1: ${scores[0]} · pass@3: ${scores[1]}`);
       }
       table.querySelector("tbody").append(row);
     }
@@ -288,6 +308,8 @@
     const section = byId("benchmark-section").content.firstElementChild.cloneNode(true);
     const part = (role) => section.querySelector(`[data-role="${role}"]`);
     const last = items.at(-1);
+    part("progress").id=`history-${last.comparison_key}`;
+    if (number===1) byId("history-link").href=`#${part("progress").id}`;
     const ks = [...new Set([1, 3, ...items.flatMap((r) => r.config.ks)])].sort((a, b) => a-b);
     const judged = last.cases.some((c) => c.group === "judged");
     part("suite-label").textContent = `Eval suite ${number} · ${short(last.comparison_key)}${last.benchmark_version ? "" : " · legacy"}`;
@@ -300,7 +322,7 @@
       const card = node("section");
       card.dataset.k = String(k);
       card.append(node("div", `pass@${k}`, "eyebrow"), node("strong", pct(score(latest, k))),
-        node("p", latest ? `Latest complete · ${name(latest)} · ${thinking(latest.config.thinking)}` : `Needs a complete run with at least ${k} attempts per case.`),
+        node("p", latest ? `Latest complete · ${latest.config.model} · ${thinking(latest.config.thinking)}` : `Needs a complete run with at least ${k} attempts per case.`),
         node("p", complete.length > 1 ? `${delta(score(first,k), score(latest,k))} since first complete · baseline ${pct(score(first,k))} · best ${pct(score(best,k))}` : complete.length ? "First complete result; evaluate again to measure change." : "Missing results are not zero.", "caption"));
       if (latest && latest !== last) card.append(node("p", "Newer runs have no complete score for this metric.", "caption"));
       part("metrics").append(card);
@@ -353,6 +375,7 @@
     }
     const board = part("board");
     header(board, ["Model / configuration", "Thinking", ...ks.map((k) => `pass@${k}`), "Eval / attempt", "Runs / samples"]);
+    header(part("models"),["Model", "Thinking levels", "Configuration", "Generation settings"]);
     const entries = [];
     let missing = 0, expected = 0, unknown = 0;
     for (const family of families.values()) {
@@ -364,6 +387,12 @@
       if (!levels.size) unknown++;
       for (const key of levels.keys()) if (!family.some((r) => levelKey(r.config.thinking) === key)) missing++;
       for (const run of family) levels.set(levelKey(run.config.thinking), run.config.thinking);
+      const modelRow=node("tr");
+      cell(modelRow,newest.config.model);
+      cell(modelRow,[...levels.values()].map(thinking).join(", "));
+      cell(modelRow,newest.revision ? short(newest.configuration_key) : "Incomplete provenance").append(node("div",newest.label || "Unlabeled","caption"));
+      cell(modelRow,`Temperature ${newest.config.temperature}`).append(node("div",`${newest.config.timeout_seconds}s answer timeout`,"caption"));
+      part("models").querySelector("tbody").append(modelRow);
       for (const [key, level] of levels) {
         const matching = family.filter((r) => levelKey(r.config.thinking) === key);
         const latest = matching.at(-1);
@@ -398,8 +427,10 @@
     window.matchMedia?.("(max-width: 639px)").addEventListener("change", () => {
       part("speed").replaceChildren();
       speedChart(part("speed"),entries);
+      part("paired-bars").replaceChildren();
+      pairedBars(part("paired-bars"),entries,inspect);
     });
-    heatmap(part("heatmap"),entries,last.cases);
+    heatmap(part("heatmap"),entries,last.cases,inspect);
     for (const [, label, color] of groups) {
       const item = node("span", label);
       item.style.setProperty("--series", color);

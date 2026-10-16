@@ -170,12 +170,15 @@ open .vikram/evals/v1/report.html
 uv run vikram-eval report
 ```
 
-The report starts with a compact benchmark summary: best observed pass@1,
-pass@3, and evaluation time, with ties shown explicitly. Paired bars show
+The report uses compact cards: verdicts, paired score bars, quality versus time,
+a per-case heatmap, model setup, and a summary table. Verdicts show best observed
+pass@1, pass@3, and evaluation time; tied configurations are listed in an
+expandable detail. Paired bars share one percentage axis and show
 **pass@1 and pass@3 together for every configuration**. Findings describe the
 observed change from baseline and estimated retry gains using matched runs.
 
-The history section gives each metric its own progress card and graph,
+History follows the summary table, with a direct jump link at the top. It gives
+each metric its own progress card and graph,
 including other recorded budgets such as pass@5. Cards compare the latest
 complete result with the first complete result and show the best observed
 score. They remain visible even when a score is unavailable; pass@3 needs at
@@ -188,8 +191,9 @@ stay on separate lines. Unmeasured levels are listed as “Not run” and break 
 line; one measured level appears as a single point.
 This is active run duration divided by attempt count, including grading and
 overhead but excluding time spent on other configurations; it is not model-only
-response latency. A per-case heatmap shows both pass@1 and
-pass@3, using the same complete-run cohorts as the configuration table. Exact
+response latency. A per-case heatmap places model/thinking configurations in
+rows and cases in columns, with pass@1 / pass@3 in each cell, using the same
+complete-run cohorts as the configuration table. Exact
 values accompany the charts, tables scroll on small screens, and the glossary
 explains the metrics and their limits.
 
