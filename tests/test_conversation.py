@@ -14,6 +14,10 @@ def sse(payload):
     return "data: " + json.dumps(payload) + "\n\n"
 
 
+def offered(body):
+    return {tool["function"]["name"] for tool in body.get("tools", [])}
+
+
 class ConversationTests(unittest.IsolatedAsyncioTestCase):
     async def test_reasoning_streams_separately_from_the_answer(self):
         async def handler(request):
@@ -102,14 +106,15 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(events[-1]["reasoning_truncated"])
         self.assertEqual(events[-1]["text"], "Answer")
 
-    async def test_tool_budget_leaves_a_final_answer_request_without_tools(self):
+    async def test_web_budget_leaves_a_final_answer_request_without_web_tools(self):
         requests, calls = [], []
 
         async def handler(request):
             body = json.loads(request.content)
             requests.append(body)
             delta = {"content": "Final answer"}
-            if body.get("tools"):
+            searching = "web_search" in offered(body)
+            if searching:
                 delta = {
                     "tool_calls": [
                         {
@@ -137,7 +142,7 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
                                 "index": 0,
                                 "delta": delta,
                                 "finish_reason": (
-                                    "tool_calls" if body.get("tools") else "stop"
+                                    "tool_calls" if searching else "stop"
                                 ),
                             }
                         ],
@@ -167,7 +172,8 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
             ]
         self.assertEqual(len(calls), 3)
         self.assertEqual(len(requests), 4)
-        self.assertFalse(requests[-1].get("tools"))
+        self.assertNotIn("web_fetch", offered(requests[-1]))
+        self.assertIn("run_code", offered(requests[-1]))
         self.assertEqual(events[-1]["text"], "Final answer")
 
     async def test_closing_shared_stream_cancels_inflight_remote_call(self):

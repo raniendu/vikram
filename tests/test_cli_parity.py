@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import httpx
-from test_conversation import sse
+from test_conversation import offered, sse
 from test_desktop_runtime import ENTRY, SHOW
 
 from vikram import cli
@@ -208,9 +208,7 @@ class ParityTests(unittest.IsolatedAsyncioTestCase):
             system_clock.now.return_value.astimezone.return_value = (
                 clock.now.return_value
             )
-            cli = ChatSession(
-                "local:1", thinking="off", streamer=streamer_for(0)
-            )
+            cli = ChatSession("local:1", thinking="off", streamer=streamer_for(0))
             cli.catalog.refresh = discover
             store = Store(Path(root))
             chat = store.create_chat("local:1")
@@ -231,7 +229,8 @@ class ParityTests(unittest.IsolatedAsyncioTestCase):
             if failure:
                 self.assertIn("unavailable", json.dumps(traces[0][1]["messages"]))
                 self.assertNotIn("Private response", json.dumps(traces))
-                self.assertFalse(traces[0][1].get("tools"))
+                self.assertNotIn("web_search", offered(traces[0][1]))
+                self.assertIn("run_code", offered(traces[0][1]))
             else:
                 self.assertIn("Evidence", json.dumps(traces[0][-1]["messages"]))
             self.assertEqual(

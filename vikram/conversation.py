@@ -20,7 +20,9 @@ from pydantic_ai.usage import UsageLimits
 
 from vikram.agent import build_agent
 from vikram.errors import ReplyError, reply_error
+from vikram.interaction import Interaction, Unattended
 from vikram.ollama import thinking_request
+from vikram.toolkit import REQUEST_LIMIT, Mode, Reply
 from vikram.web import WebSession
 
 DEFAULT_WEB = "auto"
@@ -53,8 +55,22 @@ class ObservedStream(httpx.AsyncByteStream):
 
 
 async def stream_reply(
-    model, thinking, history, prompt, *, web="off", session_id="", transport=None
+    model,
+    thinking,
+    history,
+    prompt,
+    *,
+    web="off",
+    session_id="",
+    transport=None,
+    mode: Mode = "normal",
+    interaction: Interaction | None = None,
 ) -> AsyncIterator[dict]:
+    """Stream one reply. Tool-capable models (web "auto") also get the toolkit.
+
+    `interaction` is the person who answers questions and reviews plans; without
+    one, questions are declined and plans stay unapproved.
+    """
     queue = asyncio.Queue()
     reported, parts = {}, {}
     current = ""
@@ -83,12 +99,19 @@ async def stream_reply(
                 "reasoning_truncated": reasoning_truncated,
                 "actual_model": reported.get("model"),
                 "phase": phase,
+                "mode": reply.mode,
+                "activity": reply.snapshot(),
                 **session.state(),
                 **extra,
             }
         )
 
     session = WebSession(session_id, emit=lambda event: send(**event))
+    reply = Reply(
+        mode=mode,
+        interaction=interaction or Unattended(),
+        notify=lambda phase: send(phase=phase),
+    )
 
     async def observe(response):
         response.stream = ObservedStream(response.stream, reported)
@@ -108,13 +131,15 @@ async def stream_reply(
                     http_client=client,
                     web=web,
                     tools=session.tools() if web == "auto" else (),
+                    toolkit=web == "auto",
                 )
                 agent.model.client.max_retries = 0
                 async with agent.run_stream_events(
                     prompt,
+                    deps=reply,
                     message_history=history,
                     model_settings={"extra_body": thinking_request(thinking)},
-                    usage_limits=UsageLimits(request_limit=5),
+                    usage_limits=UsageLimits(request_limit=REQUEST_LIMIT),
                 ) as events:
                     async for event in events:
                         if isinstance(event, PartStartEvent):

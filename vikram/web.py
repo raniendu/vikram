@@ -13,6 +13,8 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_ai import Tool
 
+from vikram.toolkit import REQUEST_LIMIT
+
 ENDPOINT = "https://search.parallel.ai/mcp"
 MAX_RESPONSE = 1024 * 1024
 
@@ -264,7 +266,7 @@ class WebSession:
                 if self.disabled
                 or self.calls >= 3
                 or self.elapsed >= 60
-                or ctx.usage.requests >= 4
+                or ctx.usage.requests >= REQUEST_LIMIT - 1
                 else definition
             )
 

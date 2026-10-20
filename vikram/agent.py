@@ -4,9 +4,20 @@ from datetime import datetime, timezone
 
 import httpx
 import pydantic_ai
-from pydantic_ai import Agent
+from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.ollama import OllamaModel
 from pydantic_ai.providers.ollama import OllamaProvider
+
+from vikram.toolkit import (
+    PLAN_PROMPT,
+    TEXT_PLAN_PROMPT,
+    TOOLKIT_PROMPT,
+    Mode,
+    Reply,
+    mode_of,
+    toolkit_capabilities,
+    toolkit_tools,
+)
 
 pydantic_ai.BANNER_ENABLED = False
 
@@ -20,16 +31,29 @@ CONTENT_PROMPT = (
     "You have no direct filesystem access. "
 )
 SYSTEM_PROMPT = CONTENT_PROMPT + "You have no tools or live internet access."
-
-
-WEB_PROMPT = CONTENT_PROMPT + (
+WEB_GUIDANCE = (
     "Use web_search or web_fetch when current information or external evidence "
     "is needed. Do not search for greetings, simple reasoning, or document-only "
     "questions unless external facts are needed. Cite retrieved source URLs. "
     "Use concise search queries "
     "and avoid disclosing private details unnecessarily. If search fails, say what "
-    "you could not verify. You have no other tools or direct filesystem access."
+    "you could not verify. "
 )
+WEB_PROMPT = CONTENT_PROMPT + WEB_GUIDANCE + "You have no other tools."
+
+
+def agent_prompt(*, web: bool, toolkit: bool, mode: Mode = "normal") -> str:
+    """Instructions for one combination of web tools, local tools, and mode."""
+    if toolkit:
+        prompt = CONTENT_PROMPT + (
+            WEB_GUIDANCE if web else "You have no live internet access. "
+        )
+        prompt += TOOLKIT_PROMPT
+    else:
+        prompt = WEB_PROMPT if web else SYSTEM_PROMPT
+    if mode == "plan":
+        prompt += "\n\n" + (PLAN_PROMPT if toolkit else TEXT_PLAN_PROMPT)
+    return prompt
 
 
 def system_time_instructions() -> str:
@@ -53,11 +77,25 @@ def build_agent(
     http_client: httpx.AsyncClient | None = None,
     web: str = "off",
     tools=(),
-) -> Agent[None, str]:
-    """Build the repository's agent using a model installed in local Ollama."""
+    toolkit: bool = False,
+) -> Agent[Reply, str]:
+    """Build the repository's agent using a model installed in local Ollama.
+
+    `toolkit` adds the code sandbox, questions, and plan mode. Run it with
+    `deps=Reply(...)`, which carries the reply's mode, person, and activity.
+    """
     model = model.strip()
     if not model:
         raise ValueError("An Ollama model name is required.")
+
+    def instructions(ctx: RunContext[Reply]) -> str:
+        # Recomputed per request, so an approved plan drops plan-mode guidance.
+        return (
+            agent_prompt(web=web != "off", toolkit=toolkit, mode=mode_of(ctx))
+            + "\n\n"
+            + system_time_instructions()
+        )
+
     return Agent(
         OllamaModel(
             model,
@@ -68,9 +106,9 @@ def build_agent(
             ),
         ),
         name="Vikram",
-        instructions=lambda: (SYSTEM_PROMPT if web == "off" else WEB_PROMPT)
-        + "\n\n"
-        + system_time_instructions(),
-        tools=tools,
-        retries=1,
+        deps_type=Reply,
+        instructions=instructions,
+        tools=[*tools, *(toolkit_tools() if toolkit else ())],
+        capabilities=toolkit_capabilities() if toolkit else (),
+        retries=2,
     )
