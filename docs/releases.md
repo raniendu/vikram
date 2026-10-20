@@ -64,8 +64,8 @@ uv run python scripts/check_installer.py dist/installers/Vikram-0.1.0-macos-arm6
 The build produces the versioned ZIP, its `.sha256` checksum, and a clickable
 `dist/installers/Install Vikram.app`. `--skip-build` packages a previously built
 app, checking its version, signature and runtime first. The smoke check extracts
-the actual ZIP and exercises installation, reinstallation, bundled CLI startup
-and the desktop protocol in a disposable directory. It does not install into
+the actual ZIP and exercises installation, reinstallation, bundled CLI startup,
+the bundled Python sandbox, and the desktop protocol in a disposable directory. It does not install into
 the owner's account or contact Ollama/Parallel.
 
 All four versions must agree: `pyproject.toml`,

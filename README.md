@@ -52,7 +52,8 @@ The bundled app includes its Python service; it needs no separate Python runtime
 This is an ad-hoc signed local build, not a notarized distribution release.
 Local signing leaves Hardened Runtime off so the bundled Python libraries can
 load. Distribution would require Developer ID signing and notarization. The
-build verifies the bundle signature and sidecar startup in an empty test library.
+build runs the bundled Python sandbox once, then verifies the bundle signature
+and sidecar startup in an empty test library.
 The build script requires 24 GiB free to protect the owner's 20 GiB reserve.
 
 For development:
