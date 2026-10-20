@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import io
 import json
@@ -235,5 +236,115 @@ class ParityTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("Evidence", json.dumps(traces[0][-1]["messages"]))
             self.assertEqual(
                 store.chat(cid)["messages"][-1]["attempts"][-1]["status"], "complete"
+            )
+            store.close()
+
+
+class InteractionParityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cli_and_desktop_send_identical_question_and_plan_turns(self):
+        from test_toolkit import Model, tool_call
+
+        from vikram.interaction import ScriptedInteraction
+
+        def model():
+            return Model(
+                tool_call(
+                    "ask_user_question",
+                    {
+                        "questions": [
+                            {
+                                "header": "Scale",
+                                "question": "Which scale?",
+                                "options": [
+                                    {"label": "Celsius"},
+                                    {"label": "Fahrenheit"},
+                                ],
+                            }
+                        ]
+                    },
+                    "q1",
+                ),
+                tool_call("submit_plan", {"plan": "1. Convert."}, "p1"),
+                tool_call("run_code", {"code": "(25 - 32) * 5 / 9"}, "c1"),
+                "-3.9 °C",
+            )
+
+        async def discover():
+            return [
+                parse_model(
+                    ENTRY, {**SHOW, "capabilities": SHOW["capabilities"] + ["tools"]}
+                )
+            ]
+
+        models = [model(), model()]
+        with (
+            patch("vikram.agent.datetime") as clock,
+            tempfile.TemporaryDirectory() as root,
+        ):
+            clock.now.return_value.astimezone.return_value = datetime(
+                2026, 10, 20, tzinfo=timezone.utc
+            )
+            cli = ChatSession(
+                "local:1",
+                thinking="off",
+                mode="plan",
+                streamer=partial(
+                    stream_reply, transport=httpx.MockTransport(models[0])
+                ),
+            )
+            cli.catalog.refresh = discover
+            _ = [
+                e
+                async for e in cli.reply(
+                    "Convert 25 degrees",
+                    interaction=ScriptedInteraction(pattern="fahrenheit"),
+                )
+            ]
+            store = Store(Path(root))
+            cid = store.create_chat("local:1")["id"]
+            store.update_chat(cid, thinking={"local:1": False}, mode="plan")
+
+            def answer(event):
+                if event["event"] != "attempt" or event["status"] != "running":
+                    return
+                for record in event.get("activity", []):
+                    if record["status"] != "waiting":
+                        continue
+                    params = (
+                        {"answers": [{"header": "Scale", "selected": ["Fahrenheit"]}]}
+                        if record["kind"] == "question"
+                        else {"decision": "approve"}
+                    )
+                    asyncio.get_running_loop().call_soon(
+                        runtime.respond,
+                        {
+                            "chat_id": cid,
+                            "attempt_id": event["attempt_id"],
+                            "interaction_id": record["id"],
+                            "kind": record["kind"],
+                            **params,
+                        },
+                    )
+
+            runtime = Runtime(
+                store,
+                answer,
+                streamer=partial(
+                    stream_reply, transport=httpx.MockTransport(models[1])
+                ),
+            )
+            runtime.catalog.refresh = discover
+            store.save_draft(cid, "Convert 25 degrees", 10)
+            await runtime.send(cid, "r1")
+            await runtime.task
+            attempt = store.chat(cid)["messages"][-1]["attempts"][-1]
+            self.assertEqual(attempt["status"], "complete", attempt["error"])
+            self.assertEqual(models[0].bodies, models[1].bodies)
+            self.assertEqual(len(models[0].bodies), 4)
+            self.assertEqual(cli.mode, "normal")
+            self.assertEqual(store.chat(cid)["mode"], "normal")
+            self.assertEqual(
+                [(r["kind"], r["status"]) for r in cli.turns[-1]["activity"]],
+                [(r["kind"], r["status"]) for r in attempt["activity"]],
             )
             store.close()

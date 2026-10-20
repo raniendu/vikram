@@ -1,6 +1,6 @@
 """Versioned JSON-lines input validation for the private Rust/Python channel."""
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
 
@@ -30,6 +30,7 @@ class ChatFields(Params):
     folder_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
     model: str | None = Field(default=None, max_length=256)
     thinking: dict[str, StrictBool | StrictStr | None] | None = None
+    mode: Literal["normal", "plan"] | None = None
 
 
 class UpdateChat(Chat):
@@ -72,6 +73,26 @@ class Send(Chat):
     request_id: str = Field(min_length=1, max_length=80)
 
 
+class Answer(Params):
+    header: str = Field(min_length=1, max_length=25)
+    selected: list[Annotated[str, Field(max_length=50)]] = Field(
+        default_factory=list, max_length=6
+    )
+    custom_answer: str | None = Field(default=None, max_length=2000)
+
+
+class Respond(Chat):
+    """A person's answer to the active reply's question or plan."""
+
+    attempt_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    interaction_id: str = Field(min_length=1, max_length=120)
+    kind: Literal["question", "plan"]
+    answers: list[Answer] = Field(default_factory=list, max_length=10)
+    cancelled: bool = False
+    decision: Literal["approve", "revise", "dismiss"] | None = None
+    feedback: str | None = Field(default=None, max_length=2000)
+
+
 PARAMS = {
     "hello": Params,
     "snapshot": Params,
@@ -93,6 +114,7 @@ PARAMS = {
     "image": Image,
     "remove_image": Image,
     "send": Send,
+    "respond": Respond,
 }
 
 
@@ -110,7 +132,7 @@ def validate_parameters(cmd: Command) -> Command:
         fields = cmd.params["fields"]
         if any(
             fields.get(key) is None
-            for key in ("title", "model", "thinking")
+            for key in ("title", "model", "thinking", "mode")
             if key in fields
         ):
             raise ValueError("Invalid chat settings.")

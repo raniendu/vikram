@@ -1,12 +1,15 @@
 import asyncio
 import tempfile
 import unittest
+from functools import partial
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
 from pydantic_ai.messages import BinaryContent, ModelRequest, UserPromptPart
 from test_desktop_store import png
 
+from vikram.conversation import stream_reply
 from vikram.desktop.history import inference_messages
 from vikram.desktop.models import ModelCatalog, parse_model
 from vikram.desktop.runtime import Runtime
@@ -267,3 +270,166 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         await self.runtime.stop()
         attempt = self.store.chat(self.chat["id"])["messages"][0]["attempts"][0]
         self.assertEqual(attempt["searches"][0]["status"], "stopped")
+
+
+TOOL_SHOW = {**SHOW, "capabilities": SHOW["capabilities"] + ["tools"]}
+QUESTION = {
+    "questions": [
+        {
+            "header": "Scale",
+            "question": "Which scale is it in?",
+            "options": [{"label": "Celsius"}, {"label": "Fahrenheit"}],
+        }
+    ]
+}
+
+
+class InteractionRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = Store(Path(self.tmp.name))
+        self.chat = self.store.create_chat("local:1")
+        self.events, self.answers, self.rejections = [], [], []
+        self.answered = set()
+
+    async def asyncTearDown(self):
+        await self.runtime.stop()
+        self.store.close()
+        self.tmp.cleanup()
+
+    def on_event(self, event):
+        self.events.append(event)
+        if event["event"] != "attempt" or event["status"] != "running":
+            return
+        for record in event.get("activity", []):
+            if record["status"] == "waiting" and record["id"] not in self.answered:
+                self.answered.add(record["id"])
+                params = self.answers.pop(0)(record)
+                asyncio.get_running_loop().call_soon(
+                    self.respond, event, record, params
+                )
+
+    def respond(self, event, record, params):
+        # A rejected answer leaves the reply waiting; the person tries again.
+        while True:
+            try:
+                return self.runtime.respond(
+                    {
+                        "chat_id": event["chat_id"],
+                        "attempt_id": event["attempt_id"],
+                        "interaction_id": record["id"],
+                        "kind": record["kind"],
+                        **params,
+                    }
+                )
+            except ValueError as error:
+                self.rejections.append(str(error))
+                params = self.answers.pop(0)(record)
+
+    async def send(self, model, prompt="Convert 25 degrees"):
+        self.runtime = Runtime(
+            self.store,
+            self.on_event,
+            streamer=partial(stream_reply, transport=httpx.MockTransport(model)),
+        )
+
+        async def discover():
+            return [parse_model(ENTRY, TOOL_SHOW)]
+
+        self.runtime.catalog.refresh = discover
+        revision = len(self.store.chat(self.chat["id"])["messages"]) * 10 + 10
+        self.store.save_draft(self.chat["id"], prompt, revision)
+        await self.runtime.send(self.chat["id"], f"r{revision}")
+        return self.runtime.task
+
+    async def test_question_answered_in_the_window_reaches_the_model_and_history(self):
+        from test_toolkit import Model, tool_call, tool_results
+
+        self.answers = [
+            lambda record: {"answers": [{"header": "Scale", "selected": ["Kelvin"]}]},
+            lambda record: {
+                "answers": [{"header": "Scale", "selected": ["Fahrenheit"]}]
+            },
+        ]
+        model = Model(tool_call("ask_user_question", QUESTION), "It is -3.9 °C.")
+        await (await self.send(model))
+        self.assertEqual(len(self.rejections), 1)
+        self.assertIn("Fahrenheit", tool_results(model.bodies[1])[0])
+        attempt = self.store.chat(self.chat["id"])["messages"][0]["attempts"][0]
+        self.assertEqual(attempt["status"], "complete")
+        self.assertEqual(attempt["activity"][0]["answers"], {"Scale": ["Fahrenheit"]})
+        self.assertTrue(
+            any(
+                r["status"] == "waiting"
+                for e in self.events
+                if e["event"] == "attempt"
+                for r in e.get("activity", [])
+            )
+        )
+        self.store.save_draft(self.chat["id"], "And 30?", 100)
+        chat = self.store.chat(self.chat["id"])
+        history, _ = inference_messages(
+            self.store, self.chat["id"], chat["messages"][0]["id"], False
+        )
+        self.assertEqual(history, [])
+        message = self.store.begin(self.chat["id"], "local:1", None, "next")
+        history, _ = inference_messages(
+            self.store, self.chat["id"], message["message_id"], False
+        )
+        self.assertIn("Fahrenheit", str(history[0].parts[0].content))
+
+    async def test_approved_plan_ends_plan_mode_for_the_chat(self):
+        from test_toolkit import Model, tool_call
+
+        self.store.update_chat(self.chat["id"], mode="plan")
+        self.answers = [
+            lambda record: {"decision": "revise"},
+            lambda record: {"decision": "approve"},
+        ]
+        model = Model(
+            tool_call("submit_plan", {"plan": "1. Convert."}, "p1"),
+            tool_call("run_code", {"code": "(25 - 32) * 5 / 9"}, "c1"),
+            "-3.9 °C",
+        )
+        await (await self.send(model))
+        self.assertEqual(
+            self.rejections, ["Describe the changes you want to the plan."]
+        )
+        attempt = self.store.chat(self.chat["id"])["messages"][0]["attempts"][0]
+        self.assertEqual(attempt["mode"], "plan")
+        self.assertEqual(
+            [(r["kind"], r["status"]) for r in attempt["activity"]],
+            [("plan", "approved"), ("code", "complete")],
+        )
+        self.assertEqual(self.store.chat(self.chat["id"])["mode"], "normal")
+        self.assertIn("chat_mode", [e["event"] for e in self.events])
+
+    async def test_stop_while_waiting_for_an_answer_marks_it_stopped(self):
+        from test_toolkit import Model, tool_call
+
+        model = Model(tool_call("ask_user_question", QUESTION))
+        self.answers = [lambda record: None]
+
+        def hold(event, record, params):
+            pass
+
+        self.respond = hold
+        task = await self.send(model)
+        while not self.runtime.waiting:
+            await asyncio.sleep(0.01)
+        await self.runtime.stop()
+        attempt = self.store.chat(self.chat["id"])["messages"][0]["attempts"][0]
+        self.assertEqual(attempt["status"], "stopped")
+        self.assertEqual(attempt["activity"][0]["status"], "stopped")
+        self.assertEqual(self.runtime.waiting, {})
+        self.assertTrue(task.done())
+        with self.assertRaises(ValueError):
+            self.runtime.respond(
+                {
+                    "chat_id": self.chat["id"],
+                    "attempt_id": attempt["id"],
+                    "interaction_id": attempt["activity"][0]["id"],
+                    "kind": "question",
+                    "cancelled": True,
+                }
+            )

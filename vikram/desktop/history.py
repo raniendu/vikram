@@ -41,6 +41,7 @@ def inference_messages(
                 "answer": completed["content"] if completed else None,
                 "sources": completed["sources"] if completed else [],
                 "model": completed["actual_model"] if completed else None,
+                "activity": completed["activity"] if completed else [],
             }
         )
     raise ValueError("The message is no longer available.")

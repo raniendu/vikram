@@ -48,6 +48,41 @@ class ProtocolTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 validate_command(json.dumps(value))
 
+    def test_respond_and_plan_mode_are_strictly_validated(self):
+        def command(method, params):
+            return validate_command(
+                json.dumps({"v": 1, "id": "r", "method": method, "params": params})
+            )
+
+        base = {"chat_id": "a" * 32, "attempt_id": "b" * 32, "interaction_id": "q1"}
+        answer = command(
+            "respond",
+            {
+                **base,
+                "kind": "question",
+                "answers": [{"header": "Scale", "selected": ["Fahrenheit"]}],
+            },
+        )
+        self.assertEqual(answer.params["answers"][0]["selected"], ["Fahrenheit"])
+        plan = command("respond", {**base, "kind": "plan", "decision": "approve"})
+        self.assertEqual(plan.params["decision"], "approve")
+        mode = command("update_chat", {"chat_id": "a" * 32, "fields": {"mode": "plan"}})
+        self.assertEqual(mode.params["fields"], {"mode": "plan"})
+        for method, params in (
+            ("respond", {**base, "kind": "shell"}),
+            ("respond", {**base, "kind": "plan", "decision": "run anyway"}),
+            (
+                "respond",
+                {**base, "kind": "question", "answers": [{"header": "x" * 26}]},
+            ),
+            ("respond", {**base, "kind": "question", "attempt_id": "../x"}),
+            ("respond", {**base, "kind": "plan", "feedback": "x" * 2001}),
+            ("update_chat", {"chat_id": "a" * 32, "fields": {"mode": "auto"}}),
+            ("update_chat", {"chat_id": "a" * 32, "fields": {"mode": None}}),
+        ):
+            with self.subTest(params=params), self.assertRaises(ValueError):
+                command(method, params)
+
     def test_thinking_preserves_booleans_and_named_levels(self):
         self.assertEqual(
             ThinkingControls.model_validate({"values": [False, True]}).values,

@@ -27,6 +27,7 @@ const METHODS: &[&str] = &[
     "image",
     "remove_image",
     "send",
+    "respond",
 ];
 
 #[tauri::command]

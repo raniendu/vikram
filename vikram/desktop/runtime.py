@@ -2,18 +2,43 @@
 
 import asyncio
 import base64
+import json
 import sqlite3
 from collections.abc import Callable
 
 from vikram.agent import DEFAULT_MODEL
 from vikram.documents import ensure_space, extract_in_worker
 from vikram.errors import reply_error
+from vikram.interaction import (
+    AskUserAnswer,
+    AskUserResponse,
+    PlanReview,
+    check_response,
+)
 from vikram.models import prepare_model
 
 from .history import inference_messages
 from .inference import stream_reply
 from .models import ModelCatalog
 from .store import Store
+
+
+def _plain(text: str) -> str:
+    # Typed answers reach the model and the terminal: keep only newlines as controls.
+    return "".join(c for c in text.replace("\t", " ") if c == "\n" or c.isprintable())
+
+
+class DesktopInteraction:
+    """Questions and plan reviews for one attempt, answered with `respond`."""
+
+    def __init__(self, runtime: "Runtime", route: dict):
+        self.runtime, self.route = runtime, route
+
+    async def ask(self, request, /):
+        return await self.runtime.wait_for_person(self.route, "question", request)
+
+    async def review_plan(self, request, /):
+        return await self.runtime.wait_for_person(self.route, "plan", request)
 
 
 class Runtime:
@@ -25,6 +50,7 @@ class Runtime:
         self.task: asyncio.Task | None = None
         self.stopping = False
         self.starting = False
+        self.waiting: dict[str, tuple] = {}
 
     def event(self, event: str, **payload) -> None:
         self.emit({"v": 1, "event": event, **payload})
@@ -78,7 +104,13 @@ class Runtime:
                     chat_id, thinking={**chat["thinking"], chat["model"]: thinking}
                 )
             attempt = self.store.begin(
-                chat_id, selected["name"], thinking, request_id, retry, web=web
+                chat_id,
+                selected["name"],
+                thinking,
+                request_id,
+                retry,
+                web=web,
+                mode=chat["mode"],
             )
             self.active = {
                 "chat_id": chat_id,
@@ -115,6 +147,7 @@ class Runtime:
         )
         sources, searches = [], []
         reasoning, reasoning_truncated = "", False
+        activity, saved_activity, mode = [], "[]", attempt["mode"]
         iterator = None
         try:
             history, prompt = inference_messages(
@@ -127,6 +160,8 @@ class Runtime:
                 prompt,
                 web=attempt["web"],
                 session_id=attempt["chat_id"],
+                mode=attempt["mode"],
+                interaction=DesktopInteraction(self, route),
             )
             async for chunk in iterator:
                 if self.stopping or self.active != route:
@@ -137,6 +172,10 @@ class Runtime:
                     "reasoning_truncated", reasoning_truncated
                 )
                 sources, searches = chunk.get("sources", []), chunk.get("searches", [])
+                activity, mode = chunk.get("activity", activity), chunk.get(
+                    "mode", mode
+                )
+                encoded = json.dumps(activity)
                 revision += 1
                 try:
                     self.store.checkpoint(
@@ -148,7 +187,10 @@ class Runtime:
                         revision=revision,
                         reasoning=reasoning,
                         reasoning_truncated=reasoning_truncated,
+                        # Code and plans can be long: write them only when they change.
+                        activity=activity if encoded != saved_activity else None,
                     )
+                    saved_activity = encoded
                 except (sqlite3.Error, OSError):
                     unsaved = True
                     raise
@@ -164,6 +206,8 @@ class Runtime:
                     revision=revision,
                     reasoning=reasoning,
                     reasoning_truncated=reasoning_truncated,
+                    activity=activity,
+                    mode=mode,
                 )
             if self.stopping:
                 status = "stopped"
@@ -189,20 +233,26 @@ class Runtime:
                 except Exception:
                     pass
             try:
-                if any(s["status"] == "running" for s in searches):
+                unfinished = {"running", "waiting"}
+                if any(s["status"] in unfinished for s in [*searches, *activity]):
                     revision += 1
-                    searches = [
-                        (
-                            {
-                                **s,
-                                "status": (
-                                    status if status != "complete" else "interrupted"
-                                ),
-                            }
-                            if s["status"] == "running"
-                            else s
-                        )
-                        for s in searches
+                    searches, activity = [
+                        [
+                            (
+                                {
+                                    **s,
+                                    "status": (
+                                        status
+                                        if status != "complete"
+                                        else "interrupted"
+                                    ),
+                                }
+                                if s["status"] in unfinished
+                                else s
+                            )
+                            for s in records
+                        ]
+                        for records in (searches, activity)
                     ]
                     self.store.checkpoint(
                         attempt["id"],
@@ -211,8 +261,13 @@ class Runtime:
                         sources=sources,
                         searches=searches,
                         revision=revision,
+                        activity=activity,
                     )
                 self.store.finish(attempt["id"], status, error)
+                if attempt["mode"] == "plan" and mode == "normal":
+                    # An approved plan ends plan mode for the chat's next replies.
+                    self.store.update_chat(attempt["chat_id"], mode="normal")
+                    self.event("chat_mode", **route, mode="normal")
             except (sqlite3.Error, OSError):
                 unsaved, status, error = (
                     True,
@@ -232,11 +287,69 @@ class Runtime:
                 revision=revision,
                 reasoning=reasoning,
                 reasoning_truncated=reasoning_truncated,
+                activity=activity,
+                mode=mode,
             )
             # This release happens only after the stream context has closed.
             self.active = None
             self.stopping = False
             self.event("idle", **route)
+
+    async def wait_for_person(self, route: dict, kind: str, request):
+        """Park the reply until the window answers `request` with `respond`."""
+        future = asyncio.get_running_loop().create_future()
+        self.waiting[request.id] = (route["attempt_id"], kind, request, future)
+        try:
+            return await future
+        finally:
+            self.waiting.pop(request.id, None)
+
+    def respond(self, p: dict) -> None:
+        entry = self.waiting.get(p["interaction_id"])
+        if (
+            entry is None
+            or not self.active
+            or self.active["chat_id"] != p["chat_id"]
+            or entry[0] != p["attempt_id"]
+            or entry[1] != p["kind"]
+            or entry[3].done()
+        ):
+            raise ValueError("This reply is no longer waiting for that answer.")
+        _, kind, request, future = entry
+        if kind == "question":
+            response = AskUserResponse(
+                cancelled=p.get("cancelled", False),
+                answers=(
+                    ()
+                    if p.get("cancelled")
+                    else tuple(
+                        AskUserAnswer(
+                            header=answer["header"],
+                            selected=tuple(answer.get("selected", ())),
+                            custom_answer=(
+                                _plain(answer["custom_answer"]).strip()
+                                if answer.get("custom_answer") is not None
+                                else None
+                            ),
+                        )
+                        for answer in p.get("answers", [])
+                    )
+                ),
+            )
+            try:
+                check_response(request, response)
+            except ValueError:
+                raise ValueError(
+                    "Choose an option or type an answer for each question."
+                ) from None
+        else:
+            feedback = _plain(p.get("feedback") or "").strip() or None
+            if p.get("decision") is None or (
+                p["decision"] == "revise" and feedback is None
+            ):
+                raise ValueError("Describe the changes you want to the plan.")
+            response = PlanReview(decision=p["decision"], feedback=feedback)
+        future.set_result(response)
 
     async def stop(self) -> None:
         if self.task and not self.task.done():
@@ -336,6 +449,8 @@ class Runtime:
             )
         elif method == "stop":
             await self.stop()
+        elif method == "respond":
+            self.respond(p)
         else:
             raise ValueError("Unknown command.")
         return None

@@ -168,8 +168,9 @@ class StoreTests(unittest.TestCase):
         attempt = self.store.begin(cid, "local:1", None, "old")
         self.store.checkpoint(attempt["id"], "Saved answer", "local:1")
         self.store.finish(attempt["id"], "complete")
-        for column in ("reasoning", "reasoning_truncated"):
+        for column in ("reasoning", "reasoning_truncated", "mode", "activity"):
             self.store.db.execute(f"ALTER TABLE attempts DROP COLUMN {column}")
+        self.store.db.execute("ALTER TABLE chats DROP COLUMN mode")
         self.store.db.execute("PRAGMA user_version=3")
         self.store.db.commit()
         self.store.close()
@@ -180,12 +181,43 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(saved["reasoning"], "")
         self.assertIs(saved["reasoning_truncated"], False)
 
+    def test_version_four_adds_plan_mode_and_tool_activity(self):
+        cid = self.chat["id"]
+        self.store.save_draft(cid, "Saved question", 1)
+        attempt = self.store.begin(cid, "local:1", None, "old")
+        self.store.finish(attempt["id"], "complete")
+        for column in ("mode", "activity"):
+            self.store.db.execute(f"ALTER TABLE attempts DROP COLUMN {column}")
+        self.store.db.execute("ALTER TABLE chats DROP COLUMN mode")
+        self.store.db.execute("PRAGMA user_version=4")
+        self.store.db.commit()
+        self.store.close()
+        self.store = Store(self.root)
+        chat = self.store.chat(cid)
+        self.assertEqual(chat["mode"], "normal")
+        saved = chat["messages"][0]["attempts"][0]
+        self.assertEqual((saved["mode"], saved["activity"]), ("normal", []))
+        self.store.update_chat(cid, mode="plan")
+        self.store.save_draft(cid, "Plan it", 10)
+        attempt = self.store.begin(cid, "local:1", None, "new", mode="plan")
+        record = {"kind": "plan", "id": "p", "status": "approved", "plan": "1. Go"}
+        self.store.checkpoint(attempt["id"], "Done", "local:1", activity=[record])
+        self.store.checkpoint(attempt["id"], "Done.", "local:1")
+        self.store.finish(attempt["id"], "complete")
+        self.store.close()
+        self.store = Store(self.root)
+        latest = self.store.chat(cid)["messages"][-1]["attempts"][0]
+        self.assertEqual((latest["mode"], latest["activity"]), ("plan", [record]))
+        self.assertEqual(self.store.chat(cid)["mode"], "plan")
+        with self.assertRaises(ValueError):
+            self.store.update_chat(cid, mode="autopilot")
+
     def test_version_one_migrates_existing_chat_to_off(self):
         cid = self.chat["id"]
         self.store.import_image(cid, "photo.png", png())
         self.store.save_draft(cid, "preserved", 1)
         for table, columns in {
-            "chats": ["web"],
+            "chats": ["web", "mode"],
             "attachments": [
                 "kind",
                 "extracted_text",
@@ -199,6 +231,8 @@ class StoreTests(unittest.TestCase):
                 "revision",
                 "reasoning",
                 "reasoning_truncated",
+                "mode",
+                "activity",
             ],
         }.items():
             for column in columns:

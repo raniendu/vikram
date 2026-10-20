@@ -39,7 +39,7 @@ class Store:
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA busy_timeout=3000")
         version = self.db.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, 2, 3, 4):
+        if version not in (0, 1, 2, 3, 4, 5):
             self.db.close()
             raise ValueError("This chat library needs a newer version of Vikram.")
         self.db.executescript("""
@@ -107,6 +107,15 @@ class Store:
             PRAGMA user_version=4;
             COMMIT;
             """)
+        if version < 5:
+            self.db.executescript("""
+            BEGIN;
+            ALTER TABLE chats ADD COLUMN mode TEXT NOT NULL DEFAULT 'normal';
+            ALTER TABLE attempts ADD COLUMN mode TEXT NOT NULL DEFAULT 'normal';
+            ALTER TABLE attempts ADD COLUMN activity TEXT NOT NULL DEFAULT '[]';
+            PRAGMA user_version=5;
+            COMMIT;
+            """)
         with self.db:
             self.db.execute(
                 "UPDATE attempts SET status='interrupted', error='The app closed before this reply finished.' WHERE status='running'"
@@ -153,7 +162,7 @@ class Store:
                 (message["id"],),
             )
             for attempt in message["attempts"]:
-                for key in ("thinking", "sources", "searches"):
+                for key in ("thinking", "sources", "searches", "activity"):
                     attempt[key] = json.loads(attempt[key])
                 attempt["reasoning_truncated"] = bool(attempt["reasoning_truncated"])
         return chat
@@ -176,7 +185,10 @@ class Store:
             "folder_id",
             "model",
             "thinking",
+            "mode",
         }:
+            raise ValueError("Unsupported chat change.")
+        if "mode" in fields and fields["mode"] not in ("normal", "plan"):
             raise ValueError("Unsupported chat change.")
         if "title" in fields:
             fields["title"] = str(fields["title"]).strip()[:160]
@@ -349,6 +361,7 @@ class Store:
         request_id: str,
         retry: bool = False,
         web: str = DEFAULT_WEB,
+        mode: str = "normal",
     ) -> dict:
         chat = self.chat(chat_id)
         aid, timestamp = uid(), now()
@@ -399,7 +412,7 @@ class Store:
                         "UPDATE chats SET title=? WHERE id=?", (title, chat_id)
                     )
             self.db.execute(
-                "INSERT INTO attempts(id,chat_id,message_id,request_id,requested_model,thinking,status,created,updated,web) VALUES(?,?,?,?,?,?,'running',?,?,?)",
+                "INSERT INTO attempts(id,chat_id,message_id,request_id,requested_model,thinking,status,created,updated,web,mode) VALUES(?,?,?,?,?,?,'running',?,?,?,?)",
                 (
                     aid,
                     chat_id,
@@ -410,6 +423,7 @@ class Store:
                     timestamp,
                     timestamp,
                     web,
+                    mode,
                 ),
             )
             self.db.execute(
@@ -430,10 +444,11 @@ class Store:
         revision: int | None = None,
         reasoning: str | None = None,
         reasoning_truncated: bool | None = None,
+        activity: list | None = None,
     ) -> None:
         with self.db:
             cur = self.db.execute(
-                "UPDATE attempts SET content=?,actual_model=COALESCE(?,actual_model),sources=COALESCE(?,sources),searches=COALESCE(?,searches),revision=COALESCE(?,revision+1),reasoning=COALESCE(?,reasoning),reasoning_truncated=COALESCE(?,reasoning_truncated),updated=? WHERE id=? AND status='running'",
+                "UPDATE attempts SET content=?,actual_model=COALESCE(?,actual_model),sources=COALESCE(?,sources),searches=COALESCE(?,searches),revision=COALESCE(?,revision+1),reasoning=COALESCE(?,reasoning),reasoning_truncated=COALESCE(?,reasoning_truncated),activity=COALESCE(?,activity),updated=? WHERE id=? AND status='running'",
                 (
                     content,
                     actual_model,
@@ -442,6 +457,7 @@ class Store:
                     revision,
                     reasoning,
                     reasoning_truncated,
+                    json.dumps(activity) if activity is not None else None,
                     now(),
                     attempt_id,
                 ),
