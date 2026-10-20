@@ -123,7 +123,8 @@ def prepare_model(models: list[dict], name: str, thinking) -> tuple:
     effective = "auto" if selected.get("tools") else "off"
     if effective == "off":
         notices.append(
-            "Web search is unavailable for this model. Chat remains available."
+            "Web search, the Python sandbox, and questions are unavailable for "
+            "this model. Chat remains available."
         )
     return selected, thinking, effective, " ".join(notices) or None
 
