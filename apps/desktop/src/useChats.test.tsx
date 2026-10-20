@@ -291,3 +291,56 @@ describe("chat controller recovery", () => {
     expect(writes.at(-1)?.[1].text).toBe("typed during reconnect");
   });
 });
+
+describe("plan mode and answers", () => {
+  it("sends answers for the active attempt and follows plan mode changes", async () => {
+    saved = { ...saved, mode: "plan" };
+    const hook = await mount();
+    await act(async () => {
+      await hook.result.current.select(saved.id);
+    });
+    const attempt = {
+      id: "attempt",
+      chat_id: saved.id,
+    } as unknown as import("./types").Attempt;
+    const record = {
+      kind: "plan",
+      id: "p1",
+      status: "waiting",
+      plan: "1. Go",
+      feedback: null,
+    } as const;
+    await act(async () => {
+      expect(
+        await hook.result.current.respond(attempt, record, {
+          decision: "approve",
+        }),
+      ).toBe(true);
+    });
+    expect(bridge.rpc).toHaveBeenCalledWith("respond", {
+      chat_id: saved.id,
+      attempt_id: "attempt",
+      interaction_id: "p1",
+      kind: "plan",
+      decision: "approve",
+    });
+    expect(hook.result.current.chat?.mode).toBe("plan");
+    receive({ v: 1, event: "chat_mode", ...active, mode: "normal" });
+    expect(hook.result.current.chat?.mode).toBe("normal");
+    expect(hook.result.current.chats[0].mode).toBe("normal");
+    const original = bridge.rpc.getMockImplementation()!;
+    bridge.rpc.mockImplementation(async (method: string, params: unknown) => {
+      if (method === "respond")
+        throw "This reply is no longer waiting for that answer.";
+      return original(method, params);
+    });
+    await act(async () => {
+      expect(
+        await hook.result.current.respond(attempt, record, { cancelled: true }),
+      ).toBe(false);
+    });
+    expect(hook.result.current.error).toBe(
+      "This reply is no longer waiting for that answer.",
+    );
+  });
+});

@@ -8,41 +8,14 @@ import {
 } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowDown, Check, ChevronRight, Copy, RotateCcw } from "lucide-react";
+import { ArrowDown, ChevronRight, RotateCcw } from "lucide-react";
 import type { Attempt, Chat } from "../types";
-import { copyText, openLink } from "../bridge";
+import { openLink } from "../bridge";
 import { formatModelName } from "../modelNames";
+import { Activity, type Respond } from "./Activity";
 import { AttachmentView } from "./AttachmentView";
+import { CopyButton } from "./CopyButton";
 
-function CopyButton({
-  text,
-  label = "Copy",
-}: {
-  text: string;
-  label?: string;
-}) {
-  const [copied, setCopied] = useState(false);
-  const [error, setError] = useState(false);
-  return (
-    <button
-      className="copy-button"
-      title={error ? "Select the text and press Command-C" : label}
-      aria-label={label}
-      onClick={() => {
-        void copyText(text)
-          .then(() => {
-            setCopied(true);
-            setError(false);
-            setTimeout(() => setCopied(false), 1600);
-          })
-          .catch(() => setError(true));
-      }}
-    >
-      {copied ? <Check size={13} /> : <Copy size={13} />}
-      <span>{copied ? "Copied" : error ? "Select and ⌘C" : label}</span>
-    </button>
-  );
-}
 function CodeBlock({ children }: { children?: React.ReactNode }) {
   const child = Children.toArray(children).find(isValidElement);
   const content =
@@ -113,7 +86,13 @@ function ThinkingDisclosure({ attempt }: { attempt: Attempt }) {
     </div>
   );
 }
-function Answer({ attempt }: { attempt: Attempt }) {
+function Answer({
+  attempt,
+  onRespond,
+}: {
+  attempt: Attempt;
+  onRespond?: Respond;
+}) {
   return (
     <div className={`answer ${attempt.unsaved ? "unsaved" : ""}`}>
       <div className="answer-byline">
@@ -128,6 +107,7 @@ function Answer({ attempt }: { attempt: Attempt }) {
         </span>
       </div>
       <ThinkingDisclosure attempt={attempt} />
+      <Activity attempt={attempt} onRespond={onRespond} />
       {attempt.content && (
         <div className="markdown">
           <Markdown
@@ -166,13 +146,19 @@ function Answer({ attempt }: { attempt: Attempt }) {
               ? "Searching the web…"
               : attempt.phase === "fetching"
                 ? "Reading sources…"
-                : attempt.content
-                  ? "Writing…"
-                  : attempt.phase === "thinking"
-                    ? "Thinking…"
-                    : attempt.phase === "loading"
-                      ? "Waiting for Ollama…"
-                      : "Preparing reply…"}
+                : attempt.phase === "sandbox"
+                  ? "Running code in the sandbox…"
+                  : attempt.phase === "asking"
+                    ? "Waiting for your answer…"
+                    : attempt.phase === "reviewing"
+                      ? "Waiting for your approval…"
+                      : attempt.content
+                        ? "Writing…"
+                        : attempt.phase === "thinking"
+                          ? "Thinking…"
+                          : attempt.phase === "loading"
+                            ? "Waiting for Ollama…"
+                            : "Preparing reply…"}
           </div>
         )}
       {!!attempt.searches?.length && (
@@ -248,10 +234,12 @@ export function Transcript({
   chat,
   disabled,
   onRetry,
+  onRespond,
 }: {
   chat: Chat;
   disabled: boolean;
   onRetry: () => void;
+  onRespond?: Respond;
 }) {
   const end = useRef<HTMLDivElement>(null);
   const viewport = useRef<HTMLDivElement>(null);
@@ -265,7 +253,7 @@ export function Transcript({
   }, [chat.id]);
   useEffect(() => {
     if (sticky.current) end.current?.scrollIntoView();
-  }, [last?.content, last?.status, chat.messages.length]);
+  }, [last?.content, last?.status, last?.activity, chat.messages.length]);
   return (
     <div className="transcript-wrap">
       <div
@@ -305,7 +293,11 @@ export function Transcript({
                     <Answer attempt={attempt} />
                   </details>
                 ) : (
-                  <Answer key={attempt.id} attempt={attempt} />
+                  <Answer
+                    key={attempt.id}
+                    attempt={attempt}
+                    onRespond={onRespond}
+                  />
                 ),
               )}
               {index === chat.messages.length - 1 &&

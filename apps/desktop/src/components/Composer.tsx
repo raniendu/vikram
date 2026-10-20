@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Paperclip, Square } from "lucide-react";
+import { ArrowUp, ListChecks, Paperclip, Square } from "lucide-react";
 import type { ChatController } from "../useChats";
 import { AttachmentView } from "./AttachmentView";
 
@@ -11,6 +11,7 @@ export function Composer({ app }: { app: ChatController }) {
   const images = chat.attachments.filter((a) => a.message_id === null);
   const invalidImages =
     images.some((a) => a.kind !== "document") && !model?.vision;
+  const planning = chat.mode === "plan";
   const busyElsewhere = app.active && app.active.chat_id !== chat.id;
   const runningHere = app.active?.chat_id === chat.id;
   const canSend =
@@ -38,6 +39,12 @@ export function Composer({ app }: { app: ChatController }) {
         {invalidImages && (
           <p className="composer-warning">
             Choose an image-capable model or remove the draft images to send.
+          </p>
+        )}
+        {planning && (
+          <p className="plan-hint">
+            Plan mode · Vikram proposes a plan for your approval before it runs
+            code or does the work.
           </p>
         )}
         {busyElsewhere && (
@@ -68,7 +75,9 @@ export function Composer({ app }: { app: ChatController }) {
             ref={input}
             id="message-input"
             aria-label="Message"
-            placeholder="Write a message…"
+            placeholder={
+              planning ? "Describe what you want planned…" : "Write a message…"
+            }
             value={app.draft}
             rows={1}
             disabled={app.sending}
@@ -104,6 +113,22 @@ export function Composer({ app }: { app: ChatController }) {
               onClick={() => void app.importAttachments("pick_attachments")}
             >
               <Paperclip size={18} />
+            </button>
+            <button
+              className={`mode-toggle ${planning ? "on" : ""}`}
+              aria-pressed={planning}
+              title={
+                planning
+                  ? "Plan mode is on: approve a plan before Vikram works"
+                  : "Plan mode: approve a plan before Vikram works"
+              }
+              disabled={app.offline}
+              onClick={() =>
+                void app.updateChat({ mode: planning ? "normal" : "plan" })
+              }
+            >
+              <ListChecks size={15} />
+              Plan
             </button>
             <span className="composer-hint">
               {app.importing
@@ -142,6 +167,7 @@ export function Composer({ app }: { app: ChatController }) {
         <div className="composer-footnote">
           <span>
             Local model · Web {model?.tools ? "available" : "unavailable"}
+            {model?.tools ? " · Python sandbox" : ""}
           </span>
           <span>
             {model?.context_length

@@ -26,6 +26,7 @@ export function applyAttempt(chat: Chat, event: RuntimeEvent): Chat {
           phase: event.phase ?? a.phase,
           sources: event.sources ?? a.sources,
           searches: event.searches ?? a.searches,
+          activity: event.activity ?? a.activity,
           revision: event.revision ?? a.revision,
         };
       }),
@@ -71,6 +72,7 @@ export function recoverChat(
               actual_model: event.actual_model ?? a.actual_model,
               sources: event.sources ?? a.sources,
               searches: event.searches ?? a.searches,
+              activity: event.activity ?? a.activity,
               revision: event.revision,
               status: "interrupted" as const,
               unsaved: true,

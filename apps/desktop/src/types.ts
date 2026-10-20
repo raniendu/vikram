@@ -1,4 +1,48 @@
 export type Thinking = boolean | string | null;
+export type Mode = "normal" | "plan";
+export interface QuestionOption {
+  label: string;
+  description?: string | null;
+}
+export interface Question {
+  header: string;
+  question: string;
+  options: QuestionOption[];
+  multi_select?: boolean;
+}
+export interface QuestionRecord {
+  kind: "question";
+  id: string;
+  status: string;
+  questions: Question[];
+  answers: Record<string, string[]> | null;
+}
+export interface PlanRecord {
+  kind: "plan";
+  id: string;
+  status: string;
+  plan: string;
+  feedback: string | null;
+}
+export interface CodeRecord {
+  kind: "code";
+  id: string;
+  status: string;
+  code: string;
+  output: string;
+  error: string | null;
+}
+export type ActivityRecord = QuestionRecord | PlanRecord | CodeRecord;
+export interface QuestionAnswer {
+  header: string;
+  selected?: string[];
+  custom_answer?: string;
+}
+export type Reply =
+  | { answers: QuestionAnswer[] }
+  | { cancelled: true }
+  | { decision: "approve" | "dismiss" }
+  | { decision: "revise"; feedback: string };
 export interface LocalModel {
   name: string;
   available: boolean;
@@ -43,6 +87,8 @@ export interface Search {
   error: string | null;
 }
 export interface Attempt {
+  activity?: ActivityRecord[];
+  mode?: Mode;
   reasoning?: string;
   reasoning_truncated?: boolean;
   revision?: number;
@@ -71,6 +117,7 @@ export interface Message {
 export interface ChatSummary {
   id: string;
   title: string;
+  mode?: Mode;
   folder_id: string | null;
   model: string | null;
   thinking: Record<string, Thinking>;
@@ -97,6 +144,8 @@ export interface Snapshot {
   models: LocalModel[];
 }
 export interface RuntimeEvent extends Partial<Active> {
+  activity?: ActivityRecord[];
+  mode?: Mode;
   reasoning?: string;
   reasoning_truncated?: boolean;
   revision?: number;

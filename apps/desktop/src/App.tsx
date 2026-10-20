@@ -366,6 +366,7 @@ export default function App() {
                 chat={app.chat}
                 disabled={!!app.active || app.sending || app.offline || !model}
                 onRetry={() => void app.send(true)}
+                onRespond={app.respond}
               />
             ) : (
               <div className="empty-state">

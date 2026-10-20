@@ -9,10 +9,13 @@ import {
 } from "./state";
 import type {
   Active,
+  ActivityRecord,
+  Attempt,
   Chat,
   ChatSummary,
   Folder,
   LocalModel,
+  Reply,
   RuntimeEvent,
   Snapshot,
 } from "./types";
@@ -193,6 +196,13 @@ export function useChats() {
             attempt_id: event.attempt_id,
             request_id: event.request_id,
           });
+      } else if (event.event === "chat_mode" && event.chat_id && event.mode) {
+        // An approved plan ends plan mode for the chat's next replies.
+        const { chat_id: id, mode } = event;
+        setCache((old) =>
+          old[id] ? { ...old, [id]: { ...old[id], mode } } : old,
+        );
+        setChats((old) => old.map((c) => (c.id === id ? { ...c, mode } : c)));
       } else if (event.event === "idle") {
         setActive((old) => (old?.attempt_id === event.attempt_id ? null : old));
       } else if (event.event === "notice") setError(event.message ?? null);
@@ -369,6 +379,25 @@ export function useChats() {
       fail(e);
     }
   }
+  async function respond(
+    attempt: Attempt,
+    record: ActivityRecord,
+    reply: Reply,
+  ) {
+    try {
+      await rpc("respond", {
+        chat_id: attempt.chat_id,
+        attempt_id: attempt.id,
+        interaction_id: record.id,
+        kind: record.kind,
+        ...reply,
+      });
+      return true;
+    } catch (e) {
+      fail(e);
+      return false;
+    }
+  }
   async function manage(method: string, params: Record<string, unknown>) {
     try {
       await rpc(method, params);
@@ -487,6 +516,7 @@ export function useChats() {
     changeDraft,
     send,
     stop,
+    respond,
     manage,
     deleteChat,
     importAttachments,

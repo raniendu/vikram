@@ -55,6 +55,36 @@ describe("attempt routing", () => {
 });
 
 import { reconcileActive, recoverChat, recoverDraft } from "./state";
+describe("tool activity", () => {
+  it("carries live activity and keeps it when later chunks omit it", () => {
+    const running = {
+      ...chat,
+      messages: [
+        {
+          ...chat.messages[0],
+          attempts: [{ ...chat.messages[0].attempts[0], status: "running" }],
+        },
+      ],
+    } as Chat;
+    const record = {
+      kind: "code",
+      id: "c1",
+      status: "running",
+      code: "1 + 1",
+      output: "",
+      error: null,
+    } as const;
+    const withActivity = applyAttempt(running, {
+      ...late,
+      revision: 1,
+      activity: [record],
+    });
+    expect(withActivity.messages[0].attempts[0].activity).toEqual([record]);
+    const later = applyAttempt(withActivity, { ...late, revision: 2 });
+    expect(later.messages[0].attempts[0].activity).toEqual([record]);
+  });
+});
+
 describe("recovery", () => {
   it("does not resurrect a completed generation from an old snapshot", () => {
     expect(

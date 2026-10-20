@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Transcript } from "./Transcript";
 import { Composer } from "./Composer";
@@ -146,4 +152,216 @@ it("allows a document-only message with a text-only model", () => {
       .disabled,
   ).toBe(false);
   expect(screen.getByText(/Web unavailable/)).toBeTruthy();
+});
+
+function waitingChat(activity: unknown[], status = "running") {
+  return {
+    id: "a",
+    attachments: [],
+    messages: [
+      {
+        id: "m",
+        text: "Convert 25 degrees",
+        attempts: [
+          {
+            id: "x",
+            chat_id: "a",
+            requested_model: "local:1",
+            actual_model: null,
+            status,
+            content: "",
+            phase: "asking",
+            activity,
+          },
+        ],
+      },
+    ],
+  } as unknown as Chat;
+}
+const question = {
+  kind: "question",
+  id: "q1",
+  status: "waiting",
+  answers: null,
+  questions: [
+    {
+      header: "Scale",
+      question: "Which scale is it in?",
+      options: [
+        { label: "Celsius" },
+        { label: "Fahrenheit", description: "°F" },
+      ],
+    },
+  ],
+};
+
+it("answers a waiting question with a choice, typed words, or a skip", async () => {
+  const onRespond = vi.fn().mockResolvedValue(true);
+  const chat = waitingChat([question]);
+  render(
+    <Transcript
+      chat={chat}
+      disabled={false}
+      onRetry={vi.fn()}
+      onRespond={onRespond}
+    />,
+  );
+  expect(screen.getByRole("status").textContent).toContain(
+    "Waiting for your answer",
+  );
+  const send = screen.getByRole("button", { name: "Send answer" });
+  expect((send as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByLabelText(/Fahrenheit/));
+  await act(async () => {
+    fireEvent.click(send);
+  });
+  expect(onRespond).toHaveBeenLastCalledWith(
+    chat.messages[0].attempts[0],
+    question,
+    {
+      answers: [{ header: "Scale", selected: ["Fahrenheit"] }],
+    },
+  );
+  fireEvent.change(
+    screen.getByLabelText("Your own answer to: Which scale is it in?"),
+    { target: { value: "Kelvin, actually" } },
+  );
+  await act(async () => {
+    fireEvent.click(send);
+  });
+  expect(onRespond).toHaveBeenLastCalledWith(expect.anything(), question, {
+    answers: [{ header: "Scale", custom_answer: "Kelvin, actually" }],
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+  });
+  expect(onRespond).toHaveBeenLastCalledWith(expect.anything(), question, {
+    cancelled: true,
+  });
+});
+
+it("shows answered questions as a summary without controls", () => {
+  render(
+    <Transcript
+      chat={waitingChat(
+        [
+          {
+            ...question,
+            status: "answered",
+            answers: { Scale: ["Fahrenheit"] },
+          },
+        ],
+        "complete",
+      )}
+      disabled={false}
+      onRetry={vi.fn()}
+      onRespond={vi.fn()}
+    />,
+  );
+  expect(screen.getByText(/→ Fahrenheit/)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Send answer" })).toBeNull();
+});
+
+it("approves, revises, or postpones a waiting plan", async () => {
+  const plan = {
+    kind: "plan",
+    id: "p1",
+    status: "waiting",
+    plan: "1. Convert\n2. Check",
+    feedback: null,
+  };
+  const onRespond = vi.fn().mockResolvedValue(true);
+  render(
+    <Transcript
+      chat={waitingChat([plan])}
+      disabled={false}
+      onRetry={vi.fn()}
+      onRespond={onRespond}
+    />,
+  );
+  expect(screen.getByText("Convert")).toBeTruthy();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Approve plan" }));
+  });
+  expect(onRespond).toHaveBeenLastCalledWith(expect.anything(), plan, {
+    decision: "approve",
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+  });
+  expect(onRespond).toHaveBeenLastCalledWith(expect.anything(), plan, {
+    decision: "dismiss",
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Request changes" }));
+  const changes = screen.getByRole("button", { name: "Send changes" });
+  expect((changes as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.change(screen.getByLabelText("Changes to the plan"), {
+    target: { value: "Show the formula" },
+  });
+  await act(async () => {
+    fireEvent.click(changes);
+  });
+  expect(onRespond).toHaveBeenLastCalledWith(expect.anything(), plan, {
+    decision: "revise",
+    feedback: "Show the formula",
+  });
+});
+
+it("lists sandbox runs with their code and output", () => {
+  render(
+    <Transcript
+      chat={waitingChat(
+        [
+          {
+            kind: "code",
+            id: "c1",
+            status: "complete",
+            code: "(25 - 32) * 5 / 9",
+            output: "-3.888",
+            error: null,
+          },
+          {
+            kind: "plan",
+            id: "p1",
+            status: "approved",
+            plan: "1. Convert",
+            feedback: null,
+          },
+        ],
+        "complete",
+      )}
+      disabled={false}
+      onRetry={vi.fn()}
+    />,
+  );
+  expect(screen.getByText("Ran Python · Complete")).toBeTruthy();
+  expect(screen.getByText("(25 - 32) * 5 / 9")).toBeTruthy();
+  expect(screen.getByText("-3.888")).toBeTruthy();
+  expect(screen.getByText("Plan · Approved")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Approve plan" })).toBeNull();
+});
+
+it("toggles plan mode from the composer", () => {
+  const updateChat = vi.fn();
+  const app = {
+    chat: { id: "a", model: "tools", mode: "normal", attachments: [] },
+    draft: "",
+    models: [{ name: "tools", available: true, vision: false, tools: true }],
+    changeDraft: vi.fn(),
+    updateChat,
+  } as unknown as ChatController;
+  const view = render(<Composer app={app} />);
+  const toggle = screen.getByRole("button", { name: "Plan" });
+  expect(toggle.getAttribute("aria-pressed")).toBe("false");
+  expect(screen.getByText(/Python sandbox/)).toBeTruthy();
+  fireEvent.click(toggle);
+  expect(updateChat).toHaveBeenCalledWith({ mode: "plan" });
+  view.rerender(
+    <Composer
+      app={{ ...app, chat: { ...app.chat!, mode: "plan" } } as ChatController}
+    />,
+  );
+  expect(screen.getByText(/Plan mode · Vikram proposes a plan/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Plan" }));
+  expect(updateChat).toHaveBeenLastCalledWith({ mode: "normal" });
 });
