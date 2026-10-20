@@ -301,9 +301,10 @@ def repair_questions(args: dict) -> dict:
             return args
         if not isinstance(options, list):
             return args
-        header = _one_line(header, 25)
+        header = base = _one_line(header, 25)
+        suffix = 2
         while header.casefold() in headers:
-            header = _one_line(f"{header[:22]} {len(headers) + 1}", 25)
+            header, suffix = f"{base[:21].rstrip()} {suffix}", suffix + 1
         headers.add(header.casefold())
         choices = []
         for option in options[:6]:

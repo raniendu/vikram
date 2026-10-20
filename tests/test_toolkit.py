@@ -294,6 +294,13 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
         )
         question = repaired["questions"][0]
         self.assertEqual(question["header"], "Pick colours")
+        same = {"header": "A very long repeated header text", "options": ["x", "y"]}
+        headers = [
+            q["header"]
+            for q in repair_questions({"questions": [same] * 4})["questions"]
+        ]
+        self.assertEqual(len({h.casefold() for h in headers}), 4)
+        self.assertTrue(all(len(h) <= 25 for h in headers))
         self.assertTrue(question["multi_select"])
         self.assertEqual([o["label"] for o in question["options"]], ["Red", "Blue"])
 
