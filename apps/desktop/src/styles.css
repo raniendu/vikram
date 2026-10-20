@@ -1476,8 +1476,18 @@ dialog select {
   border-color: var(--accent);
 }
 .option input {
+  /* Undo the full-width text-field styling every input otherwise receives. */
+  width: auto;
+  padding: 0;
+  margin: 0;
+  border: 0;
   accent-color: var(--accent);
   flex: none;
+  transform: translateY(1px);
+}
+.option span {
+  flex: 1;
+  min-width: 0;
 }
 .option small {
   display: block;
