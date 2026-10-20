@@ -52,8 +52,13 @@ and it decides which tools each request offers:
 | Mode | Offered tools |
 | --- | --- |
 | Normal | web tools (when available), `ask_user_question`, `run_code` |
-| Plan, before approval | web tools, `ask_user_question`, `submit_plan` |
+| Plan, before approval | web tools, `ask_user_question`, `submit_plan`, and `run_code`, which is refused |
 | Final request of a reply | none, so the model must answer |
+
+In plan mode, `run_code` stays offered but every call is refused with a finished
+result telling the model to submit its plan; no code runs. Hiding it failed in
+live testing: Gemma 4 26B (thinking off) kept calling the unoffered tool, and
+"unknown tool" retries ended the reply. Refusals spend no retries.
 
 Approval ends plan mode for the rest of the reply. Plan-mode instructions are
 recomputed per request and drop away, and the sandbox becomes available. The

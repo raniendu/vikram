@@ -73,8 +73,9 @@ TOOLKIT_PROMPT = (
 PLAN_PROMPT = (
     "Plan mode is on: the user wants to approve a plan before any work is done. "
     "For any request that needs calculation, code, research, or several steps, "
-    "do not answer it and do not run code yet. If the request is ambiguous, call "
-    "ask_user_question first. Then call submit_plan with a short numbered plan. "
+    "do not answer it yet. run_code is refused until the user approves your plan. "
+    "If the request is ambiguous, call ask_user_question first. Then call "
+    "submit_plan with a short numbered plan. "
     "If the user approves, plan mode ends: carry out the plan in this same reply "
     "and report the results. If the user requests changes, revise the plan and "
     "call submit_plan again. If the plan is not approved, end your reply by "
@@ -90,6 +91,10 @@ TEXT_PLAN_PROMPT = (
 APPROVED = (
     "The user approved the plan. Plan mode is off: carry out the plan now, using "
     "run_code where it helps, and report the results."
+)
+PLAN_FIRST = (
+    "Plan mode is on, so code cannot run yet. Call submit_plan with your numbered "
+    "plan and wait for the user's approval; then run the code."
 )
 NOT_APPROVED = (
     "The user has not approved the plan yet. Do not carry it out. End your reply "
@@ -415,8 +420,6 @@ class Questions(AskUser):
 def _available(ctx: RunContext, tool_def) -> bool:
     if ctx.usage.requests >= REQUEST_LIMIT - 1:
         return False
-    if tool_def.name == RUN_CODE:
-        return mode_of(ctx) == "normal"
     if tool_def.name == SUBMIT_PLAN:
         return mode_of(ctx) == "plan"
     return True
@@ -449,6 +452,10 @@ class ReplyToolset(WrapperToolset[Reply]):
         reply = _reply(ctx)
         if name != RUN_CODE or reply is None:
             return await call(name, tool_args, ctx, tool)
+        if reply.mode == "plan":
+            # Refused, not hidden: small models call run_code in plan mode anyway,
+            # and an unknown tool spends retries until the reply fails.
+            raise ToolFailed(PLAN_FIRST)
         return await reply.run_code(
             ctx,
             ctx.tool_call_id or "",
@@ -461,7 +468,7 @@ class ReplyToolset(WrapperToolset[Reply]):
 class ReplyPolicy(AbstractCapability[Reply]):
     """Tool availability and argument repair for every request of a reply.
 
-    Plan mode hides the sandbox until a plan is approved, normal mode hides
+    Plan mode refuses the sandbox until a plan is approved, normal mode hides
     `submit_plan`, and the final request offers no tools so the model must answer.
     It sits outside CodeMode so the sandbox follows the same rules.
     """

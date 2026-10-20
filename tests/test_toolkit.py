@@ -324,7 +324,7 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PlanModeTests(unittest.IsolatedAsyncioTestCase):
-    async def test_plan_mode_hides_the_sandbox_until_the_person_approves(self):
+    async def test_plan_mode_refuses_the_sandbox_until_the_person_approves(self):
         person = Person(
             reviews=[
                 PlanReview(decision="revise", feedback="Also double-check it."),
@@ -332,23 +332,26 @@ class PlanModeTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
         model = Model(
-            # Calling the hidden sandbox in plan mode must not execute anything.
+            # Small models call the sandbox in plan mode: refuse without running it,
+            # as often as it happens, without spending retries or ending the reply.
             tool_call("run_code", {"code": "print('should not run')"}),
+            tool_call("run_code", {"code": "print('should not run')"}, "c0"),
+            tool_call("run_code", {"code": "print('should not run')"}, "c1"),
             tool_call("submit_plan", {"plan": "1. Compute."}, "p1"),
             tool_call("submit_plan", {"plan": "1. Compute.\n2. Verify."}, "p2"),
             tool_call("run_code", {"code": "6 * 7"}, "c2"),
             "The answer is 42.",
         )
         events = await reply(model, mode="plan", interaction=person)
-        self.assertNotIn("run_code", model.offered(0))
         self.assertIn("submit_plan", model.offered(0))
-        self.assertIn("Unknown tool", json.dumps(model.bodies[1]["messages"]))
-        self.assertIn("Also double-check it.", tool_results(model.bodies[2])[-1])
+        for index in (1, 2, 3):
+            self.assertIn("code cannot run yet", tool_results(model.bodies[index])[-1])
+        self.assertIn("Also double-check it.", tool_results(model.bodies[4])[-1])
         self.assertEqual(person.plans, ["1. Compute.", "1. Compute.\n2. Verify."])
-        self.assertIn("run_code", model.offered(3))
-        self.assertNotIn("submit_plan", model.offered(3))
+        self.assertIn("run_code", model.offered(5))
+        self.assertNotIn("submit_plan", model.offered(5))
         self.assertIn("Plan mode is on", model.bodies[0]["messages"][0]["content"])
-        self.assertNotIn("Plan mode is on", model.bodies[3]["messages"][0]["content"])
+        self.assertNotIn("Plan mode is on", model.bodies[5]["messages"][0]["content"])
         kinds = [(r["kind"], r["status"]) for r in events[-1]["activity"]]
         self.assertEqual(
             kinds,

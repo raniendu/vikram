@@ -154,7 +154,7 @@ built on [Pydantic AI Harness](https://pydantic.dev/docs/ai/harness/):
   options, type your own answer, or skip; skipped questions make Vikram choose
   and say what it chose.
 - **Plan mode.** Vikram first asks any questions and does research, then submits
-  a numbered plan. It cannot run code until you approve. Approve to let it carry
+  a numbered plan. Its sandbox refuses to run code until you approve. Approve to let it carry
   out the plan in the same reply (plan mode then turns off), request changes with
   feedback, or choose Not now to keep the plan for later.
 
