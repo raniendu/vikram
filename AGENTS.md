@@ -3,20 +3,48 @@
 ## Scope
 
 Vikram is one local assistant built with Pydantic AI and Ollama. Keep the
-implementation small. Do not introduce additional agents, agent registries,
-tools, delegation, integrations, server surfaces, persistence, or configuration
-frameworks unless explicitly requested.
+implementation small. The owner approved the local Tauri chat app in
+`docs/superpowers/specs/2026-10-14-local-chat-design.md`. Its persistence, private
+Python sidecar and focused offline tests are authorized. The owner approved
+document attachments and Parallel web search in
+`docs/superpowers/specs/2026-10-14-documents-and-web-search-design.md`. CLI and
+desktop must share model/tool instructions, capabilities, execution, limits,
+failure handling, and context policy; keep that behavior outside UI adapters.
+CLI and desktop chats always use automatic web tools when the model supports
+them, including desktop chats with a legacy Web Off preference. Neither
+interface exposes a web on/off setting.
+The owner requested visible model thinking and a modern terminal chat. Desktop
+replies save bounded thinking separately from the answer and show it collapsed
+by default. Terminal traces are in memory only and shown on demand. Never add
+these display traces to follow-up context, logs, or evaluation artifacts.
+The owner requested the combined CLI/Mac installer and `vikram update`; its
+design is in `docs/superpowers/specs/2026-10-14-install-and-update-design.md` and
+distribution instructions are in `docs/releases.md`. Build local artifacts and
+validate with disposable install directories; publishing requires owner direction.
+Evaluations must explicitly use web Off. Do not revive the discarded software
+factory or add other agents, unrelated tools, hosted inference, or public
+server surfaces.
 
 ## Structure
 
 - `vikram/agent.py`: the single agent definition, inline instructions, default
   model, and `build_agent(model: str = DEFAULT_MODEL) -> Agent`.
 - `vikram/cli.py`: interactive and one-shot command-line conversations.
+- `vikram/terminal.py`: inline streaming Markdown, input editing, and optional thinking.
+- `vikram/conversation.py`, `context.py`, `models.py`, `web.py`: shared model/tool behavior.
+- `vikram/documents.py`, `document_worker.py`: bounded local document parsing.
 - `vikram/__main__.py`: entry point for `python -m vikram`.
+- `vikram/desktop/`: versioned private stdio runtime, chat store and attachments.
+- `apps/desktop/`: React/Vite UI and Tauri 2 Mac shell; bundled native Python.
+- `scripts/build_desktop.py`: reproducible sidecar/app packaging, disk reserve check.
+- `scripts/build_installer.py`: combined per-user CLI/Mac installer artifact.
+- `vikram/installation.py`, `releases.py`: atomic bundle installation and GitHub updates.
+- `tests/`: focused offline chat and recovery checks.
+- `vikram/ollama.py`: shared thinking metadata validation and request mapping.
 - `vikram/evals/`: manually invoked Pydantic Evals, local Ollama rubric grading,
   metrics-only history, and a self-contained HTML report.
 
-The model endpoint is fixed to `http://localhost:11434/v1`. Model selection is
+For the original CLI, the model endpoint is fixed to `http://localhost:11434/v1`. Model selection is
 `--model`, then `OLLAMA_MODEL`, then the default in `agent.py`. The application
 does not load configuration files or `.env` files. Interactive history stays
 in memory for the current process.
@@ -51,17 +79,37 @@ older local state, including historical cloud-judge records.
 - `uv run isort --check-only vikram`: check import ordering.
 - `uv run pre-commit install`: install optional formatting hooks.
 
+Desktop commands:
+
+- `uv run python scripts/build_desktop.py`: build native sidecar and `.app`.
+- `uv run python scripts/build_installer.py`: build combined installer and release ZIP.
+- `uv run python scripts/check_installer.py dist/installers/Vikram-0.1.0-macos-arm64.zip`: isolated packaged-install smoke check.
+- `uv run vikram update --check`: check the latest stable GitHub release without installation.
+- `npm --prefix apps/desktop run desktop`: start Tauri development mode after building the sidecar.
+- `uv run python -m unittest discover -s tests -v`: offline Python checks.
+- `npm --prefix apps/desktop test`: frontend recovery checks.
+- `npm --prefix apps/desktop run build`: TypeScript and production assets.
+- `cargo test --offline --manifest-path apps/desktop/src-tauri/Cargo.toml`: native lifecycle check.
+
 ## Working Style
 
 Inspect relevant files first and prefer small, maintainable changes. Preserve
 unrelated local work. Do not commit, push, open pull requests, or delete user
 state unless explicitly asked.
 
+Before merging any pull request, present its link, final changes, and check
+results, then obtain explicit owner approval for that specific merge. Do not
+enable auto-merge or bypass approval by pushing to a protected/default branch.
+Material changes after approval require renewed approval.
+
 Use Python 3.13 or later, type hints at public boundaries, Black's 88-character
 line length, and isort's Black profile. Keep documentation consistent with the
 code.
 
-Do not add a test suite or a separate agent-spec system unless requested.
+Use focused offline tests for desktop storage, IPC, metadata, cancellation and
+UI recovery. Do not run live model evaluations automatically. Desktop chat data
+lives under `~/Library/Application Support/dev.raniendu.vikram/`; never mix it
+with evaluation metrics. Keep at least 20 GiB free on the internal disk.
 Validate changes with the CLI startup check and formatters. When model behavior
 changes, check it with a short local Ollama prompt. Report what was validated
 and any limitations.
@@ -86,5 +134,5 @@ Label charts, findings, and tables with actual model names, not C1/C2 aliases.
 In the quality/time chart, connect thinking levels within each model and agent
 revision. Show every supported level, leaving gaps for missing results.
 Discover supported thinking controls from Ollama metadata. Never infer missing
-levels, pool different levels, or store thinking traces. Explicit defaults and
+levels, pool different levels, or store thinking traces in evaluations. Explicit defaults and
 untested supported levels must remain distinguishable from scored results.

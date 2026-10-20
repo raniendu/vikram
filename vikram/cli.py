@@ -1,30 +1,114 @@
-"""Minimal one-shot and interactive conversations with Vikram."""
+"""Terminal adapter for the shared local model/tool conversation runner."""
 
 import argparse
 import asyncio
 import os
-import shlex
 import sys
 from collections.abc import Sequence
+from uuid import uuid4
 
-from pydantic_ai import Agent, AgentRunResult
-from pydantic_ai.exceptions import AgentRunError, ModelAPIError, ModelHTTPError
-from pydantic_ai.messages import ModelMessage
+from pydantic_ai.exceptions import AgentRunError
 
-from vikram.agent import DEFAULT_MODEL, build_agent
-
-
-async def _reply(
-    agent: Agent[None, str], prompt: str, history: list[ModelMessage]
-) -> AgentRunResult[str]:
-    async with agent:
-        return await agent.run(prompt, message_history=history)
+from vikram.agent import DEFAULT_MODEL
+from vikram.context import context_messages
+from vikram.conversation import stream_reply
+from vikram.errors import ReplyError, reply_error
+from vikram.installation import cli_version
+from vikram.model_names import format_model_name
+from vikram.models import ModelCatalog, prepare_model, thinking_selection
 
 
-def _chat(model: str, prompt: str | None) -> None:
-    agent = build_agent(model=model)
-    history: list[ModelMessage] = []
-    # Read terminal input outside the event loop so one Ctrl-C interrupts it.
+class ChatSession:
+    def __init__(self, model: str, *, thinking="default", streamer=stream_reply):
+        self.model, self.thinking, self.streamer = model, thinking, streamer
+        self.turns: list[dict] = []
+        self.session_id = uuid4().hex
+        self.catalog = ModelCatalog()
+
+    async def reply(self, prompt: str):
+        models = await self.catalog.refresh()
+        selected, thinking, web, notice = prepare_model(
+            models, self.model, thinking_selection(self.thinking)
+        )
+        if thinking is None:
+            self.thinking = "default"
+        if notice:
+            yield {"notice": notice}
+        turn = {"prompt": [prompt], "answer": None, "sources": [], "model": None}
+        iterator = self.streamer(
+            self.model,
+            thinking,
+            context_messages(self.turns),
+            [prompt],
+            web=web,
+            session_id=self.session_id,
+        )
+        last = None
+        try:
+            async for event in iterator:
+                last = event
+                yield event
+            if last and last["text"]:
+                turn.update(
+                    answer=last["text"],
+                    sources=last.get("sources", []),
+                    model=last.get("actual_model"),
+                )
+        finally:
+            await iterator.aclose()
+            self.turns.append(turn)
+
+
+async def _reply(session: ChatSession, message: str) -> None:
+    last, seen = None, set()
+    async for event in session.reply(message):
+        if event.get("notice"):
+            sys.stderr.write(event["notice"] + "\n")
+            continue
+        last = event
+        for index, search in enumerate(event.get("searches", [])):
+            marker = (index, search["status"])
+            if marker in seen:
+                continue
+            seen.add(marker)
+            if search["status"] == "running":
+                arguments = search["arguments"]
+                sys.stderr.write(
+                    ("Searching: " if search["tool"] == "web_search" else "Reading: ")
+                    + ", ".join(
+                        arguments.get("search_queries", arguments.get("urls", []))
+                    )
+                    + "\n"
+                )
+            elif search.get("error"):
+                sys.stderr.write(search["error"] + "\n")
+    if last:
+        sys.stdout.write(last["text"] + "\n")
+        if last.get("sources"):
+            sys.stdout.write("\nRetrieved sources:\n")
+            for source in last["sources"]:
+                sys.stdout.write(
+                    f"[{source['id']}] {source['title']} — {source['url']}\n"
+                )
+
+
+def _chat(model: str, prompt: str | None, *, thinking="default") -> None:
+    session = ChatSession(model, thinking=thinking)
+    if (
+        prompt is None
+        and sys.stdin.isatty()
+        and sys.stdout.isatty()
+        and os.environ.get("TERM") != "dumb"
+    ):
+        from vikram.terminal import run_terminal
+
+        run_terminal(session)
+        return
+    if prompt is None:
+        sys.stderr.write(
+            f"Local model · {format_model_name(model)}\n"
+            "Supported models can search through Parallel automatically when needed.\n"
+        )
     with asyncio.Runner() as runner:
         while True:
             message = prompt
@@ -35,27 +119,46 @@ def _chat(model: str, prompt: str | None) -> None:
                     return
                 if message == "/exit":
                     return
+                if message.split(maxsplit=1)[:1] == ["/web"]:
+                    sys.stderr.write(
+                        "There is no web setting. Web tools are available automatically "
+                        "for supported models.\n"
+                    )
+                    continue
                 if not message:
                     continue
-            result = runner.run(_reply(agent, message, history))
-            history = result.all_messages()
-            sys.stdout.write(f"{result.output}\n")
+            runner.run(_reply(session, message))
             if prompt is not None:
                 return
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the local agent; return a shell exit status."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["update"]:
+        from vikram.releases import update_main
+
+        return update_main(argv[1:])
     parser = argparse.ArgumentParser(
-        description="Chat with Vikram using local Ollama. Type /exit to end a chat."
+        description="Chat with local Ollama using the same model/tools as the app. Supported models automatically use Parallel web search when needed; /exit ends interactive chat.",
+        epilog="Use `vikram update` to update the CLI and Mac app, or `vikram update --check` to check for a release. Use `vikram -- update` to send 'update' as a prompt.",
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"Vikram {cli_version()}"
     )
     parser.add_argument(
         "prompt", nargs="?", help="one prompt; omit for interactive chat"
     )
+    default_model = os.environ.get("OLLAMA_MODEL", "").strip() or DEFAULT_MODEL
     parser.add_argument(
         "--model",
-        default=os.environ.get("OLLAMA_MODEL", "").strip() or DEFAULT_MODEL,
-        help="local Ollama model (default: OLLAMA_MODEL or %(default)s)",
+        default=default_model,
+        metavar="MODEL_ID",
+        help=f"local Ollama model ID (default: {format_model_name(default_model)}; ID: %(default)s; honors OLLAMA_MODEL)",
+    )
+    parser.add_argument(
+        "--thinking",
+        default="default",
+        help="default, on/off, or a named level advertised by the model",
     )
     args = parser.parse_args(argv)
     if args.prompt is not None and not args.prompt.strip():
@@ -63,27 +166,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     args.model = args.model.strip()
     if not args.model:
         parser.error("model must not be empty")
-
     try:
-        _chat(args.model, args.prompt)
+        _chat(args.model, args.prompt, thinking=args.thinking)
     except KeyboardInterrupt:
         sys.stderr.write("\n")
         return 130
-    except ModelHTTPError as exc:
-        if exc.status_code == 404:
-            sys.stderr.write(
-                f"Model {args.model!r} is unavailable. "
-                f"Run `ollama pull {shlex.quote(args.model)}`.\n"
-            )
-        else:
-            sys.stderr.write(f"Ollama returned HTTP {exc.status_code}.\n")
+    except ValueError as exc:
+        sys.stderr.write(str(exc) + "\n")
         return 1
-    except ModelAPIError:
-        sys.stderr.write(
-            "Could not reach local Ollama. Start it with `ollama serve`.\n"
-        )
-        return 1
-    except AgentRunError:
-        sys.stderr.write("Ollama could not complete the response. Please try again.\n")
+    except (ReplyError, AgentRunError) as exc:
+        sys.stderr.write(reply_error(exc) + "\n")
         return 1
     return 0

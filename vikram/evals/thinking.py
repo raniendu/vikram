@@ -4,23 +4,8 @@ import json
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
 from vikram.evals.history import ThinkingValue
-
-
-class ThinkingControls(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    values: list[ThinkingValue] = Field(min_length=1)
-    default: ThinkingValue | None = None
-
-    @model_validator(mode="after")
-    def validate_values(self) -> "ThinkingControls":
-        if any(isinstance(value, str) and not value.strip() for value in self.values):
-            raise ValueError("Thinking levels must not be empty.")
-        self.values = list(dict.fromkeys(self.values))
-        return self
+from vikram.ollama import ThinkingControls, thinking_request
 
 
 def discover_thinking(model: str) -> ThinkingControls | None:
@@ -76,11 +61,3 @@ def thinking_label(value: ThinkingValue | None) -> str:
     if isinstance(value, bool):
         return "on" if value else "off"
     return value
-
-
-def thinking_request(value: ThinkingValue | None) -> dict[str, str]:
-    """Map Ollama controls to its OpenAI-compatible request field."""
-    if value is None:
-        return {}
-    effort = ("high" if value else "none") if isinstance(value, bool) else value
-    return {"reasoning_effort": effort}

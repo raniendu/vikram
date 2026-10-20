@@ -5,6 +5,7 @@ import asyncio
 import os
 import sys
 from collections.abc import Sequence
+from functools import partial
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -57,7 +58,7 @@ async def _benchmark(
     runs = await evaluate_many(
         configs,
         cases,
-        build_agent,
+        partial(build_agent, web="off"),
         judge,
         _progress,
         completed,

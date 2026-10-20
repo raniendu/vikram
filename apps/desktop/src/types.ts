@@ -1,0 +1,114 @@
+export type Thinking = boolean | string | null;
+export interface LocalModel {
+  name: string;
+  available: boolean;
+  reason: string | null;
+  vision: boolean;
+  can_think: boolean;
+  tools?: boolean;
+  thinking: (boolean | string)[];
+  size: number;
+  context_length: number | null;
+}
+export interface Folder {
+  id: string;
+  name: string;
+}
+export interface Attachment {
+  id: string;
+  chat_id: string;
+  message_id: string | null;
+  name: string;
+  media_type: string;
+  width: number;
+  height: number;
+  size: number;
+  kind?: "image" | "document";
+  extracted_text?: string;
+  extraction_notice?: string | null;
+}
+export type Status =
+  "running" | "complete" | "failed" | "stopped" | "interrupted";
+export interface Source {
+  id: string;
+  title: string;
+  url: string;
+  excerpt: string;
+  retrieved_at: string;
+}
+export interface Search {
+  tool: string;
+  arguments: { search_queries?: string[]; urls?: string[]; objective?: string };
+  status: string;
+  error: string | null;
+}
+export interface Attempt {
+  reasoning?: string;
+  reasoning_truncated?: boolean;
+  revision?: number;
+  sources?: Source[];
+  searches?: Search[];
+  web?: "auto" | "off";
+  id: string;
+  chat_id: string;
+  message_id: string;
+  request_id: string;
+  requested_model: string;
+  actual_model: string | null;
+  thinking: Thinking;
+  status: Status;
+  content: string;
+  error: string | null;
+  unsaved?: boolean;
+  phase?: string;
+}
+export interface Message {
+  id: string;
+  text: string;
+  created: number;
+  attempts: Attempt[];
+}
+export interface ChatSummary {
+  id: string;
+  title: string;
+  folder_id: string | null;
+  model: string | null;
+  thinking: Record<string, Thinking>;
+  draft: string;
+  draft_revision: number;
+  created: number;
+  updated: number;
+}
+export interface Chat extends ChatSummary {
+  messages: Message[];
+  attachments: Attachment[];
+}
+export interface Active {
+  chat_id: string;
+  attempt_id: string;
+  request_id: string;
+}
+export interface Snapshot {
+  protocol?: number;
+  chats: ChatSummary[];
+  folders: Folder[];
+  preferences: Record<string, unknown>;
+  active: Active | null;
+  models: LocalModel[];
+}
+export interface RuntimeEvent extends Partial<Active> {
+  reasoning?: string;
+  reasoning_truncated?: boolean;
+  revision?: number;
+  sources?: Source[];
+  searches?: Search[];
+  v: 1;
+  event: string;
+  status?: Status;
+  content?: string;
+  actual_model?: string | null;
+  phase?: string;
+  error?: string | null;
+  unsaved?: boolean;
+  message?: string;
+}

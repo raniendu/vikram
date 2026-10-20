@@ -1,14 +1,144 @@
 # Vikram
 
-One local assistant, built with Pydantic AI and Ollama.
+A private desktop chat app and CLI, built with Tauri, Pydantic AI, and Ollama.
 
 Vikram runs a single agent defined in this repository. Its instructions live in
 `vikram/agent.py`, and it sends model requests to your local Ollama server at
 `http://localhost:11434/v1`.
 
-## Run
+## Desktop app (Apple Silicon Mac)
 
-Install [uv](https://docs.astral.sh/uv/) and [Ollama](https://ollama.com/). Start
+Install the desktop app and CLI together by opening **Install Vikram.app** from
+the installer ZIP. Then open `~/Applications/Vikram.app` or run `vikram` in a new
+terminal. Use `vikram update` to update both, `vikram update --check` to check
+without installing, and `vikram --version` to see the running CLI version.
+Updates use stable GitHub Releases; no release is published yet. The local
+installer is ad-hoc signed, pending Developer ID signing and notarization for
+public distribution. [Installation and release details](docs/releases.md).
+
+The Tauri app supports saved chats and flat folders, per-chat local models and
+advertised thinking settings, streamed replies, stop/retry, Markdown/code copy,
+and image, PDF, Word, text/code, CSV, and Excel attachments. Its light and dark themes follow
+[raniendu.dev](https://raniendu.dev). Fonts ship with the app.
+
+Use your existing Ollama installation and installed models. The picker rejects
+remote/cloud-backed and non-chat models. No model downloads happen automatically.
+One reply runs at a time; other chats keep independent drafts and histories.
+
+Build with native ARM64 Python 3.13+, Node 22.12+ and Rust (Xcode command-line
+tools must be installed):
+
+```bash
+uv sync --locked
+npm --prefix apps/desktop ci
+uv run python scripts/build_desktop.py
+```
+
+To produce the combined installer as well:
+
+```bash
+uv run python scripts/build_installer.py
+```
+
+Open `dist/installers/Install Vikram.app` to install both components in one
+action. Packaging also produces `dist/installers/Vikram-0.1.0-macos-arm64.zip`.
+The installer preserves an existing uv-managed CLI launcher, keeps chats and
+models, and checks the 20 GiB reserve before changing the installed version.
+
+Open `apps/desktop/src-tauri/target/release/bundle/macos/Vikram.app`.
+The bundled app includes its Python service; it needs no separate Python runtime.
+This is an ad-hoc signed local build, not a notarized distribution release.
+Local signing leaves Hardened Runtime off so the bundled Python libraries can
+load. Distribution would require Developer ID signing and notarization. The
+build verifies the bundle signature and sidecar startup in an empty test library.
+The build script requires 24 GiB free to protect the owner's 20 GiB reserve.
+
+For development:
+
+```bash
+uv run python scripts/build_desktop.py --sidecar-only
+npm --prefix apps/desktop run desktop
+```
+
+The browser-only Vite preview shows the layout. Chat operations require the Tauri
+shell; there is no chat HTTP server. The renderer talks to a constrained Rust
+bridge and a versioned private stdio service.
+
+Chats, drafts, settings and imported file copies live in
+`~/Library/Application Support/dev.raniendu.vikram/`, separately from evaluation
+history. SQLite and attachments are private to the current account. There is no
+additional app password/encryption layer or cloud sync. Deleting a folder keeps
+its chats. Deleting a chat removes only its app-owned attachments, never source files.
+Use the trash button beside a conversation in the sidebar, then confirm its name
+in the deletion dialog. The header's three-dot menu also includes Delete chat.
+Stop a running reply before deleting its conversation.
+The developer-only `VIKRAM_CHAT_DATA_DIR` environment variable selects an isolated
+test library; it is not available to the renderer.
+
+Attach up to four files per message, 10 MiB each. Images retain the 24-megapixel limit. Images in
+saved history are omitted with a marker when a text-only model is selected.
+Unsupported draft images must be removed or used with an image-capable model.
+When Ollama returns thinking text, a collapsed **Thinking** row lets you inspect
+it live or after the reply. Thinking has its own copy action and is saved with
+the desktop reply, up to 64,000 characters; longer traces show a limit notice.
+It is never added to later conversation context, logs, or evaluation records.
+Old replies cannot recover thinking that was previously discarded.
+Failed/stopped/interrupted
+partials remain copyable and are excluded from subsequent inference context.
+Only the latest unsuccessful user turn can be retried.
+
+Keyboard: **⌘N** new chat, **⌘B** sidebar, **⌘,** settings, **Enter** send,
+**Shift+Enter** newline. Closing during a reply asks before stopping it.
+
+See the [approved spec](docs/superpowers/specs/2026-10-14-local-chat-design.md)
+and [implementation/validation record](docs/superpowers/plans/2026-10-14-local-chat.md).
+
+## Documents and automatic web search
+
+Documents are read locally. PDF text layers, Word main-body text/tables, UTF-8
+or BOM-marked UTF-16 text/code, CSV/TSV, and XLSX cell values are supported.
+Open a document card to inspect the extracted text. Large documents show a
+Partial notice: up to 20,000 characters per file, 100 PDF pages, 10 sheets,
+1,000 rows and 100 columns are processed. Formula caches are used when present;
+formulas and macros never run. Scanned PDFs need OCR, which is not included.
+Imports run in a disposable parser process with a 15-second timeout. File
+imports and builds preserve at least 20 GiB free space.
+
+CLI and Tauri use the same conversation runner, agent instructions, model
+capability checks, web tools, limits, and completed-turn context policy.
+Compatible local models always have `web_search` and `web_fetch` available and
+decide when to use them. This applies to interactive and one-shot CLI calls and
+every desktop chat, including chats previously saved with Web Off. Neither
+interface has a web on/off setting. The old CLI `--web` flag is rejected;
+old `/web` commands explain the automatic policy without sending a message.
+
+Every model request includes the Mac's current local date, time, weekday,
+timezone/UTC offset and UTC timestamp in its system instructions. This refreshes
+throughout a session and is independent of web tools; asking for the time needs
+no search.
+
+Search uses [Parallel's anonymous MCP endpoint](https://docs.parallel.ai/integrations/mcp/search-mcp)
+without API keys, OAuth, or a paid fallback. Its free service has rate limits.
+The local model receives retrieved excerpts; answers remain local. Queries,
+search objectives, requested URLs, and an opaque session ID go to Parallel.
+Queries may include conversation or attachment details. Original files and full
+chat history are not uploaded as a search payload. CLI and app show tool
+activity, failures, and retrieved sources.
+
+Each reply permits three serial remote calls and five model requests, with
+bounded excerpts and request timeouts. Stop/Ctrl-C closes model and search
+requests. Models without tool support continue normal chat with a notice.
+There are no arbitrary MCP servers or computer-control tools.
+
+The [extension spec](docs/superpowers/specs/2026-10-14-documents-and-web-search-design.md)
+and [build record](docs/superpowers/plans/2026-10-14-documents-and-web-search.md)
+cover this behavior.
+
+## Run the CLI
+
+The combined Mac installer bundles the CLI's Python runtime. For a developer
+checkout, install [uv](https://docs.astral.sh/uv/). Both installations need
+[Ollama](https://ollama.com/). Start
 the Ollama app, or start its server in a terminal:
 
 ```bash
@@ -27,10 +157,19 @@ Or ask one question:
 
 ```bash
 uv run vikram "Explain Python generators in three sentences."
+uv run vikram --thinking off "Find the official Ollama tool-calling documentation."
 ```
 
-Conversation history exists only in memory for the current interactive session.
-Chat conversations are not saved between runs. Type `/exit` or press Ctrl-D to exit.
+CLI conversation history exists only in memory for the current interactive session.
+The desktop app saves its own chats independently. In a terminal, Vikram streams
+formatted Markdown with a compact activity line and editable multiline input.
+Normal terminal scrollback is retained. **Enter** sends, **Alt+Enter** adds a
+newline, and **↑** recalls input. **Ctrl+T** reveals/hides live thinking;
+afterward, **Ctrl+T** or `/trace` prints the latest reply's thinking on request.
+`/activity` inspects its web requests. **Ctrl+C** stops a running reply and
+returns to input; at the input prompt it exits. `/exit` or **Ctrl+D** also exits.
+Terminal thinking stays in memory only. One-shot commands and redirected output
+keep plain answer text without thinking or terminal decoration.
 
 ## Choose a local model
 
@@ -43,26 +182,53 @@ uv run vikram --model MODEL_NAME "Hello"
 
 You can also set `OLLAMA_MODEL`. The command-line option takes precedence over
 that environment variable, which takes precedence over the default. Model
-selection changes the model used by the same agent.
+selection changes the model used by the same agent. CLI session labels and help
+use the app's readable names, such as **Gemma 4 · 26B A4B IT QAT**. Pass the
+original Ollama ID to `--model`; requests and stored identities retain that ID.
 
 ## Code
 
 - `vikram/agent.py`: the agent's instructions, default model, and `build_agent`.
-- `vikram/cli.py`: one-shot and interactive terminal conversations.
+- `vikram/cli.py`: one-shot and interactive terminal adapter.
+- `vikram/terminal.py`: inline Markdown chat, editable input, and optional thinking view.
+- `vikram/installation.py` and `releases.py`: shared installer and verified updates.
+- `vikram/bundle.py`: desktop, CLI, document-parser and installer runtime dispatch.
+- `vikram/conversation.py` and `context.py`: shared execution and conversation context.
+- `vikram/web.py`: bounded anonymous Parallel MCP tools.
+- `vikram/documents.py`: local document extraction and parser process ownership.
+- `vikram/models.py`: shared local-model and capability discovery.
 - `vikram/__main__.py`: entry point for `python -m vikram`.
 - `vikram/evals/`: starter cases, evaluation runner, metrics history, and HTML report.
+- `vikram/desktop/`: private stdio adapter, SQLite, and attachments.
+- `apps/desktop/`: React interface and Tauri Rust shell.
+- `vikram/ollama.py`: shared validation/mapping for advertised thinking settings.
 
 ```mermaid
 flowchart LR
-    CLI[Terminal CLI] <--> Agent[Pydantic AI agent]
+    CLI[Terminal CLI] <--> Runner[Shared conversation runner]
+    App[Tauri app] <--> Sidecar[Private Python sidecar]
+    Sidecar <--> Runner
+    Runner <--> Agent[Pydantic AI agent]
     Agent <--> Ollama[Local Ollama model]
+    Runner <--> Parallel[Anonymous Parallel search tools]
 ```
 
-The agent is defined directly in Python; no spec folder is needed.
+The desktop app and CLI share model/tool behavior. Evaluations explicitly use
+web Off; grading also uses local Ollama and saves only metrics. No application
+component loads `.env` files.
 
-The assistant has no tools, delegation, API server, or desktop app. Evaluation
-grading also uses local Ollama, and evaluation metrics are saved locally. The
-application does not load `.env` files.
+Offline verification (no model inference):
+
+```bash
+uv run python -m unittest discover -s tests -v
+npm --prefix apps/desktop test
+npm --prefix apps/desktop run build
+cargo test --offline --manifest-path apps/desktop/src-tauri/Cargo.toml
+uv run vikram --help
+uv run vikram-eval --help
+uv run black --check vikram tests scripts
+uv run isort --check-only vikram tests scripts
+```
 
 ## Evaluate the agent
 

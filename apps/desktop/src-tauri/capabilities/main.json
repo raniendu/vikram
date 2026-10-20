@@ -1,0 +1,6 @@
+{
+  "identifier": "main",
+  "description": "Local window events only; filesystem and process access stay in Rust.",
+  "windows": ["main"],
+  "permissions": ["core:event:default"]
+}
