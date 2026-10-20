@@ -9,6 +9,7 @@ deferred-tool approval. Interfaces only supply the person (see `interaction.py`)
 import asyncio
 import copy
 import json
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Annotated, Any, Literal
@@ -480,6 +481,24 @@ class ReplyPolicy(AbstractCapability[Reply]):
             except ValueError:
                 return args
         return repair_questions(args) if isinstance(args, dict) else args
+
+
+def check_sandbox() -> int:
+    """Run one snippet in Monty without a model, to check a packaged runtime."""
+    from pydantic_monty import Monty
+
+    try:
+        with Monty() as pool, pool.checkout() as session:
+            ready = session.feed_run("sum(range(10))") == 45
+    except Exception as error:
+        ready, reason = False, type(error).__name__
+    else:
+        reason = "unexpected result"
+    if not ready:
+        sys.stderr.write(f"The Python sandbox is unavailable ({reason}).\n")
+        return 1
+    sys.stdout.write("The Python sandbox is ready.\n")
+    return 0
 
 
 def toolkit_tools() -> list[Tool]:

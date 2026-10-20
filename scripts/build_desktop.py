@@ -88,6 +88,9 @@ def main() -> None:
             "pydantic_ai_harness.ask_user",
             "--collect-submodules",
             "pydantic_ai_harness.code_mode",
+            # Monty's compiled extension imports pydantic_monty._binary at run time.
+            "--collect-submodules",
+            "pydantic_monty",
             "--add-binary",
             f"{monty}:.",
             "--copy-metadata",
@@ -111,6 +114,14 @@ def main() -> None:
             "PYINSTALLER_CONFIG_DIR": str(ROOT / "build/pyinstaller-cache"),
         },
     )
+    sandbox = subprocess.run(
+        [str(destination / "vikram-sidecar-aarch64-apple-darwin"), "--check-sandbox"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if sandbox.returncode != 0:
+        raise SystemExit("The bundled Python sandbox failed its startup check.")
     check_space()
     if not args.sidecar_only:
         subprocess.run(

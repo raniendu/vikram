@@ -10,6 +10,10 @@ def main() -> int:
     if getattr(sys, "frozen", False):
         # The sandbox's worker binary ships inside the bundle, not on PATH.
         os.environ.setdefault("MONTY_BIN", str(Path(sys._MEIPASS) / "monty"))
+    if sys.argv[1:2] == ["--check-sandbox"]:
+        from vikram.toolkit import check_sandbox
+
+        return check_sandbox()
     if sys.argv[1:2] == ["--cli"]:
         from vikram.cli import main as cli_main
 

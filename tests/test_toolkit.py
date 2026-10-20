@@ -174,6 +174,24 @@ class SandboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1]["text"], "Done")
 
 
+class SandboxCheckTests(unittest.TestCase):
+    def test_packaging_check_runs_monty_and_reports_failure(self):
+        import contextlib
+        import io
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(toolkit.check_sandbox(), 0)
+        self.assertIn("ready", output.getvalue())
+        errors = io.StringIO()
+        with (
+            patch("pydantic_monty.Monty", side_effect=FileNotFoundError),
+            contextlib.redirect_stderr(errors),
+        ):
+            self.assertEqual(toolkit.check_sandbox(), 1)
+        self.assertIn("FileNotFoundError", errors.getvalue())
+
+
 class QuestionTests(unittest.IsolatedAsyncioTestCase):
     async def test_repaired_questions_reach_the_person_and_answers_reach_the_model(
         self,
