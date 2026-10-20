@@ -21,9 +21,15 @@ The owner requested the combined CLI/Mac installer and `vikram update`; its
 design is in `docs/superpowers/specs/2026-10-14-install-and-update-design.md` and
 distribution instructions are in `docs/releases.md`. Build local artifacts and
 validate with disposable install directories; publishing requires owner direction.
-Evaluations must explicitly use web Off. Do not revive the discarded software
-factory or add other agents, unrelated tools, hosted inference, or public
-server surfaces.
+The owner requested clarifying questions, plan mode, and a Python sandbox built
+on Pydantic libraries; the design is in
+`docs/superpowers/specs/2026-10-20-questions-plan-mode-sandbox-design.md`.
+Keep them in the shared toolkit with CLI/desktop parity. The sandbox is Harness
+Code Mode with no tools inside it (Monty): keep it free of mounts, OS access,
+host tools, and network without owner direction.
+Evaluations must explicitly use web Off; tool-capable models keep the local
+toolkit with a scripted user. Do not revive the discarded software factory or
+add other agents, unrelated tools, hosted inference, or public server surfaces.
 
 ## Structure
 
@@ -32,6 +38,8 @@ server surfaces.
 - `vikram/cli.py`: interactive and one-shot command-line conversations.
 - `vikram/terminal.py`: inline streaming Markdown, input editing, and optional thinking.
 - `vikram/conversation.py`, `context.py`, `models.py`, `web.py`: shared model/tool behavior.
+- `vikram/toolkit.py`, `interaction.py`: sandbox, questions, plan mode, and the
+  answer/review contract each interface implements.
 - `vikram/documents.py`, `document_worker.py`: bounded local document parsing.
 - `vikram/__main__.py`: entry point for `python -m vikram`.
 - `vikram/desktop/`: versioned private stdio runtime, chat store and attachments.
@@ -64,9 +72,11 @@ older local state, including historical cloud-judge records.
 - `uv run vikram`: start an interactive conversation.
 - `uv run vikram "Hello"`: run one prompt.
 - `uv run vikram --model MODEL_NAME "Hello"`: use another local Ollama model.
+- `uv run vikram --plan "Task"`: start in plan mode (`/plan` toggles it in chat).
 - `uv run vikram --help`: check CLI startup without calling Ollama.
-- `uv run vikram-eval run`: benchmark the eight cases, five attempts per thinking
-  level advertised by Ollama. Repeat `--model` to benchmark multiple local models.
+- `uv run vikram-eval run`: benchmark the eleven cases (eight starter, three
+  tool cases), five attempts per thinking level advertised by Ollama. Repeat
+  `--model` to benchmark multiple local models.
 - `uv run vikram-eval run --label "Change description" --experiment "Comparison"`:
   annotate a run and group deliberate comparisons.
 - `uv run vikram-eval run --judge-model MODEL --judge-thinking off`: use a fixed

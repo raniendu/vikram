@@ -30,7 +30,8 @@ from pydantic_ai.capabilities import (
     HandleDeferredToolCalls,
 )
 from pydantic_ai.toolsets import WrapperToolset
-from pydantic_ai_harness import AskUser, CodeMode
+from pydantic_ai_harness.ask_user import AskUser
+from pydantic_ai_harness.code_mode import CodeMode
 
 from vikram.interaction import (
     AskUserRequest,

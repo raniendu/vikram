@@ -4,7 +4,9 @@ A private desktop chat app and CLI, built with Tauri, Pydantic AI, and Ollama.
 
 Vikram runs a single agent defined in this repository. Its instructions live in
 `vikram/agent.py`, and it sends model requests to your local Ollama server at
-`http://localhost:11434/v1`.
+`http://localhost:11434/v1`. Models that support tool calling can also run
+Python in an isolated sandbox, ask you clarifying questions, and, in plan mode,
+wait for your approval before they work.
 
 ## Desktop app (Apple Silicon Mac)
 
@@ -125,7 +127,7 @@ Queries may include conversation or attachment details. Original files and full
 chat history are not uploaded as a search payload. CLI and app show tool
 activity, failures, and retrieved sources.
 
-Each reply permits three serial remote calls and five model requests, with
+Each reply permits three serial remote calls and ten model requests, with
 bounded excerpts and request timeouts. Stop/Ctrl-C closes model and search
 requests. Models without tool support continue normal chat with a notice.
 There are no arbitrary MCP servers or computer-control tools.
@@ -133,6 +135,42 @@ There are no arbitrary MCP servers or computer-control tools.
 The [extension spec](docs/superpowers/specs/2026-10-14-documents-and-web-search-design.md)
 and [build record](docs/superpowers/plans/2026-10-14-documents-and-web-search.md)
 cover this behavior.
+
+## Questions, plan mode, and the Python sandbox
+
+Tool-capable models get three local tools in both the CLI and the desktop app,
+built on [Pydantic AI Harness](https://pydantic.dev/docs/ai/harness/):
+
+- **Python sandbox** (`run_code`, Harness Code Mode with no tools inside it).
+  Vikram writes and runs Python for exact arithmetic, counting, dates, and data
+  processing. Code runs locally in [Monty](https://github.com/pydantic/monty),
+  Pydantic's sandboxed interpreter. It has no files, network, environment
+  variables, clock, subprocesses, or third-party packages, and supports only
+  part of the standard library. Each snippet has 15 seconds and 128 MiB. Errors
+  go back to the model to fix, and a failing snippet never ends the reply.
+- **Clarifying questions** (`ask_user_question`, Harness Ask User). When a
+  request is ambiguous, Vikram shows multiple-choice questions and waits. Pick
+  options, type your own answer, or skip; skipped questions make Vikram choose
+  and say what it chose.
+- **Plan mode.** Vikram first asks any questions and does research, then submits
+  a numbered plan. It cannot run code until you approve. Approve to let it carry
+  out the plan in the same reply (plan mode then turns off), request changes with
+  feedback, or choose Not now to keep the plan for later.
+
+In the desktop app, use the **Plan** toggle beside the paperclip. Questions and
+plans appear as cards in the reply, and **Ran Python** rows expand to show the
+code and its output. In the terminal, `/plan` toggles plan mode (`--plan` starts
+in it). Questions and plans pause the live reply: type option numbers or your
+own words (Enter skips), and answer plans with `y`, `c` (request changes), or `n`.
+Ctrl+C stops the reply. `/activity` shows sandbox code, output, answers, and
+plans. Piped one-shot runs cannot ask, so questions are declined and plans stay
+unapproved.
+
+Per reply: at most six sandbox runs, three question calls, three plan
+submissions, and ten model requests; the last request offers no tools so the
+model must answer. A question or plan waits up to 15 minutes. Later turns see
+your answers, the latest plan and decision, and recent sandbox runs.
+See the [design](docs/superpowers/specs/2026-10-20-questions-plan-mode-sandbox-design.md).
 
 ## Run the CLI
 
@@ -158,6 +196,7 @@ Or ask one question:
 ```bash
 uv run vikram "Explain Python generators in three sentences."
 uv run vikram --thinking off "Find the official Ollama tool-calling documentation."
+uv run vikram --plan "Compare 10-year savings for 3%, 4%, and 4.5% yearly rates."
 ```
 
 CLI conversation history exists only in memory for the current interactive session.
@@ -166,7 +205,8 @@ formatted Markdown with a compact activity line and editable multiline input.
 Normal terminal scrollback is retained. **Enter** sends, **Alt+Enter** adds a
 newline, and **↑** recalls input. **Ctrl+T** reveals/hides live thinking;
 afterward, **Ctrl+T** or `/trace` prints the latest reply's thinking on request.
-`/activity` inspects its web requests. **Ctrl+C** stops a running reply and
+`/activity` inspects its web requests, sandbox runs, questions, and plans.
+`/plan` toggles plan mode. **Ctrl+C** stops a running reply and
 returns to input; at the input prompt it exits. `/exit` or **Ctrl+D** also exits.
 Terminal thinking stays in memory only. One-shot commands and redirected output
 keep plain answer text without thinking or terminal decoration.
@@ -194,6 +234,8 @@ original Ollama ID to `--model`; requests and stored identities retain that ID.
 - `vikram/installation.py` and `releases.py`: shared installer and verified updates.
 - `vikram/bundle.py`: desktop, CLI, document-parser and installer runtime dispatch.
 - `vikram/conversation.py` and `context.py`: shared execution and conversation context.
+- `vikram/toolkit.py`: Python sandbox, clarifying questions, and plan mode tools.
+- `vikram/interaction.py`: the question and plan-review contract interfaces implement.
 - `vikram/web.py`: bounded anonymous Parallel MCP tools.
 - `vikram/documents.py`: local document extraction and parser process ownership.
 - `vikram/models.py`: shared local-model and capability discovery.
@@ -211,10 +253,12 @@ flowchart LR
     Runner <--> Agent[Pydantic AI agent]
     Agent <--> Ollama[Local Ollama model]
     Runner <--> Parallel[Anonymous Parallel search tools]
+    Agent <--> Toolkit[Monty sandbox, questions, plan approval]
 ```
 
 The desktop app and CLI share model/tool behavior. Evaluations explicitly use
-web Off; grading also uses local Ollama and saves only metrics. No application
+web Off and keep the local toolkit for tool-capable models; grading also uses
+local Ollama and saves only metrics. No application
 component loads `.env` files.
 
 Offline verification (no model inference):
@@ -235,8 +279,16 @@ uv run isort --check-only vikram tests scripts
 Evaluations are run manually with [Pydantic Evals](https://ai.pydantic.dev/evals/).
 The eight starter cases cover arithmetic, text transformation, sorting, JSON
 extraction, summarization, grounded answers, explanation, and honesty about
-unavailable information. They establish a small baseline, not a comprehensive
-quality benchmark.
+unavailable information. Three tool cases cover an exact sandbox computation, a
+clarifying question, and a plan-mode task. They establish a small baseline, not
+a comprehensive quality benchmark.
+
+Tool cases need a model that advertises tool calling. A simulated user answers
+any question with a fixed typed reply and approves plans. A tool case passes
+only when its answer matches and its required tools completed: a successful
+sandbox run, an answered question, or an approved plan. Web tools stay off in
+every evaluation, while tool-capable models keep the local toolkit. Running only
+the starter cases keeps their original suite identity and history.
 
 Both answers and grading run locally through Ollama; no API key is needed.
 The default rubric judge is `gemma4:26b-a4b-it-qat`, with thinking off and
@@ -255,8 +307,8 @@ Ollama's `/api/show` metadata and runs every value sequentially. Boolean control
 become off/on rows; named controls retain their exact levels. This follows
 [Ollama's thinking API](https://docs.ollama.com/capabilities/thinking) and its
 [OpenAI-compatible thinking controls](https://docs.ollama.com/api/openai-compatibility).
-Every model/level gets a separate saved result. Eight cases with five attempts
-and two levels means 80 agent attempts, plus grading for rubric cases.
+Every model/level gets a separate saved result. Eleven cases with five attempts
+and two levels means 110 agent attempts, plus grading for rubric cases.
 
 Each case gets five sequential attempts **per thinking level**, with empty
 conversation history each time and agent temperature 0.7. The runner uses two

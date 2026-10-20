@@ -83,7 +83,8 @@ built installer can be used on this Mac. A downloaded copy on another Mac may be
 blocked by Gatekeeper. Do not disable Gatekeeper or strip quarantine attributes.
 
 Before publishing a public download, configure Developer ID signing for the
-Tauri app, its embedded Python executable/libraries and installer; configure and
+Tauri app, its embedded Python executable/libraries, the bundled `monty` sandbox
+worker, and the installer; configure and
 test Hardened Runtime entitlements for bundled Python; then notarize and staple
 the distribution using Apple's tools. The current build script deliberately
 uses local signing and is not a production signing pipeline. See

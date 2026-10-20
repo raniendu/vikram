@@ -60,6 +60,10 @@ def main() -> None:
     desktop = ROOT / "apps/desktop"
     destination = desktop / "src-tauri/binaries"
     destination.mkdir(parents=True, exist_ok=True)
+    # The Monty sandbox runs code in this worker binary, installed beside Python.
+    monty = Path(sys.executable).parent / "monty"
+    if not monty.is_file():
+        raise SystemExit("The Monty sandbox binary is missing. Run `uv sync --locked`.")
     subprocess.run(
         [
             sys.executable,
@@ -80,6 +84,12 @@ def main() -> None:
             "pydantic-ai-slim",
             "--collect-data",
             "genai_prices",
+            "--collect-submodules",
+            "pydantic_ai_harness.ask_user",
+            "--collect-submodules",
+            "pydantic_ai_harness.code_mode",
+            "--add-binary",
+            f"{monty}:.",
             "--copy-metadata",
             "pydantic",
             "--copy-metadata",
