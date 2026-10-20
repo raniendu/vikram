@@ -8,26 +8,42 @@ from vikram.evals.history import ThinkingValue
 from vikram.ollama import ThinkingControls, thinking_request
 
 
-def discover_thinking(model: str) -> ThinkingControls | None:
-    """Read only the advertised values; never persist templates or model prompts."""
+def _show(model: str) -> dict:
     request = Request(
         "http://localhost:11434/api/show",
         data=json.dumps({"model": model}).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+    with urlopen(request, timeout=10) as response:
+        payload = json.load(response)
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid model metadata.")
+    return payload
+
+
+def discover_thinking(model: str) -> ThinkingControls | None:
+    """Read only the advertised values; never persist templates or model prompts."""
     try:
-        with urlopen(request, timeout=10) as response:
-            payload = json.load(response)
-        if not isinstance(payload, dict):
-            raise ValueError("Invalid model metadata.")
-        metadata = payload.get("thinking")
+        metadata = _show(model).get("thinking")
         return None if metadata is None else ThinkingControls.model_validate(metadata)
     except (URLError, TimeoutError, OSError, ValueError):
         raise ValueError(
             "Could not read thinking controls from local Ollama. "
             "Check that Ollama is running and the model is installed."
         ) from None
+
+
+def discover_tools(model: str) -> bool:
+    """Whether Ollama advertises tool calling, as the chat interfaces check."""
+    try:
+        capabilities = _show(model).get("capabilities")
+    except (URLError, TimeoutError, OSError, ValueError):
+        raise ValueError(
+            "Could not read model capabilities from local Ollama. "
+            "Check that Ollama is running and the model is installed."
+        ) from None
+    return isinstance(capabilities, list) and "tools" in capabilities
 
 
 def select_levels(

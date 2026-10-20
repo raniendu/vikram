@@ -53,6 +53,8 @@ def capture_revision() -> AgentRevision:
         harness={
             "python": platform.python_version(),
             "pydantic-ai": version("pydantic-ai-slim"),
+            "pydantic-ai-harness": version("pydantic-ai-harness"),
             "pydantic-evals": version("pydantic-evals"),
+            "pydantic-monty": version("pydantic-monty"),
         },
     )

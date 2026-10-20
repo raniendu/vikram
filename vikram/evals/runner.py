@@ -10,15 +10,26 @@ from uuid import uuid4
 
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
+from pydantic_ai.usage import UsageLimits
 from pydantic_evals import Case, Dataset
-from pydantic_evals.evaluators import LLMJudge
+from pydantic_evals.dataset import set_eval_attribute
+from pydantic_evals.evaluators import Evaluator, LLMJudge
 from pydantic_evals.reporting import EvaluationReport
 
-from vikram.agent import SYSTEM_PROMPT
-from vikram.evals.cases import JUDGE_POLICY, CaseSpec, ObjectiveCheck, _same_json
+from vikram.agent import agent_prompt
+from vikram.evals.cases import (
+    JUDGE_POLICY,
+    CaseSpec,
+    ObjectiveCheck,
+    ToolCheck,
+    _same_json,
+    completed_tools,
+)
 from vikram.evals.history import CaseResult, RunConfig, RunRecord, fingerprint
 from vikram.evals.provenance import capture_revision
 from vikram.evals.thinking import thinking_label, thinking_request
+from vikram.interaction import ScriptedInteraction
+from vikram.toolkit import REQUEST_LIMIT, Reply
 
 
 @dataclass
@@ -36,6 +47,37 @@ class _PendingRun:
     saved: bool = False
 
 
+def _protocol(cases: Sequence[CaseSpec]) -> dict:
+    """The measuring stick: checks, judge policy, and, for tool cases, the user."""
+    protocol = {
+        "scoring_version": 1,
+        "objective_check": inspect.getsource(ObjectiveCheck),
+        "json_check": inspect.getsource(_same_json),
+        "judge_policy": JUDGE_POLICY,
+        "judge_output": "LLMJudge: all rubric criteria, binary assertion",
+        "judge_max_tokens": 512,
+    }
+    if any(case.uses_tools for case in cases):
+        protocol |= {
+            "tool_check": inspect.getsource(ToolCheck),
+            "completed_tools": inspect.getsource(completed_tools),
+            "simulated_user": inspect.getsource(ScriptedInteraction),
+        }
+    return protocol
+
+
+def _agent_hash(config: RunConfig) -> str:
+    # Without tools this is the original prompt, so such runs keep their identity.
+    if not config.tools:
+        return fingerprint(agent_prompt(web=False, toolkit=False))
+    return fingerprint(
+        {
+            mode: agent_prompt(web=False, toolkit=True, mode=mode)
+            for mode in ("normal", "plan")
+        }
+    )
+
+
 def _new_run(
     config: RunConfig, cases: Sequence[CaseSpec], label: str, experiment: str
 ) -> _PendingRun:
@@ -50,18 +92,9 @@ def _new_run(
             experiment=experiment,
             revision=capture_revision(),
             benchmark_version=2,
-            suite_hash=fingerprint([case.model_dump() for case in cases]),
-            agent_hash=fingerprint(SYSTEM_PROMPT),
-            protocol_hash=fingerprint(
-                {
-                    "scoring_version": 1,
-                    "objective_check": inspect.getsource(ObjectiveCheck),
-                    "json_check": inspect.getsource(_same_json),
-                    "judge_policy": JUDGE_POLICY,
-                    "judge_output": "LLMJudge: all rubric criteria, binary assertion",
-                    "judge_max_tokens": 512,
-                }
-            ),
+            suite_hash=fingerprint([case.identity() for case in cases]),
+            agent_hash=_agent_hash(config),
+            protocol_hash=fingerprint(_protocol(cases)),
             cases=[
                 CaseResult(
                     id=case.id,
@@ -98,46 +131,56 @@ def _count_grade(
 async def _generate(
     pending: _PendingRun,
     cases: Sequence[CaseSpec],
-    agent: Agent[None, str],
+    agent: Agent[Reply, str],
     progress: Callable[[str], None],
 ) -> None:
     run = pending.record
     config = run.config
     started = time.monotonic()
 
-    async def answer(prompt: str) -> str:
-        async with asyncio.timeout(config.timeout_seconds):
-            result = await agent.run(
-                prompt,
-                message_history=[],
-                model_settings={
-                    "temperature": config.temperature,
-                    "extra_body": thinking_request(config.thinking),
-                },
+    def answerer(spec: CaseSpec):
+        async def answer(prompt: str) -> str:
+            # A fresh reply per attempt: mode, simulated user, and tool activity.
+            reply = Reply(
+                mode=spec.mode, interaction=ScriptedInteraction(spec.user_reply)
             )
-        return result.output
+            async with asyncio.timeout(config.timeout_seconds):
+                result = await agent.run(
+                    prompt,
+                    deps=reply,
+                    message_history=[],
+                    model_settings={
+                        "temperature": config.temperature,
+                        "extra_body": thinking_request(config.thinking),
+                    },
+                    usage_limits=UsageLimits(request_limit=REQUEST_LIMIT),
+                )
+            set_eval_attribute("completed_tools", completed_tools(reply.activity))
+            return result.output
+
+        return answer
 
     try:
         async with agent:
             for spec, counts in zip(cases, run.cases):
+                evaluators: list[Evaluator[str, str, None]] = []
+                if spec.check != "rubric":
+                    evaluators.append(
+                        ObjectiveCheck(check=spec.check, expected=spec.expected)
+                    )
+                if spec.requires:
+                    evaluators.append(ToolCheck(requires=spec.requires))
                 dataset: Dataset[str, str, None] = Dataset(
                     name="vikram-starter",
                     cases=[
                         Case[str, str, None](
                             name=spec.id,
                             inputs=spec.prompt,
-                            evaluators=(
-                                ()
-                                if spec.check == "rubric"
-                                else (
-                                    ObjectiveCheck(
-                                        check=spec.check, expected=spec.expected
-                                    ),
-                                )
-                            ),
+                            evaluators=tuple(evaluators),
                         )
                     ],
                 )
+                answer = answerer(spec)
                 for attempt in range(1, config.samples + 1):
                     progress(f"Generate {spec.id}: attempt {attempt}/{config.samples}")
                     report = await dataset.evaluate(
@@ -222,7 +265,7 @@ async def _grade(
 async def evaluate_many(
     configs: Sequence[RunConfig],
     cases: Sequence[CaseSpec],
-    agent_factory: Callable[[str], Agent[None, str]],
+    agent_factory: Callable[[RunConfig], Agent[Reply, str]],
     judge: Model | None,
     progress: Callable[[str], None],
     on_result: Callable[[RunRecord], None],
@@ -247,7 +290,7 @@ async def evaluate_many(
             progress(f"{config.model} · thinking {thinking_label(config.thinking)}")
             pending = _new_run(config, cases, label, experiment)
             pending_runs.append(pending)
-            await _generate(pending, cases, agent_factory(config.model), progress)
+            await _generate(pending, cases, agent_factory(config), progress)
             if not pending.answers:
                 finish(pending)
         if judge is not None:
@@ -279,7 +322,7 @@ async def evaluate_many(
 async def evaluate(
     config: RunConfig,
     cases: Sequence[CaseSpec],
-    agent: Agent[None, str],
+    agent: Agent[Reply, str],
     judge: Model | None,
     progress: Callable[[str], None],
     *,
