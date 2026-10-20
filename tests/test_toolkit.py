@@ -95,8 +95,8 @@ class Person:
         self.requests.append(request)
         return self.answers.pop(0)(request)
 
-    async def review_plan(self, plan):
-        self.plans.append(plan)
+    async def review_plan(self, request):
+        self.plans.append(request.plan)
         return self.reviews.pop(0)
 
 

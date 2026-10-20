@@ -36,6 +36,7 @@ from vikram.interaction import (
     AskUserRequest,
     AskUserResponse,
     Interaction,
+    PlanRequest,
     PlanReview,
     Unattended,
     check_response,
@@ -204,7 +205,9 @@ class Reply:
         self.notify("reviewing")
         try:
             async with asyncio.timeout(INTERACTION_TIMEOUT):
-                review = await self.interaction.review_plan(plan)
+                review = await self.interaction.review_plan(
+                    PlanRequest(id=call_id, plan=plan)
+                )
         except TimeoutError:
             review = PlanReview(decision="dismiss")
             record["status"] = "timed_out"

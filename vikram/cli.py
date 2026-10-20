@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import os
+import signal
 import sys
 from collections.abc import Sequence
 from uuid import uuid4
@@ -19,13 +20,16 @@ from vikram.models import ModelCatalog, prepare_model, thinking_selection
 
 
 class ChatSession:
-    def __init__(self, model: str, *, thinking="default", streamer=stream_reply):
+    def __init__(
+        self, model: str, *, thinking="default", streamer=stream_reply, mode="normal"
+    ):
         self.model, self.thinking, self.streamer = model, thinking, streamer
+        self.mode = mode
         self.turns: list[dict] = []
         self.session_id = uuid4().hex
         self.catalog = ModelCatalog()
 
-    async def reply(self, prompt: str):
+    async def reply(self, prompt: str, *, interaction=None):
         models = await self.catalog.refresh()
         selected, thinking, web, notice = prepare_model(
             models, self.model, thinking_selection(self.thinking)
@@ -34,7 +38,13 @@ class ChatSession:
             self.thinking = "default"
         if notice:
             yield {"notice": notice}
-        turn = {"prompt": [prompt], "answer": None, "sources": [], "model": None}
+        turn = {
+            "prompt": [prompt],
+            "answer": None,
+            "sources": [],
+            "model": None,
+            "activity": [],
+        }
         iterator = self.streamer(
             self.model,
             thinking,
@@ -42,6 +52,8 @@ class ChatSession:
             [prompt],
             web=web,
             session_id=self.session_id,
+            mode=self.mode,
+            interaction=interaction,
         )
         last = None
         try:
@@ -53,15 +65,54 @@ class ChatSession:
                     answer=last["text"],
                     sources=last.get("sources", []),
                     model=last.get("actual_model"),
+                    activity=last.get("activity", []),
                 )
         finally:
             await iterator.aclose()
             self.turns.append(turn)
+            # An approved plan ends plan mode, as the desktop app does.
+            if last and last.get("mode") == "normal":
+                self.mode = "normal"
+
+
+class _PromptInteraction:
+    """Ask in the terminal for one-shot or plain chats; Ctrl+C quits as usual."""
+
+    def __init__(self):
+        from prompt_toolkit.output import create_output
+        from rich.console import Console
+
+        from vikram.terminal import TerminalInteraction
+
+        self.prompter = TerminalInteraction(
+            Console(stderr=True), output=create_output(stdout=sys.stderr)
+        )
+
+    async def _guard(self, waiting):
+        try:
+            return await waiting
+        except KeyboardInterrupt:
+            # Inside the reply task: route through asyncio's normal Ctrl+C handling.
+            signal.raise_signal(signal.SIGINT)
+            raise asyncio.CancelledError from None
+
+    async def ask(self, request, /):
+        return await self._guard(self.prompter.ask(request))
+
+    async def review_plan(self, request, /):
+        return await self._guard(self.prompter.review_plan(request))
+
+
+def _interaction():
+    if sys.stdin.isatty() and sys.stderr.isatty():
+        return _PromptInteraction()
+    return None
 
 
 async def _reply(session: ChatSession, message: str) -> None:
     last, seen = None, set()
-    async for event in session.reply(message):
+    interaction = _interaction()
+    async for event in session.reply(message, interaction=interaction):
         if event.get("notice"):
             sys.stderr.write(event["notice"] + "\n")
             continue
@@ -82,6 +133,26 @@ async def _reply(session: ChatSession, message: str) -> None:
                 )
             elif search.get("error"):
                 sys.stderr.write(search["error"] + "\n")
+        for record in event.get("activity", []):
+            marker = (record["kind"], record["id"], record["status"])
+            if marker in seen:
+                continue
+            seen.add(marker)
+            if record["kind"] == "code" and record["status"] == "running":
+                sys.stderr.write("Running code in the sandbox…\n")
+            elif record["kind"] == "code" and record["status"] == "failed":
+                sys.stderr.write(
+                    "Sandbox error: "
+                    + ((record.get("error") or "").strip().splitlines() or [""])[-1]
+                    + "\n"
+                )
+            elif record["kind"] == "question" and interaction is None:
+                if record["status"] == "declined":
+                    for question in record["questions"]:
+                        sys.stderr.write(
+                            f"Question skipped (no interactive terminal): "
+                            f"{question['question']}\n"
+                        )
     if last:
         sys.stdout.write(last["text"] + "\n")
         if last.get("sources"):
@@ -92,8 +163,8 @@ async def _reply(session: ChatSession, message: str) -> None:
                 )
 
 
-def _chat(model: str, prompt: str | None, *, thinking="default") -> None:
-    session = ChatSession(model, thinking=thinking)
+def _chat(model: str, prompt: str | None, *, thinking="default", mode="normal") -> None:
+    session = ChatSession(model, thinking=thinking, mode=mode)
     if (
         prompt is None
         and sys.stdin.isatty()
@@ -108,6 +179,7 @@ def _chat(model: str, prompt: str | None, *, thinking="default") -> None:
         sys.stderr.write(
             f"Local model · {format_model_name(model)}\n"
             "Supported models can search through Parallel automatically when needed.\n"
+            "/plan toggles plan mode; /exit ends the chat.\n"
         )
     with asyncio.Runner() as runner:
         while True:
@@ -119,6 +191,12 @@ def _chat(model: str, prompt: str | None, *, thinking="default") -> None:
                     return
                 if message == "/exit":
                     return
+                if message == "/plan":
+                    session.mode = "normal" if session.mode == "plan" else "plan"
+                    sys.stderr.write(
+                        f"Plan mode {'on' if session.mode == 'plan' else 'off'}.\n"
+                    )
+                    continue
                 if message.split(maxsplit=1)[:1] == ["/web"]:
                     sys.stderr.write(
                         "There is no web setting. Web tools are available automatically "
@@ -139,7 +217,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         return update_main(argv[1:])
     parser = argparse.ArgumentParser(
-        description="Chat with local Ollama using the same model/tools as the app. Supported models automatically use Parallel web search when needed; /exit ends interactive chat.",
+        description="Chat with local Ollama using the same model/tools as the app. Supported models automatically use Parallel web search, a sandboxed Python interpreter, and clarifying questions when needed; /plan toggles plan mode and /exit ends interactive chat.",
         epilog="Use `vikram update` to update the CLI and Mac app, or `vikram update --check` to check for a release. Use `vikram -- update` to send 'update' as a prompt.",
     )
     parser.add_argument(
@@ -160,6 +238,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="default",
         help="default, on/off, or a named level advertised by the model",
     )
+    parser.add_argument(
+        "--plan",
+        action="store_true",
+        help="start in plan mode: Vikram proposes a plan for your approval before it runs code or does the work",
+    )
     args = parser.parse_args(argv)
     if args.prompt is not None and not args.prompt.strip():
         parser.error("prompt must not be empty")
@@ -167,7 +250,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args.model:
         parser.error("model must not be empty")
     try:
-        _chat(args.model, args.prompt, thinking=args.thinking)
+        _chat(
+            args.model,
+            args.prompt,
+            thinking=args.thinking,
+            mode="plan" if args.plan else "normal",
+        )
     except KeyboardInterrupt:
         sys.stderr.write("\n")
         return 130

@@ -1,6 +1,7 @@
 """Questions and plan reviews answered by a person; each interface supplies one."""
 
 import re
+from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -8,6 +9,7 @@ from pydantic_ai_harness.ask_user import (
     AskUserAnswer,
     AskUserRequest,
     AskUserResponse,
+    Question,
     check_response,
 )
 
@@ -16,11 +18,45 @@ __all__ = [
     "AskUserRequest",
     "AskUserResponse",
     "Interaction",
+    "PlanRequest",
     "PlanReview",
+    "Question",
     "ScriptedInteraction",
     "Unattended",
+    "answer_from_text",
     "check_response",
 ]
+
+
+def answer_from_text(question: Question, text: str) -> AskUserAnswer | None:
+    """Read a typed reply: option numbers pick options, other text is the answer.
+
+    Several comma-separated numbers are allowed for multi-select questions.
+    Returns `None` for numbers that do not identify valid options.
+    """
+    text = " ".join(text.split())
+    parts = [part.strip() for part in text.split(",")]
+    if text and all(part.isdigit() for part in parts):
+        picks = [int(part) for part in parts]
+        if (
+            all(1 <= pick <= len(question.options) for pick in picks)
+            and len(set(picks)) == len(picks)
+            and (question.multi_select or len(picks) == 1)
+        ):
+            return AskUserAnswer(
+                header=question.header,
+                selected=tuple(question.options[pick - 1].label for pick in picks),
+            )
+        return None
+    return AskUserAnswer(header=question.header, custom_answer=text) if text else None
+
+
+@dataclass(frozen=True, kw_only=True)
+class PlanRequest:
+    """A submitted plan; `id` is the tool call ID, so a UI can match its reply."""
+
+    id: str
+    plan: str
 
 
 class PlanReview(BaseModel):
@@ -40,7 +76,7 @@ class Interaction(Protocol):
 
     async def ask(self, request: AskUserRequest, /) -> AskUserResponse: ...
 
-    async def review_plan(self, plan: str, /) -> PlanReview: ...
+    async def review_plan(self, request: PlanRequest, /) -> PlanReview: ...
 
 
 class Unattended:
@@ -49,7 +85,7 @@ class Unattended:
     async def ask(self, request: AskUserRequest, /) -> AskUserResponse:
         return AskUserResponse(cancelled=True)
 
-    async def review_plan(self, plan: str, /) -> PlanReview:
+    async def review_plan(self, request: PlanRequest, /) -> PlanReview:
         return PlanReview(decision="dismiss")
 
 
@@ -96,5 +132,5 @@ class ScriptedInteraction:
                 return AskUserResponse(cancelled=True)
         return AskUserResponse(answers=tuple(answers))
 
-    async def review_plan(self, plan: str, /) -> PlanReview:
+    async def review_plan(self, request: PlanRequest, /) -> PlanReview:
         return PlanReview(decision=self.plan_decision)
