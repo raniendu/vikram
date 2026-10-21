@@ -51,6 +51,7 @@ export interface LocalModel {
   can_think: boolean;
   tools?: boolean;
   thinking: (boolean | string)[];
+  thinking_default?: boolean | string | null;
   size: number;
   context_length: number | null;
 }

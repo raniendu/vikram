@@ -90,8 +90,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     run_parser.add_argument(
         "--thinking",
         nargs="+",
-        default=["all"],
-        help="all supported levels (default), on/off, named levels, or default for an unswept run",
+        default=["on"],
+        help="on (default, as Vikram chats), off, named levels, all supported levels, or default for the model's own unspecified behavior",
     )
     run_parser.add_argument(
         "--judge-model",

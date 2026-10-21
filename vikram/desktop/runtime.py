@@ -81,7 +81,7 @@ class Runtime:
             # Capture selection before awaiting metadata: changes affect only the next reply.
             chat = self.store.chat(chat_id)
             self.models = await self.catalog.refresh()
-            selected, thinking, web, notice = prepare_model(
+            selected, setting, thinking, web, notice = prepare_model(
                 self.models,
                 chat["model"],
                 chat["thinking"].get(chat["model"]),
@@ -99,9 +99,10 @@ class Runtime:
                 )
             if notice:
                 self.event("notice", chat_id=chat_id, message=notice)
-            if thinking != chat["thinking"].get(chat["model"]):
+            # Save only a reset choice; the default stays "on" as models change.
+            if setting != chat["thinking"].get(chat["model"]):
                 self.store.update_chat(
-                    chat_id, thinking={**chat["thinking"], chat["model"]: thinking}
+                    chat_id, thinking={**chat["thinking"], chat["model"]: setting}
                 )
             attempt = self.store.begin(
                 chat_id,

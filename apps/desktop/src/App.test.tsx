@@ -104,3 +104,41 @@ it("disables deletion for the running chat while leaving other chats available",
     ).disabled,
   ).toBe(false);
 });
+
+it("defaults thinking to on and offers off only as an explicit choice", () => {
+  const updateChat = vi.fn();
+  const model = {
+    name: "local:1",
+    available: true,
+    vision: false,
+    tools: true,
+    can_think: true,
+    thinking: [false, true],
+    thinking_default: true,
+    reason: null,
+    size: 1,
+    context_length: null,
+  };
+  state.app = {
+    ...state.app,
+    chat: { ...state.app.chat!, model: "local:1", thinking: {} },
+    models: [model],
+    updateChat,
+  };
+  const view = render(<App />);
+  const select = screen.getByLabelText("Thinking") as HTMLSelectElement;
+  expect(select.selectedOptions[0].textContent).toBe("On");
+  expect([...select.options].map((o) => o.textContent)).toEqual(["On", "Off"]);
+  fireEvent.change(select, { target: { value: "false" } });
+  expect(updateChat).toHaveBeenCalledWith({ thinking: { "local:1": false } });
+  // An explicit "on" saved earlier is the same choice as the default.
+  state.app = {
+    ...state.app,
+    chat: { ...state.app.chat!, thinking: { "local:1": true } },
+  };
+  view.rerender(<App />);
+  expect(
+    (screen.getByLabelText("Thinking") as HTMLSelectElement).selectedOptions[0]
+      .textContent,
+  ).toBe("On");
+});

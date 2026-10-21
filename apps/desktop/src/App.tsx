@@ -17,6 +17,7 @@ import { Transcript } from "./components/Transcript";
 import { Composer } from "./components/Composer";
 import { desktop, native, onNative } from "./bridge";
 import { formatModelName } from "./modelNames";
+import { thinkingOn } from "./state";
 import type { ChatSummary, Folder, Thinking } from "./types";
 
 export default function App() {
@@ -145,6 +146,9 @@ export default function App() {
   )
     ? rawThinking
     : null;
+  // The saved default (null) is "on", so an explicit "on" shows as the same choice.
+  const thinkingOnValue = model ? thinkingOn(model) : null;
+  const thinkingChoice = thinking === thinkingOnValue ? null : thinking;
 
   return (
     <div className={`app-shell ${sidebar ? "" : "sidebar-hidden"}`}>
@@ -223,12 +227,12 @@ export default function App() {
                     ))}
                   </select>
                 </div>
-                {model && model.thinking.length > 0 && (
+                {model && model.thinking.some((v) => v !== thinkingOnValue) && (
                   <div className="select-wrap thinking-select">
                     <label htmlFor="thinking">Thinking</label>
                     <select
                       id="thinking"
-                      value={JSON.stringify(thinking)}
+                      value={JSON.stringify(thinkingChoice)}
                       onChange={(e) => {
                         const value = JSON.parse(e.target.value) as Thinking;
                         void app.updateChat({
@@ -240,19 +244,25 @@ export default function App() {
                       }}
                       disabled={app.sending}
                     >
-                      <option value="null">Model default</option>
-                      {model.thinking.map((value) => (
-                        <option
-                          value={JSON.stringify(value)}
-                          key={JSON.stringify(value)}
-                        >
-                          {typeof value === "boolean"
-                            ? value
-                              ? "On"
-                              : "Off"
-                            : value}
-                        </option>
-                      ))}
+                      <option value="null">
+                        {typeof thinkingOnValue === "string"
+                          ? `On · ${thinkingOnValue}`
+                          : "On"}
+                      </option>
+                      {model.thinking
+                        .filter((value) => value !== thinkingOnValue)
+                        .map((value) => (
+                          <option
+                            value={JSON.stringify(value)}
+                            key={JSON.stringify(value)}
+                          >
+                            {typeof value === "boolean"
+                              ? value
+                                ? "On"
+                                : "Off"
+                              : value}
+                          </option>
+                        ))}
                     </select>
                   </div>
                 )}

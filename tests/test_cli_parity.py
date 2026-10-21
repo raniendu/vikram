@@ -110,7 +110,11 @@ class ParityTests(unittest.IsolatedAsyncioTestCase):
                 await runtime.send(cid, str(revision))
                 await runtime.task
             self.assertEqual(traces[0], traces[1])
-            self.assertEqual(traces[0], [(False, "off"), (None, "off"), (None, "off")])
+            # Off while advertised; nothing to request without controls; then the
+            # reset choice is the default again, which is thinking on.
+            self.assertEqual(traces[0], [(False, "off"), (None, "off"), (True, "off")])
+            self.assertEqual(cli.thinking, "on")
+            self.assertEqual(store.chat(cid)["thinking"], {"local:1": None})
             store.close()
 
     async def test_cli_and_desktop_send_identical_tool_turns_and_followup_context(self):

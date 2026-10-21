@@ -5,7 +5,7 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from vikram.evals.history import ThinkingValue
-from vikram.ollama import ThinkingControls, thinking_request
+from vikram.ollama import ThinkingControls, thinking_on, thinking_request
 
 
 def _show(model: str) -> dict:
@@ -49,13 +49,16 @@ def discover_tools(model: str) -> bool:
 def select_levels(
     controls: ThinkingControls | None, requested: list[str]
 ) -> list[ThinkingValue | None]:
-    """Expand all supported levels, or validate an explicit smaller selection."""
+    """Expand all supported levels, or validate an explicit smaller selection.
+
+    "on" is Vikram's chat default for this model: True, or its own named level.
+    """
     if requested == ["default"]:
         return [None]
     if controls is None:
         raise ValueError(
-            "Ollama did not advertise thinking levels. Update Ollama for automatic "
-            "benchmark coverage, or use --thinking default for an unswept run."
+            "Ollama did not advertise thinking controls for this model. Update "
+            "Ollama, or use --thinking default for the model's own behavior."
         )
     if requested == ["all"]:
         return list(controls.values)
@@ -63,8 +66,12 @@ def select_levels(
         raise ValueError("Use all or default alone, or list supported thinking levels.")
     selected: list[ThinkingValue | None] = []
     for item in requested:
-        value: ThinkingValue = {"on": True, "off": False}.get(item, item)
-        if value not in controls.values:
+        value = (
+            thinking_on(controls.values, controls.default)
+            if item == "on"
+            else {"off": False}.get(item, item)
+        )
+        if value is None or value not in controls.values:
             raise ValueError(f"Unsupported thinking level: {item}.")
         if value not in selected:
             selected.append(value)

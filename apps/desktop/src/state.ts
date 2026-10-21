@@ -1,4 +1,13 @@
-import type { Chat, RuntimeEvent } from "./types";
+import type { Chat, LocalModel, RuntimeEvent, Thinking } from "./types";
+
+/** Thinking is on unless explicitly off: true, else the model's own level. */
+export function thinkingOn(model: LocalModel): Thinking {
+  if (model.thinking.includes(true)) return true;
+  const fallback = model.thinking_default;
+  if (typeof fallback === "string" && model.thinking.includes(fallback))
+    return fallback;
+  return model.thinking.find((v) => typeof v === "string") ?? null;
+}
 
 export function applyAttempt(chat: Chat, event: RuntimeEvent): Chat {
   if (event.chat_id !== chat.id || !event.attempt_id || !event.request_id)

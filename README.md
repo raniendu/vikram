@@ -19,7 +19,7 @@ installer is ad-hoc signed, pending Developer ID signing and notarization for
 public distribution. [Installation and release details](docs/releases.md).
 
 The Tauri app supports saved chats and flat folders, per-chat local models and
-advertised thinking settings, streamed replies, stop/retry, Markdown/code copy,
+advertised thinking settings (on by default), streamed replies, stop/retry, Markdown/code copy,
 and image, PDF, Word, text/code, CSV, and Excel attachments. Its light and dark themes follow
 [raniendu.dev](https://raniendu.dev). Fonts ship with the app.
 
@@ -303,13 +303,15 @@ uv run vikram-eval run --model MODEL --judge-model gemma4:26b-a4b-it-qat
 uv run vikram-eval run --samples 10 --k 1 3 5 10
 ```
 
-By default, the benchmark discovers each model's supported thinking values from
+By default, the benchmark runs each model with thinking on, as Vikram chats do.
+`--thinking all` instead discovers each model's supported thinking values from
 Ollama's `/api/show` metadata and runs every value sequentially. Boolean controls
 become off/on rows; named controls retain their exact levels. This follows
 [Ollama's thinking API](https://docs.ollama.com/capabilities/thinking) and its
 [OpenAI-compatible thinking controls](https://docs.ollama.com/api/openai-compatibility).
 Every model/level gets a separate saved result. Eleven cases with five attempts
-and two levels means 110 agent attempts, plus grading for rubric cases.
+means 55 agent attempts per model, plus grading for rubric cases; sweeping two
+levels doubles that.
 
 Each case gets five sequential attempts **per thinking level**, with empty
 conversation history each time and agent temperature 0.7. The runner uses two
@@ -339,13 +341,15 @@ For a focused run, repeat `--case`. This objective-only smoke check skips judgin
 uv run vikram-eval run --case arithmetic --case sorting --samples 1 --k 1 --thinking default
 ```
 
-Use `--thinking default` for one run with no thinking override, `--thinking off on`
-for boolean controls, or `--thinking low medium high` when the model advertises
-those levels. Explicit levels are validated before generating answers. If the
-server has no thinking metadata, automatic coverage stops with an explanation;
-update Ollama, or choose `--thinking default` for a run marked as unspecified.
-The runner never guesses model levels or silently treats an unsupported level
-as a measured one. A model advertising only `false` runs once, with thinking off.
+Use `--thinking off` to evaluate without thinking, `--thinking off on` for
+boolean controls, `--thinking low medium high` when the model advertises those
+levels, `--thinking all` for every advertised level, or `--thinking default` for
+one run with no thinking override. `on` is the model's `true` control, or its own
+named level when it has no on/off switch. Explicit levels are validated before
+generating answers. If the server has no thinking metadata for a model, the run
+stops with an explanation; update Ollama, or choose `--thinking default` for a
+run marked as unspecified. The runner never guesses model levels or silently
+treats an unsupported level as a measured one.
 
 Use `uv run vikram-eval run --help` to see the case IDs. To add a domain-specific
 task later, add a `CaseSpec` with a unique ID and an explicit expected answer or
@@ -451,7 +455,7 @@ both local models into Ollama, benchmark them and all their supported thinking
 levels together while holding the working tree and eval settings fixed:
 
 ```bash
-uv run vikram-eval run --model MODEL_A --model MODEL_B --experiment "Model comparison"
+uv run vikram-eval run --model MODEL_A --model MODEL_B --thinking all --experiment "Model comparison"
 ```
 
 Choose two runs at the same thinking level in the optional comparison panel to

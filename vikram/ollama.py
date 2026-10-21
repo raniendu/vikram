@@ -25,6 +25,21 @@ class ThinkingControls(BaseModel):
         return self
 
 
+def thinking_on(
+    values: list[ThinkingValue], default: ThinkingValue | None = None
+) -> ThinkingValue | None:
+    """The owner's default: thinking on unless explicitly off.
+
+    On is `True` when advertised, otherwise the model's own named level. `None`
+    means the model advertises no controls, so nothing can be requested.
+    """
+    if any(value is True for value in values):
+        return True
+    if isinstance(default, str) and default in values:
+        return default
+    return next((value for value in values if isinstance(value, str)), None)
+
+
 def thinking_request(value: ThinkingValue | None) -> dict[str, str]:
     if value is None:
         return {}

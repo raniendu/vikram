@@ -32,3 +32,46 @@ class CliOptionsTests(unittest.TestCase):
         reply.assert_not_called()
         self.assertNotIn("Web Off", output.getvalue())
         self.assertIn("no web setting", output.getvalue().lower())
+
+
+class ThinkingDefaultTests(unittest.TestCase):
+    """The owner's rule: thinking is on unless explicitly turned off."""
+
+    def model(self, values, default=None):
+        return {
+            "name": "local:1",
+            "available": True,
+            "tools": True,
+            "thinking": values,
+            "thinking_default": default,
+        }
+
+    def test_default_is_on_and_off_must_be_explicit(self):
+        from vikram.models import prepare_model, thinking_selection
+
+        models = [self.model([False, True], True)]
+        for choice in ("on", "default"):
+            prepared = prepare_model(models, "local:1", thinking_selection(choice))
+            self.assertEqual((prepared.setting, prepared.thinking), (None, True))
+        prepared = prepare_model(models, "local:1", thinking_selection("off"))
+        self.assertEqual((prepared.setting, prepared.thinking), (False, False))
+        self.assertIsNone(prepared.notice)
+
+    def test_on_uses_the_model_level_and_unsupported_off_stays_on(self):
+        from vikram.models import prepare_model
+        from vikram.ollama import thinking_on
+
+        self.assertEqual(thinking_on(["low", "high"], "high"), "high")
+        self.assertEqual(thinking_on(["low", "high"]), "low")
+        self.assertEqual(thinking_on([False, True, "medium"], True), True)
+        self.assertIsNone(thinking_on([]))
+        prepared = prepare_model([self.model([True], True)], "local:1", False)
+        self.assertEqual((prepared.setting, prepared.thinking), (None, True))
+        self.assertIn("Using thinking on", prepared.notice)
+        prepared = prepare_model([self.model([])], "local:1", None)
+        self.assertIsNone(prepared.thinking)
+
+    def test_cli_defaults_to_on(self):
+        with patch("vikram.cli._chat") as chat:
+            self.assertEqual(cli.main(["Hello"]), 0)
+        self.assertEqual(chat.call_args.kwargs["thinking"], "on")

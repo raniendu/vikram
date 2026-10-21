@@ -1,10 +1,11 @@
 """Read local model metadata and fail closed for remote/unknown entries."""
 
 import asyncio
+from typing import NamedTuple
 
 import httpx
 
-from vikram.ollama import ThinkingControls
+from vikram.ollama import ThinkingControls, ThinkingValue, thinking_on
 
 BASE = "http://localhost:11434"
 
@@ -48,6 +49,7 @@ def parse_model(entry: dict, shown: dict) -> dict:
         "tools": bool(available and "tools" in capabilities),
         "can_think": bool(available and "thinking" in capabilities),
         "thinking": list(controls.values) if controls and available else [],
+        "thinking_default": controls.default if controls and available else None,
         "size": entry.get("size", 0),
         "context_length": None,
     }
@@ -105,31 +107,53 @@ class ModelCatalog:
             ) from None
 
 
-def prepare_model(models: list[dict], name: str, thinking) -> tuple:
-    """Resolve chat settings with automatic tools whenever the model supports them."""
+class Prepared(NamedTuple):
+    model: dict
+    # The saved choice: None is the default (on), False is explicitly off.
+    setting: ThinkingValue | None
+    # What the reply requests: the setting, or "on" for this model by default.
+    thinking: ThinkingValue | None
+    web: str
+    notice: str | None
+
+
+def prepare_model(models: list[dict], name: str, setting) -> Prepared:
+    """Resolve chat settings: thinking on unless explicitly off, and automatic
+    tools whenever the model supports them."""
     selected = next((m for m in models if m["name"] == name and m["available"]), None)
     if selected is None:
         raise ValueError(
             "Choose an installed local chat model. Refresh if a model was removed."
         )
     notices = []
-    if thinking is not None and not any(
-        type(thinking) is type(v) and thinking == v for v in selected["thinking"]
+    if setting is not None and not any(
+        type(setting) is type(v) and setting == v for v in selected["thinking"]
     ):
-        thinking = None
+        setting = None
         notices.append(
-            "The previous thinking setting is unavailable. Using Model default."
+            "The previous thinking setting is unavailable. "
+            + (
+                "Using thinking on."
+                if selected["thinking"]
+                else "This model does not advertise thinking controls."
+            )
         )
+    thinking = (
+        thinking_on(selected["thinking"], selected.get("thinking_default"))
+        if setting is None
+        else setting
+    )
     effective = "auto" if selected.get("tools") else "off"
     if effective == "off":
         notices.append(
             "Web search, the Python sandbox, and questions are unavailable for "
             "this model. Chat remains available."
         )
-    return selected, thinking, effective, " ".join(notices) or None
+    return Prepared(selected, setting, thinking, effective, " ".join(notices) or None)
 
 
 def thinking_selection(value: str):
-    if value == "default":
+    """CLI choice to saved setting: on (the default) resolves per model."""
+    if value in ("on", "default"):
         return None
-    return {"off": False, "on": True}.get(value, value)
+    return {"off": False}.get(value, value)

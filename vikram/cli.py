@@ -21,7 +21,7 @@ from vikram.models import ModelCatalog, prepare_model, thinking_selection
 
 class ChatSession:
     def __init__(
-        self, model: str, *, thinking="default", streamer=stream_reply, mode="normal"
+        self, model: str, *, thinking="on", streamer=stream_reply, mode="normal"
     ):
         self.model, self.thinking, self.streamer = model, thinking, streamer
         self.mode = mode
@@ -31,11 +31,11 @@ class ChatSession:
 
     async def reply(self, prompt: str, *, interaction=None):
         models = await self.catalog.refresh()
-        selected, thinking, web, notice = prepare_model(
+        selected, setting, thinking, web, notice = prepare_model(
             models, self.model, thinking_selection(self.thinking)
         )
-        if thinking is None:
-            self.thinking = "default"
+        if setting is None:
+            self.thinking = "on"
         if notice:
             yield {"notice": notice}
         turn = {
@@ -163,7 +163,7 @@ async def _reply(session: ChatSession, message: str) -> None:
                 )
 
 
-def _chat(model: str, prompt: str | None, *, thinking="default", mode="normal") -> None:
+def _chat(model: str, prompt: str | None, *, thinking="on", mode="normal") -> None:
     session = ChatSession(model, thinking=thinking, mode=mode)
     if (
         prompt is None
@@ -235,8 +235,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--thinking",
-        default="default",
-        help="default, on/off, or a named level advertised by the model",
+        default="on",
+        help="on (default) or off, or a named level advertised by the model",
     )
     parser.add_argument(
         "--plan",

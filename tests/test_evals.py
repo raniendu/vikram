@@ -169,6 +169,31 @@ class ToolCaseTests(unittest.IsolatedAsyncioTestCase):
 
 
 class EvalCliTests(unittest.TestCase):
+    def test_benchmarks_think_by_default_and_sweep_only_when_asked(self):
+        from vikram.evals.thinking import select_levels
+        from vikram.ollama import ThinkingControls
+
+        controls = ThinkingControls(values=[False, True, "medium"], default=True)
+        self.assertEqual(select_levels(controls, ["on"]), [True])
+        self.assertEqual(select_levels(controls, ["all"]), [False, True, "medium"])
+        self.assertEqual(select_levels(controls, ["off"]), [False])
+        runs = []
+
+        async def benchmark(configs, *args):
+            runs.extend(configs)
+            return 0
+
+        errors = io.StringIO()
+        with (
+            patch.object(cli, "discover_thinking", return_value=controls),
+            patch.object(cli, "discover_tools", return_value=True),
+            patch.object(cli, "_benchmark", side_effect=benchmark),
+            contextlib.redirect_stderr(errors),
+        ):
+            status = cli.main(["run", "--model", "local:1", "--case", "arithmetic"])
+        self.assertEqual(status, 0, errors.getvalue())
+        self.assertEqual([config.thinking for config in runs], [True])
+
     def test_tool_cases_require_a_tool_capable_model(self):
         errors = io.StringIO()
         with (

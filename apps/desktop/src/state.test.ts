@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applyAttempt } from "./state";
-import type { Chat, RuntimeEvent } from "./types";
+import { applyAttempt, thinkingOn } from "./state";
+import type { Chat, LocalModel, RuntimeEvent } from "./types";
 const chat = {
   id: "a",
   messages: [
@@ -284,5 +284,17 @@ describe("web source routing", () => {
     expect(applyAttempt(active, { ...event, chat_id: "elsewhere" })).toBe(
       active,
     );
+  });
+});
+
+describe("thinking default", () => {
+  const model = (thinking: (boolean | string)[], fallback?: string | boolean) =>
+    ({ thinking, thinking_default: fallback }) as unknown as LocalModel;
+  it("is on unless the model only advertises named levels", () => {
+    expect(thinkingOn(model([false, true], true))).toBe(true);
+    expect(thinkingOn(model([false, true, "medium"], true))).toBe(true);
+    expect(thinkingOn(model(["low", "high"], "high"))).toBe("high");
+    expect(thinkingOn(model(["low", "high"]))).toBe("low");
+    expect(thinkingOn(model([]))).toBeNull();
   });
 });

@@ -13,7 +13,10 @@ failure handling, and context policy; keep that behavior outside UI adapters.
 CLI and desktop chats always use automatic web tools when the model supports
 them, including desktop chats with a legacy Web Off preference. Neither
 interface exposes a web on/off setting.
-The owner requested visible model thinking and a modern terminal chat. Desktop
+The owner requested visible model thinking and a modern terminal chat. Thinking
+is on by default in the CLI, desktop, and evaluations, and off only when
+explicitly chosen; "on" is a model's `true` control, else its own named level.
+Desktop
 replies save bounded thinking separately from the answer and show it collapsed
 by default. Terminal traces are in memory only and shown on demand. Never add
 these display traces to follow-up context, logs, or evaluation artifacts.
@@ -75,8 +78,8 @@ older local state, including historical cloud-judge records.
 - `uv run vikram --plan "Task"`: start in plan mode (`/plan` toggles it in chat).
 - `uv run vikram --help`: check CLI startup without calling Ollama.
 - `uv run vikram-eval run`: benchmark the eleven cases (eight starter, three
-  tool cases), five attempts per thinking level advertised by Ollama. Repeat
-  `--model` to benchmark multiple local models.
+  tool cases), five attempts each with thinking on. Add `--thinking all` to
+  sweep every level Ollama advertises; repeat `--model` for several models.
 - `uv run vikram-eval run --label "Change description" --experiment "Comparison"`:
   annotate a run and group deliberate comparisons.
 - `uv run vikram-eval run --judge-model MODEL --judge-thinking off`: use a fixed
