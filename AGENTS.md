@@ -31,9 +31,22 @@ Keep them in the shared toolkit with CLI/desktop parity. The sandbox is a local
 microVM per reply (Harness SmolSandbox on smolvm) booted from a bundled,
 digest-pinned image. Never run model code outside a VM, and keep the VM free of
 mounts, host environment, host tools, and network without owner direction.
+The owner requested an agent-controlled browser and chose its engine, safety
+policy, and CLI behavior; the design is in
+`docs/superpowers/specs/2026-10-21-agent-browser-design.md`. The engine is a
+WebKit child webview: a panel in the app the person can watch, take over, stop,
+or close, and the same app binary as a hidden `--browser-helper` for the CLI.
+Keep its non-persistent profile, its page script in a separate script world,
+approval before consequential actions (form submissions including Enter,
+sign-in, purchases, posting, deleting, agreeing), refusal of password, payment,
+and one-time-code fields, blocked downloads, uploads, pop-ups, and private or
+local network addresses, and the Tauri capability that excludes the panel.
+Page content is untrusted data. Do not add another browser engine, bundle
+Chromium, or give the sandbox VM network access without owner direction.
 Evaluations must explicitly use web Off; tool-capable models keep the local
-toolkit with a scripted user. Do not revive the discarded software factory or
-add other agents, unrelated tools, hosted inference, or public server surfaces.
+toolkit with a scripted user, and the browser case uses an offline scripted
+site. Do not revive the discarded software factory or add other agents,
+unrelated tools, hosted inference, or public server surfaces.
 
 ## Structure
 
@@ -42,9 +55,14 @@ add other agents, unrelated tools, hosted inference, or public server surfaces.
 - `vikram/cli.py`: interactive and one-shot command-line conversations.
 - `vikram/terminal.py`: inline streaming Markdown, input editing, and optional thinking.
 - `vikram/conversation.py`, `context.py`, `models.py`, `web.py`: shared model/tool behavior.
-- `vikram/toolkit.py`, `interaction.py`: sandbox, questions, plan mode, and the
-  answer/review contract each interface implements.
+- `vikram/toolkit.py`, `interaction.py`: sandbox, questions, plan mode, browser
+  tools, and the answer/review/approval contract each interface implements.
 - `vikram/sandbox.py`: the per-reply Python microVM, its pinned image, and cleanup.
+- `vikram/browser.py`: the browser engine contract, page views, argument repair,
+  and the CLI's hidden helper process.
+- `apps/desktop/src-tauri/src/browser.rs`, `browser.js`: the WebKit browser
+  (panel or helper), its navigation policy and content blocker, and the page
+  script that numbers elements and classifies consequential actions.
 - `vikram/documents.py`, `document_worker.py`: bounded local document parsing.
 - `vikram/__main__.py`: entry point for `python -m vikram`.
 - `vikram/desktop/`: versioned private stdio runtime, chat store and attachments.
@@ -56,7 +74,8 @@ add other agents, unrelated tools, hosted inference, or public server surfaces.
 - `tests/`: focused offline chat and recovery checks.
 - `vikram/ollama.py`: shared thinking metadata validation and request mapping.
 - `vikram/evals/`: manually invoked Pydantic Evals, local Ollama rubric grading,
-  metrics-only history, and a self-contained HTML report.
+  metrics-only history, a self-contained HTML report, and the offline site the
+  browser case uses (`site.py`).
 
 For the original CLI, the model endpoint is fixed to `http://localhost:11434/v1`. Model selection is
 `--model`, then `OLLAMA_MODEL`, then the default in `agent.py`. The application
@@ -80,7 +99,7 @@ older local state, including historical cloud-judge records.
 - `uv run vikram --model MODEL_NAME "Hello"`: use another local Ollama model.
 - `uv run vikram --plan "Task"`: start in plan mode (`/plan` toggles it in chat).
 - `uv run vikram --help`: check CLI startup without calling Ollama.
-- `uv run vikram-eval run`: benchmark the eleven cases (eight starter, three
+- `uv run vikram-eval run`: benchmark the twelve cases (eight starter, four
   tool cases), five attempts each with thinking on. Add `--thinking all` to
   sweep every level Ollama advertises; repeat `--model` for several models.
 - `uv run vikram-eval run --label "Change description" --experiment "Comparison"`:
@@ -102,6 +121,8 @@ Desktop commands:
 - `uv run python scripts/check_installer.py dist/installers/Vikram-0.1.0-macos-arm64.zip`: isolated packaged-install smoke check.
 - `uv run vikram update --check`: check the latest stable GitHub release without installation.
 - `npm --prefix apps/desktop run desktop`: start Tauri development mode after building the sidecar.
+- `apps/desktop/src-tauri/target/release/bundle/macos/Vikram.app/Contents/MacOS/vikram-sidecar --check-browser`:
+  start the packaged browser helper on a blank page without the network.
 - `uv run python -m unittest discover -s tests -v`: offline Python checks.
 - `npm --prefix apps/desktop test`: frontend recovery checks.
 - `npm --prefix apps/desktop run build`: TypeScript and production assets.

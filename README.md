@@ -5,8 +5,9 @@ A private desktop chat app and CLI, built with Tauri, Pydantic AI, and Ollama.
 Vikram runs a single agent defined in this repository. Its instructions live in
 `vikram/agent.py`, and it sends model requests to your local Ollama server at
 `http://localhost:11434/v1`. Models that support tool calling can also run
-Python in an isolated local VM, ask you clarifying questions, and, in plan mode,
-wait for your approval before they work.
+Python in an isolated local VM, ask you clarifying questions, in plan mode wait
+for your approval before they work, and use a private web browser that you can
+watch, stop, or take over.
 
 ## Desktop app (Apple Silicon Mac)
 
@@ -52,8 +53,9 @@ The bundled app includes its Python service; it needs no separate Python runtime
 This is an ad-hoc signed local build, not a notarized distribution release.
 Local signing leaves Hardened Runtime off so the bundled Python libraries can
 load. Distribution would require Developer ID signing and notarization. The
-build boots the bundled Python sandbox VM once, then verifies the bundle signature
-and sidecar startup in an empty test library.
+build boots the bundled Python sandbox VM once, then verifies the bundle signature,
+starts the bundled browser once on a blank page (no network), and checks sidecar
+startup in an empty test library.
 The build script requires 24 GiB free to protect the owner's 20 GiB reserve.
 
 For development:
@@ -178,6 +180,47 @@ model must answer. A question or plan waits up to 15 minutes. Later turns see
 your answers, the latest plan and decision, and recent sandbox runs.
 See the [design](docs/superpowers/specs/2026-10-20-questions-plan-mode-sandbox-design.md).
 
+## The browser
+
+Tool-capable models can also use a real web browser (WebKit, the engine behind
+Safari) through six tools: open a page, click, type, scroll, go back, and look
+again. Each page reaches the model as a numbered list of what it can click or
+type into plus the visible text, and vision models also get a screenshot. Page
+content is treated as untrusted data, never as instructions.
+
+- **In the app,** the browser opens as a panel beside the chat. You watch it
+  live. **Take over** pauses Vikram's next browser action so you can use the
+  page yourself (for example to sign in), and **Hand back** lets it continue.
+  **Stop** ends the reply, and closing the panel ends the browser's session.
+- **In the CLI,** the same browser runs hidden, through the Vikram app's binary
+  in a helper mode, so the CLI needs the app installed (or, in a checkout, the
+  desktop app built). It starts on first use and closes when the CLI exits.
+
+Safety rules are the same in both:
+
+- **Private session.** The browser has its own non-persistent profile: none of
+  your Safari or other browsers' cookies or passwords, and closing the browser
+  or quitting Vikram clears it.
+- **Asks first.** Submitting a form (including pressing Enter in a field),
+  signing in, buying or paying, posting or sending, deleting, and agreeing to
+  terms wait for your approval: a card in the app, a `y`/`n` prompt in the
+  terminal. Piped runs cannot approve, so those actions are declined. A
+  declined action is not asked again in the same reply.
+- **Never types secrets.** Password, payment-card, and one-time-code fields
+  are refused; Vikram tells you what is needed so you can enter it yourself.
+  Their contents are never shown to the model.
+- **No local network or files.** Only public `http` and `https` pages open.
+  Addresses on this Mac or your networks (localhost, private and Tailscale
+  ranges, `.local` names) are blocked for every request a page makes, as are
+  `file:` and other schemes. Downloads, uploads, and pop-up windows are
+  blocked.
+
+Per reply: at most eight browser actions; only the latest page view is sent to
+the model in full. Approvals and take-overs wait up to 15 minutes. Later turns
+see which actions ran and where the browser was left. Clicks and typing use
+script events, which a few sites ignore; take over for those. See the
+[design](docs/superpowers/specs/2026-10-21-agent-browser-design.md).
+
 ## Run the CLI
 
 The combined Mac installer bundles the CLI's Python runtime. For a developer
@@ -216,8 +259,8 @@ formatted Markdown with a compact activity line and editable multiline input.
 Normal terminal scrollback is retained. **Enter** sends, **Alt+Enter** adds a
 newline, and **↑** recalls input. **Ctrl+T** reveals/hides live thinking;
 afterward, **Ctrl+T** or `/trace` prints the latest reply's thinking on request.
-`/activity` inspects its web requests, sandbox runs, questions, and plans.
-`/plan` toggles plan mode. **Ctrl+C** stops a running reply and
+`/activity` inspects its web requests, sandbox runs, questions, plans, and
+browser actions. `/plan` toggles plan mode. **Ctrl+C** stops a running reply and
 returns to input; at the input prompt it exits. `/exit` or **Ctrl+D** also exits.
 Terminal thinking stays in memory only. One-shot commands and redirected output
 keep plain answer text without thinking or terminal decoration.
@@ -245,16 +288,18 @@ original Ollama ID to `--model`; requests and stored identities retain that ID.
 - `vikram/installation.py` and `releases.py`: shared installer and verified updates.
 - `vikram/bundle.py`: desktop, CLI, document-parser and installer runtime dispatch.
 - `vikram/conversation.py` and `context.py`: shared execution and conversation context.
-- `vikram/toolkit.py`: Python sandbox, clarifying questions, and plan mode tools.
+- `vikram/toolkit.py`: Python sandbox, clarifying questions, plan mode, and browser tools.
 - `vikram/sandbox.py`: the per-reply Python microVM and its pinned image.
-- `vikram/interaction.py`: the question and plan-review contract interfaces implement.
+- `vikram/browser.py`: the browser engine contract, page views, and the CLI's helper.
+- `vikram/interaction.py`: the question, plan-review, and approval contract interfaces implement.
 - `vikram/web.py`: bounded anonymous Parallel MCP tools.
 - `vikram/documents.py`: local document extraction and parser process ownership.
 - `vikram/models.py`: shared local-model and capability discovery.
 - `vikram/__main__.py`: entry point for `python -m vikram`.
 - `vikram/evals/`: starter cases, evaluation runner, metrics history, and HTML report.
 - `vikram/desktop/`: private stdio adapter, SQLite, and attachments.
-- `apps/desktop/`: React interface and Tauri Rust shell.
+- `apps/desktop/`: React interface and Tauri Rust shell; `src-tauri/src/browser.rs`
+  and `browser.js` are the WebKit browser and its page script.
 - `vikram/ollama.py`: shared validation/mapping for advertised thinking settings.
 
 ```mermaid
@@ -265,8 +310,9 @@ flowchart LR
     Runner <--> Agent[Pydantic AI agent]
     Agent <--> Ollama[Local Ollama model]
     Runner <--> Parallel[Anonymous Parallel search tools]
-    Agent <--> Toolkit[Questions, plan approval, run_code]
+    Agent <--> Toolkit[Questions, plan approval, run_code, browser]
     Toolkit <--> VM[Python microVM per reply]
+    Toolkit <--> Browser[WebKit browser: app panel or hidden helper]
 ```
 
 The desktop app and CLI share model/tool behavior. Evaluations explicitly use
@@ -292,18 +338,21 @@ uv run isort --check-only vikram tests scripts
 Evaluations are run manually with [Pydantic Evals](https://ai.pydantic.dev/evals/).
 The eight starter cases cover arithmetic, text transformation, sorting, JSON
 extraction, summarization, grounded answers, explanation, and honesty about
-unavailable information. Three tool cases cover an exact sandbox computation, a
-clarifying question, and a plan-mode task. They establish a small baseline, not
-a comprehensive quality benchmark.
+unavailable information. Four tool cases cover an exact sandbox computation, a
+clarifying question, a plan-mode task, and a browser lookup. They establish a
+small baseline, not a comprehensive quality benchmark.
 
 Tool cases need a model that advertises tool calling, and the sandbox and plan
 cases need a Mac that can run the sandbox VM; each attempt gets its own VM.
 A simulated user answers
-any question with a fixed typed reply and approves plans. A tool case passes
-only when its answer matches and its required tools completed: a successful
-sandbox run, an answered question, or an approved plan. Web tools stay off in
+any question with a fixed typed reply and approves plans. The browser case
+browses a small offline site with canned pages (no network, no WebKit), where
+the price it asks for is only one click away. A tool case passes only when its
+answer matches and its required tools completed: a successful sandbox run, an
+answered question, an approved plan, or a browser action. Web tools stay off in
 every evaluation, while tool-capable models keep the local toolkit. Running only
-the starter cases keeps their original suite identity and history.
+the starter cases, or only the first three tool cases, keeps their original
+suite identity and history.
 
 Both answers and grading run locally through Ollama; no API key is needed.
 The default rubric judge is `gemma4:26b-a4b-it-qat`, with thinking off and

@@ -68,8 +68,10 @@ The build produces the versioned ZIP, its `.sha256` checksum, and a clickable
 `dist/installers/Install Vikram.app`. `--skip-build` packages a previously built
 app, checking its version, signature and runtime first. The smoke check extracts
 the actual ZIP and exercises installation, reinstallation, bundled CLI startup,
-the bundled Python sandbox (it boots a VM), and the desktop protocol in a disposable directory. It does not install into
-the owner's account or contact Ollama/Parallel.
+the bundled Python sandbox (it boots a VM), the bundled browser (it opens a blank
+page in a hidden WebKit window, without the network), and the desktop protocol in
+a disposable directory. It does not install into the owner's account or contact
+Ollama/Parallel.
 
 All four versions must agree: `pyproject.toml`,
 `apps/desktop/package.json`, `apps/desktop/src-tauri/Cargo.toml`, and
