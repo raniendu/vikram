@@ -5,7 +5,7 @@ A private desktop chat app and CLI, built with Tauri, Pydantic AI, and Ollama.
 Vikram runs a single agent defined in this repository. Its instructions live in
 `vikram/agent.py`, and it sends model requests to your local Ollama server at
 `http://localhost:11434/v1`. Models that support tool calling can also run
-Python in an isolated sandbox, ask you clarifying questions, and, in plan mode,
+Python in an isolated local VM, ask you clarifying questions, and, in plan mode,
 wait for your approval before they work.
 
 ## Desktop app (Apple Silicon Mac)
@@ -52,7 +52,7 @@ The bundled app includes its Python service; it needs no separate Python runtime
 This is an ad-hoc signed local build, not a notarized distribution release.
 Local signing leaves Hardened Runtime off so the bundled Python libraries can
 load. Distribution would require Developer ID signing and notarization. The
-build runs the bundled Python sandbox once, then verifies the bundle signature
+build boots the bundled Python sandbox VM once, then verifies the bundle signature
 and sidecar startup in an empty test library.
 The build script requires 24 GiB free to protect the owner's 20 GiB reserve.
 
@@ -142,13 +142,18 @@ cover this behavior.
 Tool-capable models get three local tools in both the CLI and the desktop app,
 built on [Pydantic AI Harness](https://pydantic.dev/docs/ai/harness/):
 
-- **Python sandbox** (`run_code`, Harness Code Mode with no tools inside it).
-  Vikram writes and runs Python for exact arithmetic, counting, dates, and data
-  processing. Code runs locally in [Monty](https://github.com/pydantic/monty),
-  Pydantic's sandboxed interpreter. It has no files, network, environment
-  variables, clock, subprocesses, or third-party packages, and supports only
-  part of the standard library. Each snippet has 15 seconds and 128 MiB. Errors
-  go back to the model to fix, and a failing snippet never ends the reply.
+- **Python sandbox** (`run_code`, Harness SmolSandbox). Vikram writes and runs
+  Python for exact arithmetic, counting, dates, and data processing. Code runs
+  in a local microVM ([smolvm](https://github.com/smol-machines/smolvm) on
+  Apple's Hypervisor framework) with its own Linux kernel: no network, none of
+  your files, and none of your environment. Each reply that runs code boots a
+  new VM (1 CPU, 512 MiB, 1 GB disks) from a bundled, digest-pinned
+  `python:3.13-alpine` image, so only the standard library is installed, and
+  deletes the VM when the reply ends. It will not boot a VM that could take the
+  Mac below 20 GiB free. Each snippet is a fresh Python process with 15 seconds; files in
+  `/workspace` last for the rest of the reply. Errors go back to the model to
+  fix, and a failing snippet never ends the reply. On a Mac that cannot run VMs,
+  Vikram says why and does not offer the sandbox: code never runs outside a VM.
 - **Clarifying questions** (`ask_user_question`, Harness Ask User). When a
   request is ambiguous, Vikram shows multiple-choice questions and waits. Pick
   options, type your own answer, or skip; skipped questions make Vikram choose
@@ -189,8 +194,13 @@ If Ollama is already running, skip `ollama serve`. In another terminal:
 ```bash
 uv sync --locked
 ollama pull gemma4:26b-a4b-it-qat
+uv run python scripts/fetch_sandbox_image.py
 uv run vikram
 ```
+
+The third command downloads the Python sandbox's image once (about 20 MB, from
+Docker Hub) and verifies it against the digest pinned in `vikram/sandbox.py`.
+Without it, chats still work and Vikram says the sandbox is unavailable.
 
 Or ask one question:
 
@@ -236,6 +246,7 @@ original Ollama ID to `--model`; requests and stored identities retain that ID.
 - `vikram/bundle.py`: desktop, CLI, document-parser and installer runtime dispatch.
 - `vikram/conversation.py` and `context.py`: shared execution and conversation context.
 - `vikram/toolkit.py`: Python sandbox, clarifying questions, and plan mode tools.
+- `vikram/sandbox.py`: the per-reply Python microVM and its pinned image.
 - `vikram/interaction.py`: the question and plan-review contract interfaces implement.
 - `vikram/web.py`: bounded anonymous Parallel MCP tools.
 - `vikram/documents.py`: local document extraction and parser process ownership.
@@ -254,7 +265,8 @@ flowchart LR
     Runner <--> Agent[Pydantic AI agent]
     Agent <--> Ollama[Local Ollama model]
     Runner <--> Parallel[Anonymous Parallel search tools]
-    Agent <--> Toolkit[Monty sandbox, questions, plan approval]
+    Agent <--> Toolkit[Questions, plan approval, run_code]
+    Toolkit <--> VM[Python microVM per reply]
 ```
 
 The desktop app and CLI share model/tool behavior. Evaluations explicitly use
@@ -284,7 +296,9 @@ unavailable information. Three tool cases cover an exact sandbox computation, a
 clarifying question, and a plan-mode task. They establish a small baseline, not
 a comprehensive quality benchmark.
 
-Tool cases need a model that advertises tool calling. A simulated user answers
+Tool cases need a model that advertises tool calling, and the sandbox and plan
+cases need a Mac that can run the sandbox VM; each attempt gets its own VM.
+A simulated user answers
 any question with a fixed typed reply and approves plans. A tool case passes
 only when its answer matches and its required tools completed: a successful
 sandbox run, an answered question, or an approved plan. Web tools stay off in

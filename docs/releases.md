@@ -55,6 +55,9 @@ Quit any copy running from the checkout's build directory first. Rebuilding a
 running PyInstaller executable can invalidate deferred imports in its existing
 process. The build checks for that condition and stops before replacing files.
 An installed version uses its own immutable directory and can remain open.
+The first build downloads the Python sandbox image pinned in `vikram/sandbox.py`
+(about 20 MB, verified digest by digest) into `build/sandbox/` and bundles it,
+so the installed app never fetches it. Later builds reuse the verified copy.
 
 ```sh
 uv run python scripts/build_installer.py
@@ -65,7 +68,7 @@ The build produces the versioned ZIP, its `.sha256` checksum, and a clickable
 `dist/installers/Install Vikram.app`. `--skip-build` packages a previously built
 app, checking its version, signature and runtime first. The smoke check extracts
 the actual ZIP and exercises installation, reinstallation, bundled CLI startup,
-the bundled Python sandbox, and the desktop protocol in a disposable directory. It does not install into
+the bundled Python sandbox (it boots a VM), and the desktop protocol in a disposable directory. It does not install into
 the owner's account or contact Ollama/Parallel.
 
 All four versions must agree: `pyproject.toml`,
@@ -83,10 +86,17 @@ built installer can be used on this Mac. A downloaded copy on another Mac may be
 blocked by Gatekeeper. Do not disable Gatekeeper or strip quarantine attributes.
 
 Before publishing a public download, configure Developer ID signing for the
-Tauri app, its embedded Python executable/libraries, the bundled `monty` sandbox
-worker, and the installer; configure and
+Tauri app, its embedded Python executable/libraries, the sandbox's VM runtime,
+and the installer; configure and
 test Hardened Runtime entitlements for bundled Python; then notarize and staple
-the distribution using Apple's tools. The current build script deliberately
+the distribution using Apple's tools. The VM helper `smol-vmm` needs its
+`com.apple.security.hypervisor` and `com.apple.security.cs.disable-library-validation`
+entitlements: the build ships it unmodified because PyInstaller's re-signing
+strips them, so production signing must re-apply them. The release must also
+carry the VM runtime's notices (bundled from smolmachines' `THIRD_PARTY_NOTICES.md`
+and `licenses/`) and those of the sandbox image, and meet the source terms of
+their GPL and LGPL parts: the Linux kernel in libkrunfw, and the Alpine packages
+in the guest root filesystem and the Python image. The current build script deliberately
 uses local signing and is not a production signing pipeline. See
 [Apple's packaging guidance](https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution)
 and [notarization guidance](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).

@@ -12,6 +12,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.models.ollama import OllamaModel
 from pydantic_ai.providers.ollama import OllamaProvider
 
+from vikram import sandbox
 from vikram.agent import DEFAULT_MODEL, build_agent
 from vikram.evals.cases import CASES, CaseSpec
 from vikram.evals.history import (
@@ -63,7 +64,12 @@ async def _benchmark(
         configs,
         cases,
         # Evaluations never use the web; tool-capable models keep the local toolkit.
-        lambda config: build_agent(config.model, web="off", toolkit=bool(config.tools)),
+        lambda config: build_agent(
+            config.model,
+            web="off",
+            toolkit=bool(config.tools),
+            sandbox=bool(config.sandbox),
+        ),
         judge,
         _progress,
         completed,
@@ -146,6 +152,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         selected = [case for case in CASES if args.case is None or case.id in args.case]
         needs_judge = any(case.group == "judged" for case in selected)
         needs_tools = any(case.uses_tools for case in selected)
+        sandbox_reason = sandbox.unavailable_reason()
+        if sandbox_reason and any("run_code" in case.requires for case in selected):
+            sys.stderr.write(
+                f"{sandbox_reason} The sandbox and plan cases need it; choose other "
+                "cases with --case.\n"
+            )
+            return 1
         models = list(
             dict.fromkeys(
                 model.strip()
@@ -203,6 +216,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "thinking": level,
                         "thinking_levels": controls.values if controls else None,
                         "tools": tools,
+                        "sandbox": sandbox_reason is None if tools else None,
                     }
                 )
                 for level in levels
@@ -210,8 +224,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         _progress(
             f"Benchmark: {len(configs)} model/thinking configurations, "
             f"{len(selected)} cases, {config.samples} attempts per case. "
-            "Web tools are off; tool-capable models keep the local sandbox, "
-            "questions, and plan mode with a simulated user."
+            "Web tools are off; tool-capable models keep questions and plan mode "
+            "with a simulated user"
+            + (
+                ", and run code in a new VM per attempt."
+                if sandbox_reason is None
+                else f". {sandbox_reason}"
+            )
         )
         if needs_judge:
             _progress(

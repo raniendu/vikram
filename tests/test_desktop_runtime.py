@@ -8,12 +8,19 @@ from unittest.mock import patch
 import httpx
 from pydantic_ai.messages import BinaryContent, ModelRequest, UserPromptPart
 from test_desktop_store import png
+from test_toolkit import fake_vm
 
 from vikram.conversation import stream_reply
 from vikram.desktop.history import inference_messages
 from vikram.desktop.models import ModelCatalog, parse_model
 from vikram.desktop.runtime import Runtime
 from vikram.desktop.store import Store
+
+
+def setUpModule():
+    # Replies get a fake sandbox here; test_toolkit covers the real VM.
+    unittest.enterModuleContext(fake_vm())
+
 
 ENTRY = {
     "name": "local:1",

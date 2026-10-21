@@ -3,7 +3,14 @@ import io
 import unittest
 from unittest.mock import patch
 
+from test_toolkit import fake_vm
+
 from vikram import cli
+
+
+def setUpModule():
+    # Replies get a fake sandbox here; test_toolkit covers the real VM.
+    unittest.enterModuleContext(fake_vm())
 
 
 class CliOptionsTests(unittest.TestCase):

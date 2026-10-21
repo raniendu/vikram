@@ -23,7 +23,7 @@
   const settings = [
     ["Model", (r) => r.config.model],
     ["Thinking", (r) => r.config.thinking == null ? null : thinking(r.config.thinking)],
-    ["Local tools", (r) => r.config.tools == null ? null : r.config.tools ? "Sandbox, questions, plan mode" : "Off"],
+    ["Local tools", (r) => r.config.tools == null ? null : !r.config.tools ? "Off" : r.config.sandbox === false ? "Questions, plan mode (no sandbox)" : r.config.sandbox ? "VM sandbox, questions, plan mode" : "Sandbox, questions, plan mode"],
     ["System prompt", (r) => r.agent_hash, short],
     ["Runtime / tools code", (r) => r.revision?.source_hash, short],
     ["Dependencies", (r) => r.revision?.dependencies_hash, short],

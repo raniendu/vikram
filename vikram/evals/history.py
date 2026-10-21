@@ -57,6 +57,8 @@ class RunConfig(Record):
     thinking_levels: list[ThinkingValue] | None = None
     # Whether the agent had its local toolkit; None in records made before it existed.
     tools: bool | None = None
+    # Whether run_code had its VM sandbox; None without tools or in older records.
+    sandbox: bool | None = None
 
     @model_validator(mode="after")
     def validate_budget(self) -> Self:

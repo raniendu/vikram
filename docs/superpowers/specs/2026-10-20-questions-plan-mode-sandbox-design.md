@@ -7,6 +7,10 @@ tool, Plan Mode and a Sandbox for code execution using Pydantic related
 libraries"), then implemented with CLI/desktop parity, evaluations, and offline
 tests. This extends the [documents and web search design](2026-10-14-documents-and-web-search-design.md).
 
+Revised the same day: the owner asked "Can we isolate it to a VM?", tested a
+microVM, then chose to replace Monty with it, failing closed, with the image
+bundled in the app. Section 5 records the VM design.
+
 ## 1. Outcome
 
 Tool-capable local models get three local tools in both interfaces:
@@ -23,14 +27,13 @@ reply with a plan only.
 
 ## 2. Pydantic libraries
 
-- [Pydantic AI Harness](https://pydantic.dev/docs/ai/harness/) `0.54.0`, which
-  pins the repository's `pydantic-ai-slim==2.54.0` exactly:
-  - `CodeMode(tools=[])` provides `run_code`. With no tools inside, it is a pure
-    [Monty](https://github.com/pydantic/monty) sandbox rather than a tool router.
+- [Pydantic AI Harness](https://pydantic.dev/docs/ai/harness/) `0.56.0`, which
+  pins the repository's `pydantic-ai-slim==2.56.0` exactly:
+  - `SmolSandboxBackend` runs `run_code` in a local
+    [smolvm](https://github.com/smol-machines/smolvm) microVM through Pydantic
+    AI's `Workspace` API (`smolmachines==1.29.1`).
   - `AskUser` provides `ask_user_question`, its schema, validation, and the
     answerer protocol each interface implements.
-- `pydantic-monty==1.1.0`: the sandbox interpreter and its worker binary. 1.2.0
-  was two days old when chosen, so the older stable release is pinned.
 - Core Pydantic AI deferred tools: `submit_plan` uses `requires_approval=True`,
   resolved inline by `HandleDeferredToolCalls`, so the plan tool's body (which
   ends plan mode) cannot run without approval.
@@ -44,14 +47,13 @@ identical requests (a parity test covers a question, plan, and sandbox flow).
 `review_plan(request)`. Adapters present and collect; they never decide what the
 model is told.
 
-Per-reply state (mode, the person, and visible activity records) travels as
-the agent's `deps`, so evaluations can reuse one agent across attempts.
-A wrapper toolset sits outside CodeMode. That position lets it see `run_code`,
-and it decides which tools each request offers:
+Per-reply state (mode, the person, the reply's VM, and visible activity
+records) travels as the agent's `deps`, so evaluations can reuse one agent
+across attempts. A wrapper toolset decides which tools each request offers:
 
 | Mode | Offered tools |
 | --- | --- |
-| Normal | web tools (when available), `ask_user_question`, `run_code` |
+| Normal | web tools (when available), `ask_user_question`, `run_code` (when this Mac can run the VM) |
 | Plan, before approval | web tools, `ask_user_question`, `submit_plan`, and `run_code`, which is refused |
 | Final request of a reply | none, so the model must answer |
 
@@ -78,21 +80,57 @@ without it.
 - Web limits are unchanged: three remote calls and 60 seconds of tool time.
 - Per reply: 6 sandbox runs, 3 question calls, 3 plan submissions. Past a limit
   the tool returns a failed result the model must adapt to.
-- Each snippet: 15 seconds and 128 MiB. Results reach the model and the UI
-  bounded to 8,000 characters; code records to 20,000 and plans to 6,000.
-- Sandbox errors return as retries with tracebacks. The fourth consecutive
-  failure becomes a finished failure, so a bad snippet never ends the reply.
+- Each snippet: 15 seconds in a VM with 1 CPU, 512 MiB, and 1 GB disks.
+  smolvm's default disk is 19.6 GB and the VM writes over 1 GB/s, so without the
+  cap one snippet could fill most of the Mac's free space. A VM also does not
+  boot if its disks could take the Mac below the 20 GiB reserve. Results reach
+  the model and the UI bounded to 8,000 characters; code records to 20,000 and
+  plans to 6,000.
+- Errors, timeouts, and a VM that cannot start return as finished failures with
+  the traceback or reason, so a bad snippet never ends the reply. The model can
+  fix the code within the run limit.
 - Questions and plan reviews wait at most 15 minutes, then continue as
   declined or not approved. Stop/Ctrl+C ends the wait and the reply.
 
 ## 5. Sandbox isolation
 
-Monty runs a subset of Python in a separate worker process. It has no
-filesystem, network, environment variables, clock, subprocesses, or third-party
-packages. Vikram configures no mounts, no OS handler, and no tools inside the
-sandbox. Code results are labeled as coming from the model's code, not the
-user. REPL state lasts for one reply. The PyInstaller sidecar bundles the
-`monty` worker and points `MONTY_BIN` at it.
+`run_code` runs model-written Python only in a local microVM (`vikram/sandbox.py`):
+
+- **Isolation.** smolvm boots its own Linux kernel on Apple's Hypervisor
+  framework. Vikram mounts nothing from the Mac, passes no environment, and
+  keeps the VM's network off. A live test checks the VM cannot see the Mac's
+  home directory, a host environment variable, or the internet.
+- **Image.** A digest-pinned `python:3.13-alpine` linux/arm64 image (standard
+  library only), fetched at build time by `scripts/fetch_sandbox_image.py` and
+  bundled in the app as a local archive, so code never needs the network.
+  Before use, every file in the archive is checked against the pinned manifest
+  digest.
+- **Lifecycle.** Each reply that runs code gets a new VM, booted on first use
+  (about 1.5 s the first time, 0.3 s once the image is cached) and deleted when
+  the reply ends, including on stop. Each call is a fresh Python process, and a
+  final bare expression is printed as in the REPL; files in `/workspace` last
+  for the reply. A per-reply VM, rather than one per conversation, keeps cleanup
+  deterministic and matches the previous per-reply sandbox state. VMs persist
+  if a process crashes, so Vikram records each VM it creates and deletes any
+  left by a dead process the next time it starts one.
+- **Failing closed.** On a Mac that cannot run VMs, or without a valid image,
+  `run_code` is not offered, the prompt omits it, and the reply's notice says
+  why; questions and plan mode still work. If a VM fails to start mid-reply,
+  the call fails and the model answers without code. Code never runs outside a
+  VM.
+- **Packaging.** PyInstaller re-signs the binaries it collects, which strips
+  the `com.apple.security.hypervisor` entitlement from smolvm's `smol-vmm`
+  helper, so the build ships that file verbatim beside smolvm's package, where
+  smolvm finds it without environment variables that child processes would
+  inherit. smolvm caches its unpacked guest filesystem (46 MB) by the file's
+  size and modification time, and a frozen app unpacks files with new times at
+  each launch, so Vikram sets that time from the file's content first.
+  `--check-sandbox` boots a VM from the frozen sidecar during the build and the
+  installer smoke check.
+
+This replaced [Monty](https://github.com/pydantic/monty) through Harness Code
+Mode, an interpreter-level sandbox that ran a subset of Python in a worker
+process on the Mac.
 
 ## 6. Interfaces
 
@@ -124,8 +162,10 @@ the required tools completed (a successful run, an answered question, an
 approved plan). Tool completion lives only in the in-memory report, which is
 discarded; history keeps counts, never prompts, code, plans, or answers.
 
-Evaluations keep web Off. Tool-capable models keep the local toolkit; runs
-record `tools`, and Harness and Monty versions join the provenance. Tool cases
-are refused for models without tool calling. The eight starter cases keep their
+Evaluations keep web Off. Tool-capable models keep the local toolkit, and each
+attempt gets its own VM. Runs record `tools` and `sandbox`, and the Harness and
+smolmachines versions join the provenance. Tool cases are refused for models
+without tool calling, and the sandbox and plan cases on a Mac that cannot run
+the VM. The eight starter cases keep their
 suite and protocol fingerprints (pinned by a test), and runs without tools keep
 their prompt fingerprint, so existing series stay comparable.

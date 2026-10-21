@@ -5,6 +5,7 @@ from typing import NamedTuple
 
 import httpx
 
+from vikram import sandbox
 from vikram.ollama import ThinkingControls, ThinkingValue, thinking_on
 
 BASE = "http://localhost:11434"
@@ -149,6 +150,8 @@ def prepare_model(models: list[dict], name: str, setting) -> Prepared:
             "Web search, the Python sandbox, and questions are unavailable for "
             "this model. Chat remains available."
         )
+    elif (reason := sandbox.unavailable_reason()) is not None:
+        notices.append(f"{reason} Questions, plan mode, and web search still work.")
     return Prepared(selected, setting, thinking, effective, " ".join(notices) or None)
 
 

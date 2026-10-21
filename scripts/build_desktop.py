@@ -11,6 +11,14 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+SIDECAR = "vikram-sidecar-aarch64-apple-darwin"
+# PyInstaller re-signs the binaries it collects, which strips the hypervisor
+# entitlement from smolvm's VM helper. Ship that one file as verbatim data.
+VERBATIM_VM_HELPER = """
+a.binaries = [b for b in a.binaries if b[0].rsplit("/", 1)[-1] != "smol-vmm"]
+a.datas = [d for d in a.datas if d[0].rsplit("/", 1)[-1] != "smol-vmm"]
+a.datas.append(("smol/smol-vmm", {helper!r}, "DATA"))
+"""
 
 
 def check_running_build() -> None:
@@ -47,33 +55,21 @@ def check_space() -> None:
         )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sidecar-only", action="store_true")
-    args = parser.parse_args()
-    if platform.system() != "Darwin" or platform.machine() != "arm64":
-        raise SystemExit(
-            "The first release targets macOS on Apple Silicon. Use an arm64 Python."
-        )
-    check_running_build()
-    check_space()
-    desktop = ROOT / "apps/desktop"
-    destination = desktop / "src-tauri/binaries"
-    destination.mkdir(parents=True, exist_ok=True)
-    # The Monty sandbox runs code in this worker binary, installed beside Python.
-    monty = Path(sys.executable).parent / "monty"
-    if not monty.is_file():
-        raise SystemExit("The Monty sandbox binary is missing. Run `uv sync --locked`.")
+def sidecar_spec(image: Path) -> Path:
+    """Write the sidecar's PyInstaller spec, keeping the VM helper verbatim."""
+    import smol
+
+    helper = Path(smol.__file__).with_name("smol-vmm")
+    if not helper.is_file():
+        raise SystemExit("The sandbox VM helper is missing. Run `uv sync --locked`.")
     subprocess.run(
         [
             sys.executable,
             "-m",
-            "PyInstaller",
-            "--noconfirm",
-            "--clean",
+            "PyInstaller.utils.cliutils.makespec",
             "--onefile",
             "--name",
-            "vikram-sidecar-aarch64-apple-darwin",
+            SIDECAR,
             "--paths",
             str(ROOT),
             "--collect-data",
@@ -87,25 +83,74 @@ def main() -> None:
             "--collect-submodules",
             "pydantic_ai_harness.ask_user",
             "--collect-submodules",
-            "pydantic_ai_harness.code_mode",
-            # Monty's compiled extension imports pydantic_monty._binary at run time.
-            "--collect-submodules",
-            "pydantic_monty",
-            "--add-binary",
-            f"{monty}:.",
+            "pydantic_ai_harness.smol_sandbox",
+            # The VM runtime: its native module, helper, libraries, and notices.
+            "--collect-all",
+            "smol",
+            "--add-data",
+            f"{image}:sandbox",
             "--copy-metadata",
             "pydantic",
             "--copy-metadata",
             "openai",
             "--copy-metadata",
             "vikram",
+            "--specpath",
+            str(ROOT / "build"),
+            str(ROOT / "scripts/desktop_sidecar.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+    spec = ROOT / "build" / f"{SIDECAR}.spec"
+    text = spec.read_text()
+    marker = "pyz = PYZ(a.pure)"
+    if text.count(marker) != 1:
+        raise SystemExit(
+            "PyInstaller wrote an unexpected spec; check the VM helper step."
+        )
+    spec.write_text(
+        text.replace(marker, VERBATIM_VM_HELPER.format(helper=str(helper)) + marker)
+    )
+    return spec
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--sidecar-only", action="store_true")
+    args = parser.parse_args()
+    if platform.system() != "Darwin" or platform.machine() != "arm64":
+        raise SystemExit(
+            "The first release targets macOS on Apple Silicon. Use an arm64 Python."
+        )
+    check_running_build()
+    check_space()
+    desktop = ROOT / "apps/desktop"
+    destination = desktop / "src-tauri/binaries"
+    destination.mkdir(parents=True, exist_ok=True)
+    # The sandbox VM boots this digest-pinned image, so code never needs the network.
+    subprocess.run(
+        [sys.executable, str(ROOT / "scripts/fetch_sandbox_image.py")],
+        cwd=ROOT,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+    from vikram.sandbox import IMAGE_FILE
+
+    spec = sidecar_spec(ROOT / "build/sandbox" / IMAGE_FILE)
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "PyInstaller",
+            "--noconfirm",
+            "--clean",
             "--distpath",
             str(destination),
             "--workpath",
             str(ROOT / "build/sidecar"),
-            "--specpath",
-            str(ROOT / "build"),
-            str(ROOT / "scripts/desktop_sidecar.py"),
+            str(spec),
         ],
         cwd=ROOT,
         check=True,
@@ -114,14 +159,18 @@ def main() -> None:
             "PYINSTALLER_CONFIG_DIR": str(ROOT / "build/pyinstaller-cache"),
         },
     )
+    # Boots a VM from the bundled helper and image, without a model.
     sandbox = subprocess.run(
-        [str(destination / "vikram-sidecar-aarch64-apple-darwin"), "--check-sandbox"],
+        [str(destination / SIDECAR), "--check-sandbox"],
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=120,
     )
     if sandbox.returncode != 0:
-        raise SystemExit("The bundled Python sandbox failed its startup check.")
+        raise SystemExit(
+            "The bundled Python sandbox failed its startup check. "
+            + sandbox.stderr.strip()[-300:]
+        )
     check_space()
     if not args.sidecar_only:
         subprocess.run(

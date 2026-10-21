@@ -29,6 +29,7 @@ from vikram.evals.history import CaseResult, RunConfig, RunRecord, fingerprint
 from vikram.evals.provenance import capture_revision
 from vikram.evals.thinking import thinking_label, thinking_request
 from vikram.interaction import ScriptedInteraction
+from vikram.sandbox import Sandbox, VmSandbox
 from vikram.toolkit import REQUEST_LIMIT, Reply
 
 
@@ -72,7 +73,9 @@ def _agent_hash(config: RunConfig) -> str:
         return fingerprint(agent_prompt(web=False, toolkit=False))
     return fingerprint(
         {
-            mode: agent_prompt(web=False, toolkit=True, mode=mode)
+            mode: agent_prompt(
+                web=False, toolkit=True, sandbox=config.sandbox is True, mode=mode
+            )
             for mode in ("normal", "plan")
         }
     )
@@ -133,6 +136,7 @@ async def _generate(
     cases: Sequence[CaseSpec],
     agent: Agent[Reply, str],
     progress: Callable[[str], None],
+    sandbox: Callable[[], Sandbox],
 ) -> None:
     run = pending.record
     config = run.config
@@ -140,21 +144,27 @@ async def _generate(
 
     def answerer(spec: CaseSpec):
         async def answer(prompt: str) -> str:
-            # A fresh reply per attempt: mode, simulated user, and tool activity.
+            # A fresh reply per attempt: mode, simulated user, VM, and tool activity.
             reply = Reply(
-                mode=spec.mode, interaction=ScriptedInteraction(spec.user_reply)
+                mode=spec.mode,
+                interaction=ScriptedInteraction(spec.user_reply),
+                sandbox=sandbox() if config.sandbox else None,
             )
-            async with asyncio.timeout(config.timeout_seconds):
-                result = await agent.run(
-                    prompt,
-                    deps=reply,
-                    message_history=[],
-                    model_settings={
-                        "temperature": config.temperature,
-                        "extra_body": thinking_request(config.thinking),
-                    },
-                    usage_limits=UsageLimits(request_limit=REQUEST_LIMIT),
-                )
+            try:
+                async with asyncio.timeout(config.timeout_seconds):
+                    result = await agent.run(
+                        prompt,
+                        deps=reply,
+                        message_history=[],
+                        model_settings={
+                            "temperature": config.temperature,
+                            "extra_body": thinking_request(config.thinking),
+                        },
+                        usage_limits=UsageLimits(request_limit=REQUEST_LIMIT),
+                    )
+            finally:
+                if reply.sandbox is not None:
+                    await reply.sandbox.close()
             set_eval_attribute("completed_tools", completed_tools(reply.activity))
             return result.output
 
@@ -272,8 +282,12 @@ async def evaluate_many(
     *,
     label: str = "",
     experiment: str = "",
+    sandbox: Callable[[], Sandbox] = VmSandbox,
 ) -> list[RunRecord]:
-    """Keep rubric answers in memory until every model has finished generation."""
+    """Keep rubric answers in memory until every model has finished generation.
+
+    Configurations with `sandbox` set run each attempt's code in its own VM.
+    """
     if judge is None and any(case.check == "rubric" for case in cases):
         raise ValueError("Judged cases require an explicit judge model.")
     pending_runs: list[_PendingRun] = []
@@ -290,7 +304,7 @@ async def evaluate_many(
             progress(f"{config.model} · thinking {thinking_label(config.thinking)}")
             pending = _new_run(config, cases, label, experiment)
             pending_runs.append(pending)
-            await _generate(pending, cases, agent_factory(config), progress)
+            await _generate(pending, cases, agent_factory(config), progress, sandbox)
             if not pending.answers:
                 finish(pending)
         if judge is not None:

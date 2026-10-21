@@ -7,12 +7,20 @@ from pathlib import Path
 from unittest.mock import patch
 
 import httpx
+from test_toolkit import FakeSandbox, fake_vm
 
 from vikram.agent import build_agent
 from vikram.evals import cli
 from vikram.evals.cases import CASES, completed_tools
 from vikram.evals.history import RunConfig, save_run
 from vikram.evals.runner import _new_run, evaluate_many
+from vikram.sandbox import CodeRun
+
+
+def setUpModule():
+    # Replies get a fake sandbox here; test_toolkit covers the real VM.
+    unittest.enterModuleContext(fake_vm())
+
 
 # Saved history depends on these: the original eight cases stay one series.
 STARTER_SUITE = "4bd8114f23132b9132ebe827efef4727e904e3d1dbb2ed4d79f28eef1e4f6a22"
@@ -90,20 +98,31 @@ class SuiteIdentityTests(unittest.TestCase):
 
 
 class ToolCaseTests(unittest.IsolatedAsyncioTestCase):
-    async def evaluate(self, case_id, *steps):
+    async def evaluate(self, case_id, *steps, output="ok\n"):
         cases = [case for case in CASES if case.id == case_id]
-        config = RunConfig(model="local:1", samples=1, ks=[1], tools=True)
+        config = RunConfig(model="local:1", samples=1, ks=[1], tools=True, sandbox=True)
         model = JsonModel(*steps)
+        self.sandboxes = []
+
+        def sandbox():
+            self.sandboxes.append(FakeSandbox(CodeRun(0, output, "")))
+            return self.sandboxes[-1]
+
         async with httpx.AsyncClient(transport=httpx.MockTransport(model)) as client:
             runs = await evaluate_many(
                 [config],
                 cases,
                 lambda c: build_agent(
-                    c.model, web="off", toolkit=True, http_client=client
+                    c.model,
+                    web="off",
+                    toolkit=True,
+                    sandbox=c.sandbox,
+                    http_client=client,
                 ),
                 None,
                 lambda message: None,
                 lambda run: None,
+                sandbox=sandbox,
             )
         return runs[0], model
 
@@ -140,10 +159,14 @@ class ToolCaseTests(unittest.IsolatedAsyncioTestCase):
                 "c1",
             ),
             "20779",
+            output="20779\n",
         )
         self.assertEqual(run.cases[0].passed, 1)
         self.assertIn("Plan mode is on", model.bodies[0]["messages"][0]["content"])
         self.assertIn("20779", json.dumps(model.bodies[2]["messages"]))
+        # Each attempt gets its own VM, deleted when the attempt ends.
+        self.assertEqual(len(self.sandboxes), 1)
+        self.assertTrue(self.sandboxes[0].closed)
         run, _ = await self.evaluate("plan-approval", "20779")
         self.assertEqual(run.cases[0].failed, 1)
 
@@ -158,14 +181,16 @@ class ToolCaseTests(unittest.IsolatedAsyncioTestCase):
                 "c1",
             ),
             "5736396",
+            output="5736396\n",
         )
         self.assertEqual(run.cases[0].passed, 1)
         self.assertTrue(run.config.tools)
+        self.assertTrue(run.config.sandbox)
         with tempfile.TemporaryDirectory() as root:
             saved = save_run(run, Path(root)).read_text()
         for private in ("prime", "range(2, 10000)", "5736396", "Reply with only"):
             self.assertNotIn(private, saved)
-        self.assertIn("pydantic-monty", saved)
+        self.assertIn("smolmachines", saved)
 
 
 class EvalCliTests(unittest.TestCase):
@@ -193,6 +218,42 @@ class EvalCliTests(unittest.TestCase):
             status = cli.main(["run", "--model", "local:1", "--case", "arithmetic"])
         self.assertEqual(status, 0, errors.getvalue())
         self.assertEqual([config.thinking for config in runs], [True])
+        self.assertEqual([config.sandbox for config in runs], [True])
+        self.assertIn("new VM per attempt", errors.getvalue())
+
+    def test_sandbox_cases_need_a_host_that_runs_the_vm(self):
+        reason = "The Python sandbox needs an Apple silicon Mac."
+        for case, expected in (("plan-approval", 1), ("clarifying-question", 0)):
+            runs, errors = [], io.StringIO()
+
+            async def benchmark(configs, *args):
+                runs.extend(configs)
+                return 0
+
+            with (
+                patch("vikram.sandbox.unavailable_reason", return_value=reason),
+                patch.object(cli, "discover_thinking", return_value=None),
+                patch.object(cli, "discover_tools", return_value=True),
+                patch.object(cli, "_benchmark", side_effect=benchmark),
+                contextlib.redirect_stderr(errors),
+            ):
+                status = cli.main(
+                    [
+                        "run",
+                        "--case",
+                        case,
+                        "--thinking",
+                        "default",
+                        "--samples",
+                        "1",
+                        "--k",
+                        "1",
+                    ]
+                )
+            self.assertEqual(status, expected, errors.getvalue())
+            self.assertIn(reason, errors.getvalue())
+        # Without a VM, the agent keeps questions and plan mode only.
+        self.assertEqual([(c.tools, c.sandbox) for c in runs], [(True, False)])
 
     def test_tool_cases_require_a_tool_capable_model(self):
         errors = io.StringIO()

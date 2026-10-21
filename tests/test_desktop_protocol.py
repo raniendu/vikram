@@ -8,11 +8,17 @@ from unittest.mock import patch
 
 import httpx
 from test_desktop_store import png
+from test_toolkit import fake_vm
 
 from vikram.desktop.attachments import validate_image
 from vikram.desktop.inference import ObservedStream, stream_reply
 from vikram.desktop.protocol import validate_command
 from vikram.ollama import ThinkingControls, thinking_request
+
+
+def setUpModule():
+    # Replies get a fake sandbox here; test_toolkit covers the real VM.
+    unittest.enterModuleContext(fake_vm())
 
 
 class ProtocolTests(unittest.TestCase):

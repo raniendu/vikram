@@ -1,15 +1,13 @@
 """Local tools shared by every interface: a code sandbox, questions, and plan mode.
 
-The sandbox is Pydantic AI Harness `CodeMode` with no tools inside it, so `run_code`
-executes model-written Python in Monty: no filesystem, network, environment, clock,
-or third-party packages. Questions use Harness `AskUser`; plan approval uses core
-deferred-tool approval. Interfaces only supply the person (see `interaction.py`).
+`run_code` executes model-written Python in a microVM for each reply (see
+`sandbox.py`). Questions use Pydantic AI Harness `AskUser`; plan approval uses
+core deferred-tool approval. Interfaces only supply the person (`interaction.py`).
 """
 
 import asyncio
 import copy
 import json
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Annotated, Any, Literal
@@ -18,21 +16,14 @@ from pydantic import Field
 from pydantic_ai import (
     DeferredToolRequests,
     DeferredToolResults,
-    ModelRetry,
     RunContext,
     Tool,
     ToolDenied,
     ToolFailed,
-    ToolReturn,
 )
-from pydantic_ai.capabilities import (
-    AbstractCapability,
-    CapabilityOrdering,
-    HandleDeferredToolCalls,
-)
+from pydantic_ai.capabilities import AbstractCapability, HandleDeferredToolCalls
 from pydantic_ai.toolsets import WrapperToolset
 from pydantic_ai_harness.ask_user import AskUser
-from pydantic_ai_harness.code_mode import CodeMode
 
 from vikram.interaction import (
     AskUserRequest,
@@ -43,26 +34,27 @@ from vikram.interaction import (
     Unattended,
     check_response,
 )
+from vikram.sandbox import RUN_TIMEOUT, Sandbox, SandboxUnavailable
 
 Mode = Literal["normal", "plan"]
 RUN_CODE, ASK_USER, SUBMIT_PLAN = "run_code", "ask_user_question", "submit_plan"
 # Model requests per reply, including the final answer, which never offers tools.
 REQUEST_LIMIT = 10
 LIMITS = {RUN_CODE: 6, ASK_USER: 3, SUBMIT_PLAN: 3}
-SANDBOX_LIMITS = {"max_duration_secs": 15, "max_memory": 128 * 1024 * 1024}
-SANDBOX_RETRIES = 3
 INTERACTION_TIMEOUT = 15 * 60
 MAX_CODE = 20_000
 MAX_OUTPUT = 8_000
 MAX_PLAN = 6_000
 
-TOOLKIT_PROMPT = (
-    "Local tools:\n"
-    "- run_code runs Python in an isolated sandbox: no internet, files, "
-    "environment, clock, or third-party packages, and only part of the standard "
-    "library. Use it for exact arithmetic, counting, dates, and data processing "
-    "instead of estimating, then state the result. Its results come from your "
-    "code, not from the user.\n"
+SANDBOX_PROMPT = (
+    "- run_code runs Python 3.13 in an isolated Linux VM with no internet and no "
+    "access to the user's files; only the standard library is installed. Use it "
+    "for exact arithmetic, counting, dates, and data processing instead of "
+    "estimating, then state the result. Each call is a fresh Python process, so "
+    "define everything the code needs. Its results come from your code, not from "
+    "the user.\n"
+)
+QUESTIONS_PROMPT = (
     "- ask_user_question shows the user multiple-choice questions and waits for "
     "the answers. If a request is ambiguous and the choice changes the answer "
     "(for example an unstated unit, scale, format, or scope), call it before "
@@ -70,28 +62,20 @@ TOOLKIT_PROMPT = (
     "text. Do not ask about details you can infer. If the user declines, choose "
     "reasonably and say which choice you made."
 )
-PLAN_PROMPT = (
-    "Plan mode is on: the user wants to approve a plan before any work is done. "
-    "For any request that needs calculation, code, research, or several steps, "
-    "do not answer it yet. run_code is refused until the user approves your plan. "
-    "If the request is ambiguous, call ask_user_question first. Then call "
-    "submit_plan with a short numbered plan. "
-    "If the user approves, plan mode ends: carry out the plan in this same reply "
-    "and report the results. If the user requests changes, revise the plan and "
-    "call submit_plan again. If the plan is not approved, end your reply by "
-    "presenting the plan and asking how to proceed. Only greetings and questions "
-    "about the plan itself may be answered without submit_plan."
-)
 TEXT_PLAN_PROMPT = (
     "Plan mode is on: the user wants to approve a plan before any work is done. "
     "Do not answer requests that need calculation, research, or several steps. "
     "Reply with a short numbered plan and ask the user to approve or change it."
 )
-
-APPROVED = (
-    "The user approved the plan. Plan mode is off: carry out the plan now, using "
-    "run_code where it helps, and report the results."
+RUN_CODE_DESCRIPTION = (
+    "Run Python 3.13 code in an isolated Linux VM and return what it printed. "
+    "Each call starts a fresh Python process, so define everything the code needs; "
+    "files written under /workspace stay for the rest of this reply. A final bare "
+    "expression is printed, as in the Python REPL. The VM has no internet access, "
+    "none of the user's files, and only the standard library. Code is stopped "
+    f"after {RUN_TIMEOUT} seconds."
 )
+UNAVAILABLE = "The Python sandbox is unavailable."
 PLAN_FIRST = (
     "Plan mode is on, so code cannot run yet. Call submit_plan with your numbered "
     "plan and wait for the user's approval; then run the code."
@@ -114,32 +98,35 @@ LIMIT_REACHED = {
 }
 
 
+def toolkit_prompt(sandbox: bool) -> str:
+    return "Local tools:\n" + (SANDBOX_PROMPT if sandbox else "") + QUESTIONS_PROMPT
+
+
+def plan_prompt(sandbox: bool) -> str:
+    return (
+        "Plan mode is on: the user wants to approve a plan before any work is done. "
+        "For any request that needs calculation, code, research, or several steps, "
+        "do not answer it yet. "
+        + ("run_code is refused until the user approves your plan. " if sandbox else "")
+        + "If the request is ambiguous, call ask_user_question first. Then call "
+        "submit_plan with a short numbered plan. "
+        "If the user approves, plan mode ends: carry out the plan in this same reply "
+        "and report the results. If the user requests changes, revise the plan and "
+        "call submit_plan again. If the plan is not approved, end your reply by "
+        "presenting the plan and asking how to proceed. Only greetings and questions "
+        "about the plan itself may be answered without submit_plan."
+    )
+
+
 def bounded(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return f"{text[:limit]}\n… [truncated: {len(text):,} characters in total]"
 
 
-def _json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, default=str)
-
-
-def display_result(value: Any) -> str:
-    """What the sandbox produced, as text for people: printed output, then result."""
-    if isinstance(value, dict) and value and set(value) <= {"output", "result"}:
-        lines = [str(value["output"]).rstrip("\n")] if value.get("output") else []
-        if "result" in value:
-            result = value["result"]
-            lines.append(result if isinstance(result, str) else _json(result))
-        return "\n".join(lines)
-    if value is None or value == {}:
-        return ""
-    return value if isinstance(value, str) else _json(value)
-
-
 @dataclass
 class Reply:
-    """One reply's mode, person, and visible tool activity: the agent's `deps`.
+    """One reply's mode, person, sandbox, and visible tool activity: the `deps`.
 
     Activity records are plain JSON so interfaces can show, store, and replay them.
     """
@@ -147,6 +134,7 @@ class Reply:
     mode: Mode = "normal"
     interaction: Interaction = field(default_factory=Unattended)
     notify: Callable[[str], None] = lambda phase: None
+    sandbox: Sandbox | None = None
     activity: list[dict] = field(default_factory=list)
     counts: dict[str, int] = field(default_factory=dict)
 
@@ -231,8 +219,15 @@ class Reply:
         self.notify("loading")
         return review
 
-    async def run_code(self, ctx: RunContext, call_id: str, code: str, handler) -> Any:
-        """Execute one `run_code` call, keeping its record and the result bounded."""
+    async def run_code(self, call_id: str, code: str) -> str:
+        """Run one snippet in the reply's VM, keeping its record and result bounded.
+
+        Errors, timeouts, and a VM that cannot start are finished failures: the
+        model reads them and can fix the code within the reply's run limit, so a
+        bad snippet never ends the reply.
+        """
+        if self.sandbox is None:
+            raise ToolFailed(f"{UNAVAILABLE} Answer without running code.")
         if not self._spend(RUN_CODE):
             raise ToolFailed(LIMIT_REACHED[RUN_CODE])
         record = self._record(
@@ -245,38 +240,34 @@ class Reply:
         )
         self.notify("sandbox")
         try:
-            result = await handler()
-        except ModelRetry as error:
-            record["status"], record["error"] = "failed", bounded(
-                error.message, MAX_OUTPUT
-            )
-            self.notify("loading")
-            if ctx.retry >= SANDBOX_RETRIES:
-                # Out of retries: report a finished failure instead of ending the reply.
-                raise ToolFailed(record["error"]) from None
-            raise
-        except ToolFailed as error:
-            record["status"], record["error"] = "failed", bounded(
-                error.message, MAX_OUTPUT
-            )
-            self.notify("loading")
-            raise
+            run = await self.sandbox.run(code)
         except asyncio.CancelledError:
             record["status"] = "stopped"
             raise
-        value = result.return_value if isinstance(result, ToolReturn) else result
-        record["status"], record["output"] = "complete", bounded(
-            display_result(value), MAX_OUTPUT
-        )
+        except Exception as error:
+            reason = (
+                str(error)
+                if isinstance(error, SandboxUnavailable)
+                else f"The Python sandbox failed ({type(error).__name__})."
+            )
+            record["status"], record["error"] = "failed", reason
+            self.notify("loading")
+            raise ToolFailed(f"{reason} Answer without running code.") from None
         self.notify("loading")
-        if len(_json(value)) > MAX_OUTPUT:
+        printed, errors = run.output.rstrip("\n"), run.error.strip()
+        text = "\n".join(part for part in (printed, errors) if part)
+        if run.exit_code != 0:
+            record["status"] = "failed"
+            record["output"] = bounded(printed, MAX_OUTPUT)
+            record["error"] = bounded(errors, MAX_OUTPUT)
+            raise ToolFailed(bounded(text, MAX_OUTPUT))
+        record["status"], record["output"] = "complete", bounded(text, MAX_OUTPUT)
+        if len(text) > MAX_OUTPUT:
             # Large output would crowd out the conversation in a local context window.
-            value = bounded(display_result(value), MAX_OUTPUT) + (
+            return record["output"] + (
                 "\nPrint less, or summarize in code, if more detail is needed."
             )
-        if isinstance(result, ToolReturn):
-            return ToolReturn(return_value=value, metadata=result.metadata)
-        return value
+        return text or "(no output)"
 
 
 def _one_line(value: str, limit: int) -> str:
@@ -360,6 +351,23 @@ def mode_of(ctx: RunContext) -> Mode:
     return reply.mode if reply else "normal"
 
 
+async def run_code(
+    ctx: RunContext[Reply],
+    code: Annotated[
+        str,
+        Field(
+            min_length=1, max_length=MAX_CODE, description="Python source code to run."
+        ),
+    ],
+) -> str:
+    reply = _reply(ctx) or Reply()
+    if reply.mode == "plan":
+        # Refused, not hidden: small models call run_code in plan mode anyway,
+        # and an unknown tool spends retries until the reply fails.
+        raise ToolFailed(PLAN_FIRST)
+    return await reply.run_code(ctx.tool_call_id or "", code)
+
+
 async def submit_plan(
     ctx: RunContext[Reply],
     plan: Annotated[str, Field(min_length=1, max_length=MAX_PLAN)],
@@ -372,7 +380,11 @@ async def submit_plan(
     reply = _reply(ctx)
     if reply is not None:
         reply.mode = "normal"
-    return APPROVED
+    return (
+        "The user approved the plan. Plan mode is off: carry out the plan now"
+        + (", using run_code where it helps," if reply and reply.sandbox else "")
+        + " and report the results."
+    )
 
 
 async def _review_plans(
@@ -427,12 +439,8 @@ def _available(ctx: RunContext, tool_def) -> bool:
 
 @dataclass
 class ReplyToolset(WrapperToolset[Reply]):
-    """Offers each request's tools and runs `run_code` with bounded, recorded results.
-
-    It wraps CodeMode's toolset, so it sees `run_code` and its raw `ModelRetry`
-    before the retry budget is checked: an exhausted budget becomes a failed
-    result the model can adapt to, instead of an error that ends the reply.
-    """
+    """Offers each request's tools: normal mode hides `submit_plan`, and the final
+    request offers no tools so the model must answer."""
 
     async def get_tools(self, ctx: RunContext[Reply]) -> dict:
         tools = {}
@@ -447,34 +455,10 @@ class ReplyToolset(WrapperToolset[Reply]):
             tools[name] = tool
         return tools
 
-    async def call_tool(self, name, tool_args, ctx, tool) -> Any:
-        call = super().call_tool
-        reply = _reply(ctx)
-        if name != RUN_CODE or reply is None:
-            return await call(name, tool_args, ctx, tool)
-        if reply.mode == "plan":
-            # Refused, not hidden: small models call run_code in plan mode anyway,
-            # and an unknown tool spends retries until the reply fails.
-            raise ToolFailed(PLAN_FIRST)
-        return await reply.run_code(
-            ctx,
-            ctx.tool_call_id or "",
-            str(tool_args.get("code", "")),
-            lambda: call(name, tool_args, ctx, tool),
-        )
-
 
 @dataclass
 class ReplyPolicy(AbstractCapability[Reply]):
-    """Tool availability and argument repair for every request of a reply.
-
-    Plan mode refuses the sandbox until a plan is approved, normal mode hides
-    `submit_plan`, and the final request offers no tools so the model must answer.
-    It sits outside CodeMode so the sandbox follows the same rules.
-    """
-
-    def get_ordering(self) -> CapabilityOrdering:
-        return CapabilityOrdering(position="outermost", wraps=[CodeMode])
+    """Tool availability and question-argument repair for every request."""
 
     def get_wrapper_toolset(self, toolset):
         return ReplyToolset(toolset)
@@ -490,26 +474,11 @@ class ReplyPolicy(AbstractCapability[Reply]):
         return repair_questions(args) if isinstance(args, dict) else args
 
 
-def check_sandbox() -> int:
-    """Run one snippet in Monty without a model, to check a packaged runtime."""
-    from pydantic_monty import Monty
-
-    try:
-        with Monty() as pool, pool.checkout() as session:
-            ready = session.feed_run("sum(range(10))") == 45
-    except Exception as error:
-        ready, reason = False, type(error).__name__
-    else:
-        reason = "unexpected result"
-    if not ready:
-        sys.stderr.write(f"The Python sandbox is unavailable ({reason}).\n")
-        return 1
-    sys.stdout.write("The Python sandbox is ready.\n")
-    return 0
-
-
-def toolkit_tools() -> list[Tool]:
-    return [Tool(submit_plan, requires_approval=True)]
+def toolkit_tools(sandbox: bool) -> list[Tool]:
+    tools = [Tool(submit_plan, requires_approval=True)]
+    if sandbox:
+        tools.append(Tool(run_code, description=RUN_CODE_DESCRIPTION, sequential=True))
+    return tools
 
 
 def toolkit_capabilities() -> list:
@@ -518,9 +487,6 @@ def toolkit_capabilities() -> list:
             Questions(answerer=reply.ask)
             if (reply := _reply(ctx)) is not None
             else None
-        ),
-        CodeMode(
-            tools=[], max_retries=SANDBOX_RETRIES + 1, resource_limits=SANDBOX_LIMITS
         ),
         HandleDeferredToolCalls(handler=_review_plans),
         ReplyPolicy(),

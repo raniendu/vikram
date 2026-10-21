@@ -217,7 +217,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         return update_main(argv[1:])
     parser = argparse.ArgumentParser(
-        description="Chat with local Ollama using the same model/tools as the app. Supported models automatically use Parallel web search, a sandboxed Python interpreter, and clarifying questions when needed; /plan toggles plan mode and /exit ends interactive chat.",
+        description="Chat with local Ollama using the same model/tools as the app. Supported models automatically use Parallel web search, Python in an isolated VM, and clarifying questions when needed; /plan toggles plan mode and /exit ends interactive chat.",
         epilog="Use `vikram update` to update the CLI and Mac app, or `vikram update --check` to check for a release. Use `vikram -- update` to send 'update' as a prompt.",
     )
     parser.add_argument(

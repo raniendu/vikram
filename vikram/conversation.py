@@ -3,7 +3,7 @@
 import asyncio
 import contextlib
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 
 import httpx
 from pydantic_ai import AgentRunResultEvent
@@ -22,6 +22,7 @@ from vikram.agent import build_agent
 from vikram.errors import ReplyError, reply_error
 from vikram.interaction import Interaction, Unattended
 from vikram.ollama import thinking_request
+from vikram.sandbox import Sandbox, host_sandbox
 from vikram.toolkit import REQUEST_LIMIT, Mode, Reply
 from vikram.web import WebSession
 
@@ -65,11 +66,14 @@ async def stream_reply(
     transport=None,
     mode: Mode = "normal",
     interaction: Interaction | None = None,
+    sandbox: Callable[[], Sandbox | None] | None = None,
 ) -> AsyncIterator[dict]:
     """Stream one reply. Tool-capable models (web "auto") also get the toolkit.
 
     `interaction` is the person who answers questions and reviews plans; without
-    one, questions are declined and plans stay unapproved.
+    one, questions are declined and plans stay unapproved. `sandbox` makes this
+    reply's code sandbox, by default a new microVM when this host can run one;
+    the reply deletes it when it ends.
     """
     queue = asyncio.Queue()
     reported, parts = {}, {}
@@ -119,6 +123,8 @@ async def stream_reply(
     async def produce():
         nonlocal current
         try:
+            if web == "auto":
+                reply.sandbox = (sandbox or host_sandbox)()
             async with httpx.AsyncClient(
                 trust_env=False,
                 follow_redirects=False,
@@ -132,6 +138,7 @@ async def stream_reply(
                     web=web,
                     tools=session.tools() if web == "auto" else (),
                     toolkit=web == "auto",
+                    sandbox=reply.sandbox is not None,
                 )
                 agent.model.client.max_retries = 0
                 async with agent.run_stream_events(
@@ -173,6 +180,10 @@ async def stream_reply(
         except Exception as exc:
             queue.put_nowait(ReplyError(reply_error(exc)))
         finally:
+            if reply.sandbox is not None:
+                # Shielded: a second stop must not leave the VM running.
+                with contextlib.suppress(Exception, asyncio.CancelledError):
+                    await asyncio.shield(reply.sandbox.close())
             queue.put_nowait(None)
 
     task = asyncio.create_task(produce())

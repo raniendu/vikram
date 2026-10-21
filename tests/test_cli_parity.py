@@ -12,6 +12,7 @@ from unittest.mock import patch
 import httpx
 from test_conversation import offered, sse
 from test_desktop_runtime import ENTRY, SHOW
+from test_toolkit import fake_vm
 
 from vikram import cli
 from vikram.cli import ChatSession
@@ -20,6 +21,11 @@ from vikram.desktop.runtime import Runtime
 from vikram.desktop.store import Store
 from vikram.models import parse_model
 from vikram.web import WebSession
+
+
+def setUpModule():
+    # Replies get a fake sandbox here; test_toolkit covers the real VM.
+    unittest.enterModuleContext(fake_vm())
 
 
 class ParityTests(unittest.IsolatedAsyncioTestCase):

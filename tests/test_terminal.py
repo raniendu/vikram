@@ -8,6 +8,7 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 from pydantic_ai_harness.ask_user import AskUserRequest, Question
 from rich.console import Console
+from test_toolkit import fake_vm
 
 from vikram.cli import ChatSession, _reply
 from vikram.interaction import PlanRequest
@@ -28,6 +29,11 @@ QUESTION = AskUserRequest(
         ),
     )
 )
+
+
+def setUpModule():
+    # Replies get a fake sandbox here; test_toolkit covers the real VM.
+    unittest.enterModuleContext(fake_vm())
 
 
 async def models():

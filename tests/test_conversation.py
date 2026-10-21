@@ -5,9 +5,15 @@ from unittest.mock import patch
 
 import httpx
 from pydantic_ai.messages import ModelRequest, UserPromptPart
+from test_toolkit import fake_vm
 
 from vikram import conversation
 from vikram.web import WebSession
+
+
+def setUpModule():
+    # Replies get a fake sandbox here; test_toolkit covers the real VM.
+    unittest.enterModuleContext(fake_vm())
 
 
 def sse(payload):

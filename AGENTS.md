@@ -27,9 +27,10 @@ validate with disposable install directories; publishing requires owner directio
 The owner requested clarifying questions, plan mode, and a Python sandbox built
 on Pydantic libraries; the design is in
 `docs/superpowers/specs/2026-10-20-questions-plan-mode-sandbox-design.md`.
-Keep them in the shared toolkit with CLI/desktop parity. The sandbox is Harness
-Code Mode with no tools inside it (Monty): keep it free of mounts, OS access,
-host tools, and network without owner direction.
+Keep them in the shared toolkit with CLI/desktop parity. The sandbox is a local
+microVM per reply (Harness SmolSandbox on smolvm) booted from a bundled,
+digest-pinned image. Never run model code outside a VM, and keep the VM free of
+mounts, host environment, host tools, and network without owner direction.
 Evaluations must explicitly use web Off; tool-capable models keep the local
 toolkit with a scripted user. Do not revive the discarded software factory or
 add other agents, unrelated tools, hosted inference, or public server surfaces.
@@ -43,11 +44,13 @@ add other agents, unrelated tools, hosted inference, or public server surfaces.
 - `vikram/conversation.py`, `context.py`, `models.py`, `web.py`: shared model/tool behavior.
 - `vikram/toolkit.py`, `interaction.py`: sandbox, questions, plan mode, and the
   answer/review contract each interface implements.
+- `vikram/sandbox.py`: the per-reply Python microVM, its pinned image, and cleanup.
 - `vikram/documents.py`, `document_worker.py`: bounded local document parsing.
 - `vikram/__main__.py`: entry point for `python -m vikram`.
 - `vikram/desktop/`: versioned private stdio runtime, chat store and attachments.
 - `apps/desktop/`: React/Vite UI and Tauri 2 Mac shell; bundled native Python.
 - `scripts/build_desktop.py`: reproducible sidecar/app packaging, disk reserve check.
+- `scripts/fetch_sandbox_image.py`: fetches and verifies the pinned sandbox image.
 - `scripts/build_installer.py`: combined per-user CLI/Mac installer artifact.
 - `vikram/installation.py`, `releases.py`: atomic bundle installation and GitHub updates.
 - `tests/`: focused offline chat and recovery checks.
