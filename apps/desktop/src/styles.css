@@ -1545,3 +1545,130 @@ dialog select {
   font-size: 12px;
   color: var(--muted);
 }
+
+/* Vikram's browser: a column beside the chat. The page is a native WebKit
+   view the app places over .browser-page, so nothing here may overlap it. */
+.browser-pane {
+  width: clamp(340px, 44vw, 780px);
+  min-width: 340px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+}
+.browser-header {
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.browser-icon {
+  color: var(--accent);
+  flex: none;
+}
+.browser-location {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.browser-title,
+.browser-address {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-title {
+  font-size: 13px;
+  font-weight: 500;
+}
+.browser-address {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.browser-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 8px 14px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.browser-status > span {
+  flex: 1;
+  min-width: 0;
+}
+.browser-status.in-control {
+  color: var(--fg);
+  box-shadow: inset 2px 0 var(--accent);
+}
+.browser-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+.browser-actions .primary,
+.browser-actions .secondary {
+  min-height: 28px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.browser-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  color: var(--muted2);
+  font-size: 12px;
+}
+.approval-summary {
+  margin: 0 0 4px;
+  overflow-wrap: anywhere;
+  font-weight: 500;
+}
+.browser-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.browser-steps {
+  margin: 6px 0 4px;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.browser-step {
+  overflow-wrap: anywhere;
+}
+.browser-step strong {
+  font-weight: 500;
+  color: var(--fg);
+}
+.browser-step.denied strong,
+.browser-step.refused strong,
+.browser-step.failed strong {
+  color: var(--danger);
+}
+.browser-step small {
+  display: block;
+  color: var(--muted2);
+  font-size: 11px;
+}
+@media (max-width: 899px) {
+  .browser-pane {
+    width: 46vw;
+    min-width: 300px;
+  }
+}

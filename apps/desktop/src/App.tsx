@@ -15,6 +15,8 @@ import { Sidebar } from "./components/Sidebar";
 import { Dialog } from "./components/Dialog";
 import { Transcript } from "./components/Transcript";
 import { Composer } from "./components/Composer";
+import { BrowserPanel } from "./components/BrowserPanel";
+import { useBrowser } from "./useBrowser";
 import { desktop, native, onNative } from "./bridge";
 import { formatModelName } from "./modelNames";
 import { thinkingOn } from "./state";
@@ -22,6 +24,7 @@ import type { ChatSummary, Folder, Thinking } from "./types";
 
 export default function App() {
   const app = useChats();
+  const browser = useBrowser();
   const current = useRef(app);
   current.current = app;
   const [sidebar, setSidebar] = useState(true);
@@ -377,6 +380,7 @@ export default function App() {
                 disabled={!!app.active || app.sending || app.offline || !model}
                 onRetry={() => void app.send(true)}
                 onRespond={app.respond}
+                onHandBack={() => void app.controlBrowser("agent")}
               />
             ) : (
               <div className="empty-state">
@@ -448,6 +452,24 @@ export default function App() {
           </div>
         )}
       </main>
+      {browser.page.open && (
+        <BrowserPanel
+          page={browser.page}
+          control={app.browserControl}
+          phase={app.phase}
+          running={!!app.active}
+          covered={modal !== null}
+          onControl={(control) => void app.controlBrowser(control)}
+          onStop={() => void app.stop()}
+          onClose={() =>
+            void browser
+              .close()
+              .catch(() =>
+                app.setError("The browser could not be closed. Try again."),
+              )
+          }
+        />
+      )}
       {modal === "settings" && (
         <Dialog title="Settings" onClose={() => setModal(null)}>
           <section className="settings-section">
@@ -535,6 +557,14 @@ export default function App() {
               Chats and imported files are saved on this Mac. There is no cloud
               sync or analytics. The model can read attached content and use web
               search, but has no direct access to your files.
+            </p>
+            <p className="muted">
+              Vikram’s browser has its own private session, with none of your
+              other browsers’ cookies or passwords; closing it or quitting
+              Vikram clears it. Vikram asks before it submits a form, signs in,
+              buys, posts, or deletes, never types passwords or payment details,
+              and cannot reach your local network. Take over the browser
+              whenever you want to use the page yourself.
             </p>
             <p className="muted">
               Your full conversation is saved. A model’s available context may

@@ -205,8 +205,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             if needs_tools and not tools:
                 sys.stderr.write(
                     f"{model} does not advertise tool calling, which the sandbox, "
-                    "question, and plan cases need. Choose cases with --case or "
-                    "another model.\n"
+                    "question, plan, and browser cases need. Choose cases with "
+                    "--case or another model.\n"
                 )
                 return 1
             configs.extend(

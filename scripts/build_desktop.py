@@ -189,6 +189,25 @@ def main() -> None:
             ],
             check=True,
         )
+        # The CLI's hidden browser: the bundled app in helper mode, reading a
+        # blank page with its content blocker installed, without the network.
+        browser = subprocess.run(
+            [
+                str(
+                    desktop
+                    / "src-tauri/target/release/bundle/macos/Vikram.app/Contents/MacOS/vikram-sidecar"
+                ),
+                "--check-browser",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+        if browser.returncode != 0:
+            raise SystemExit(
+                "The bundled browser failed its startup check. "
+                + browser.stderr.strip()[-300:]
+            )
         with tempfile.TemporaryDirectory(prefix="vikram-package-check-") as library:
             check = subprocess.run(
                 [

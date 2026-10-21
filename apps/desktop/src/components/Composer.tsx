@@ -167,7 +167,7 @@ export function Composer({ app }: { app: ChatController }) {
         <div className="composer-footnote">
           <span>
             Local model · Web {model?.tools ? "available" : "unavailable"}
-            {model?.tools ? " · Python sandbox" : ""}
+            {model?.tools ? " · Python sandbox · Browser" : ""}
           </span>
           <span>
             {model?.context_length

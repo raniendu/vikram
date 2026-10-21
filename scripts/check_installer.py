@@ -92,13 +92,14 @@ def main() -> None:
             )
             if arguments == ["--version"]:
                 assert result.stdout.strip() == f"Vikram {version}"
-        subprocess.run(
-            [str(layout.app / "Contents/MacOS/vikram-sidecar"), "--check-sandbox"],
-            capture_output=True,
-            check=True,
-            timeout=60,
-            env=env,
-        )
+        for check in ("--check-sandbox", "--check-browser"):
+            subprocess.run(
+                [str(layout.app / "Contents/MacOS/vikram-sidecar"), check],
+                capture_output=True,
+                check=True,
+                timeout=90,
+                env=env,
+            )
         previous = layout.current.resolve()
         check_terminal(layout.cli, env)
         install_bundle(source, layout)
@@ -109,7 +110,7 @@ def main() -> None:
             f"Installed and reinstalled Vikram {version} in a disposable account directory."
         )
         print(
-            "CLI startup/version/update help, interactive terminal, Python sandbox, and desktop service startup passed. Owner installation and chats were not touched."
+            "CLI startup/version/update help, interactive terminal, Python sandbox, browser, and desktop service startup passed. Owner installation and chats were not touched."
         )
 
 

@@ -344,3 +344,38 @@ describe("plan mode and answers", () => {
     );
   });
 });
+
+describe("browser control", () => {
+  it("follows take-over state from the service and asks it to change", async () => {
+    const original = bridge.rpc.getMockImplementation()!;
+    bridge.rpc.mockImplementation(
+      async (method: string, params: Record<string, unknown>) => {
+        if (method === "hello")
+          return { ...snapshot(), browser: { control: "person" } };
+        if (method === "browser_control") return { control: params.control };
+        return original(method, params);
+      },
+    );
+    const hook = await mount();
+    expect(hook.result.current.browserControl).toBe("person");
+    await act(async () => {
+      expect(await hook.result.current.controlBrowser("agent")).toBe(true);
+    });
+    expect(bridge.rpc).toHaveBeenCalledWith("browser_control", {
+      control: "agent",
+    });
+    expect(hook.result.current.browserControl).toBe("agent");
+    receive({ v: 1, event: "browser_control", control: "person" });
+    expect(hook.result.current.browserControl).toBe("person");
+    receive({
+      v: 1,
+      event: "attempt",
+      ...active,
+      status: "running",
+      phase: "browsing",
+    });
+    expect(hook.result.current.phase).toBe("browsing");
+    receive({ v: 1, event: "idle", ...active });
+    expect(hook.result.current.phase).toBeNull();
+  });
+});

@@ -146,11 +146,13 @@ fn open_link(url: String) -> Result<(), String> {
     open::that(parsed.as_str()).map_err(|_| "Could not open the browser.".into())
 }
 
-/// Where the window shows the browser panel, in window coordinates.
+/// Where the window shows the browser panel, in its page's coordinates.
 #[tauri::command]
-fn browser_bounds(browser: State<'_, Browser>, x: f64, y: f64, width: f64, height: f64) {
+async fn browser_bounds(app: AppHandle, x: f64, y: f64, width: f64, height: f64) {
     if [x, y, width, height].iter().all(|v| v.is_finite()) && width >= 1.0 && height >= 1.0 {
-        browser.set_bounds(Bounds { x, y, width, height });
+        app.state::<Browser>()
+            .set_bounds(&app, Bounds { x, y, width, height })
+            .await;
     }
 }
 

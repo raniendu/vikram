@@ -2,6 +2,8 @@
 
 import asyncio
 import base64
+import contextlib
+import io
 import json
 import os
 import stat
@@ -388,6 +390,21 @@ class ApprovalTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(record["status"], "denied")
                 self.assertIn("did not allow", tool_results(model.bodies[-1])[-1])
 
+    async def test_a_declined_action_is_not_asked_again_in_the_reply(self):
+        engine = FakeEngine(self.approval(), self.approval())
+        person = Approving(False)
+        model = Model(
+            tool_call("browser_click", {"element": 3}, "b1"),
+            tool_call("browser_click", {"element": 3}, "b2"),
+            "I need your approval to buy it.",
+        )
+        events = await browse(model, engine, interaction=person)
+        self.assertEqual(len(person.approvals), 1)
+        self.assertEqual(
+            [r["status"] for r in browser_records(events)], ["denied", "denied"]
+        )
+        self.assertIn("already declined", tool_results(model.bodies[-1])[-1])
+
     async def test_stopping_while_waiting_for_approval_marks_it_stopped(self):
         waiting = asyncio.Event()
 
@@ -548,6 +565,7 @@ HELPER = """\
 #!{python}
 import json, sys
 assert sys.argv[1:] == ["--browser-helper"]
+print(json.dumps({{"ready": True}}), flush=True)
 for line in sys.stdin:
     message = json.loads(line)
     call = message["call"]
@@ -598,6 +616,42 @@ class HelperEngineTests(unittest.IsolatedAsyncioTestCase):
             (await engine.act({"action": "look"}))["page"]["title"], "look"
         )
         await engine.close()
+
+    async def test_an_app_without_helper_mode_is_stopped(self):
+        # An older app binary would open its window instead of answering.
+        self.path.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(30)\n")
+        engine = HelperEngine(self.path)
+        with patch.object(browsers, "START_TIMEOUT", 0.3):
+            with self.assertRaises(BrowserUnavailable) as raised:
+                await engine.act({"action": "look"})
+        self.assertIn("Rebuild or reinstall", str(raised.exception))
+        self.assertIsNone(engine.process)
+
+    def test_packaging_check_reads_a_blank_page_and_reports_failure(self):
+        script = (
+            self.path.read_text()
+            .replace(
+                '"title": call["action"]',
+                '"title": call["action"], "url": "about:blank"',
+            )
+            .replace('{{"url": "https://example.com/", ', "{{")
+        )
+        self.path.write_text(script)
+        output = io.StringIO()
+        with (
+            patch("vikram.browser.helper_path", return_value=self.path),
+            patch("sys.platform", "darwin"),
+            contextlib.redirect_stdout(output),
+        ):
+            self.assertEqual(browsers.check_browser(), 0)
+        self.assertIn("ready", output.getvalue())
+        errors = io.StringIO()
+        with (
+            patch("vikram.browser.helper_path", return_value=None),
+            contextlib.redirect_stderr(errors),
+        ):
+            self.assertEqual(browsers.check_browser(), 1)
+        self.assertIn("Vikram app", errors.getvalue())
 
     def test_helper_path_prefers_the_installed_app_runtime(self):
         with (

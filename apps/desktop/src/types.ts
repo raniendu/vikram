@@ -32,7 +32,29 @@ export interface CodeRecord {
   output: string;
   error: string | null;
 }
-export type ActivityRecord = QuestionRecord | PlanRecord | CodeRecord;
+export interface BrowserRecord {
+  kind: "browser";
+  id: string;
+  action: "open" | "click" | "type" | "scroll" | "back" | "look";
+  status: string;
+  target: string | null;
+  text: string | null;
+  url: string | null;
+  title: string | null;
+  error: string | null;
+  approval: { summary: string; reason: string } | null;
+}
+export type ActivityRecord =
+  QuestionRecord | PlanRecord | CodeRecord | BrowserRecord;
+/** The browser panel's page, reported by the app. */
+export interface BrowserPage {
+  open: boolean;
+  url: string;
+  title: string;
+  loading: boolean;
+}
+/** Who drives the browser: Vikram, or the person who took it over. */
+export type BrowserControl = "agent" | "person";
 export interface QuestionAnswer {
   header: string;
   selected?: string[];
@@ -143,8 +165,10 @@ export interface Snapshot {
   preferences: Record<string, unknown>;
   active: Active | null;
   models: LocalModel[];
+  browser?: { control: BrowserControl } | null;
 }
 export interface RuntimeEvent extends Partial<Active> {
+  control?: BrowserControl;
   activity?: ActivityRecord[];
   mode?: Mode;
   reasoning?: string;

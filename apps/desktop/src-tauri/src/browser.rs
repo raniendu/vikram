@@ -241,15 +241,25 @@ fn bounded(text: &str, limit: usize) -> String {
     text.chars().take(limit).collect()
 }
 
+fn rect(bounds: Bounds, (left, top): (f64, f64)) -> tauri::Rect {
+    tauri::Rect {
+        position: LogicalPosition::new(bounds.x + left, bounds.y + top).into(),
+        size: LogicalSize::new(bounds.width, bounds.height).into(),
+    }
+}
+
 impl Browser {
-    pub fn set_bounds(&self, bounds: Bounds) {
-        let mut state = self.state.lock().unwrap();
-        state.bounds = Some(bounds);
-        if let Some(webview) = &state.webview {
-            let _ = webview.set_bounds(tauri::Rect {
-                position: LogicalPosition::new(bounds.x, bounds.y).into(),
-                size: LogicalSize::new(bounds.width, bounds.height).into(),
-            });
+    /// Place the panel where the window shows it. The window reports the area
+    /// in its chat page's coordinates, which start where the chat webview does.
+    pub async fn set_bounds(&self, app: &AppHandle, bounds: Bounds) {
+        let webview = {
+            let mut state = self.state.lock().unwrap();
+            state.bounds = Some(bounds);
+            state.webview.clone()
+        };
+        if let Some(webview) = webview {
+            let origin = native::chat_origin(app).await;
+            let _ = webview.set_bounds(rect(bounds, origin));
         }
     }
 
@@ -351,12 +361,9 @@ impl Browser {
             note(&popups, "A new window or pop-up was blocked.".into());
             NewWindowResponse::Deny
         });
+        let placed = rect(bounds, native::chat_origin(app).await);
         let webview = host
-            .add_child(
-                builder,
-                LogicalPosition::new(bounds.x, bounds.y),
-                LogicalSize::new(bounds.width, bounds.height),
-            )
+            .add_child(builder, placed.position, placed.size)
             .map_err(|_| "The browser could not start.")?;
         if let Err(error) = native::block_private_network(&webview).await {
             let _ = webview.close();
@@ -567,7 +574,7 @@ pub fn helper(mut context: tauri::Context<tauri::Wry>) {
                 .focused(false)
                 .inner_size(1280.0, 900.0)
                 .build()?;
-            app.state::<Browser>().set_bounds(Bounds {
+            app.state::<Browser>().state.lock().unwrap().bounds = Some(Bounds {
                 x: 0.0,
                 y: 0.0,
                 width: 1280.0,
@@ -586,6 +593,12 @@ pub fn helper(mut context: tauri::Context<tauri::Wry>) {
 
 fn serve(app: AppHandle) {
     let output = Arc::new(Mutex::new(std::io::stdout()));
+    {
+        // The CLI waits for this line, so an app without helper mode is caught.
+        let mut output = output.lock().unwrap();
+        let _ = output.write_all(b"{\"ready\":true}\n");
+        let _ = output.flush();
+    }
     let mut input = std::io::stdin().lock();
     loop {
         let mut line = String::new();
@@ -690,6 +703,47 @@ mod native {
             Ok(Err(_)) => Err("The browser closed.".to_string()),
             Err(_) => Err("The page did not respond in time.".to_string()),
         }
+    }
+
+    /// Where the app's chat page starts inside the view that also holds the
+    /// browser panel, in points (none in the CLI helper, which has no chat).
+    ///
+    /// The window's content view runs under the title bar, and WebKit insets
+    /// the chat page below it, so the page starts where the chat webview starts
+    /// or where the title bar ends, whichever is lower.
+    pub async fn chat_origin(app: &AppHandle) -> (f64, f64) {
+        let Some(chat) = app.get_webview("main") else {
+            return (0.0, 0.0);
+        };
+        let (sender, receiver) = oneshot::channel();
+        let sent = chat.with_webview(move |platform| unsafe {
+            let view = &*(platform.inner() as *const WKWebView);
+            let origin = view.superview().map_or((0.0, 0.0), |parent| {
+                let frame = view.frame();
+                let height = parent.frame().size.height;
+                let flipped = parent.isFlipped();
+                // Distances from the top of the parent view.
+                let top = if flipped {
+                    frame.origin.y
+                } else {
+                    height - frame.origin.y - frame.size.height
+                };
+                let title_bar = view.window().map_or(0.0, |window| {
+                    let layout = window.contentLayoutRect();
+                    (height - (layout.origin.y + layout.size.height)).max(0.0)
+                });
+                (frame.origin.x, top.max(title_bar))
+            });
+            let _ = sender.send(origin);
+        });
+        if sent.is_err() {
+            return (0.0, 0.0);
+        }
+        tokio::time::timeout(Duration::from_secs(2), receiver)
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or((0.0, 0.0))
     }
 
     pub async fn is_loading(webview: &Webview) -> bool {

@@ -147,6 +147,10 @@ NOT_ALLOWED = (
     "The user did not allow this action. Do not try to do it another way; tell "
     "the user what you were about to do, or answer without it."
 )
+ALREADY_DECLINED = (
+    "The user already declined this action in this reply, so it was not asked "
+    "again. Do not try it another way; tell the user what you were about to do."
+)
 KEPT_CONTROL = (
     "The user kept control of the browser. Answer with what you have, or ask the "
     "user to hand the browser back."
@@ -215,6 +219,8 @@ class Reply:
     counts: dict[str, int] = field(default_factory=dict)
     # One browser action at a time, approvals and hand-backs included.
     browsing: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    # Actions the person declined in this reply, so a retry does not ask again.
+    declined: set[str] = field(default_factory=set, repr=False)
 
     def snapshot(self) -> list[dict]:
         return copy.deepcopy(self.activity)
@@ -373,7 +379,12 @@ class Reply:
             id=call_id,
             action=action,
             status="running",
-            target=args.get("url") or args.get("direction"),
+            # Until the engine names it ("link “Docs”"), the model's number.
+            target=(
+                f"element {args['element']}"
+                if "element" in args
+                else args.get("url") or args.get("direction")
+            ),
             text=bounded(args["text"], 200) if action == "type" else None,
             url=None,
             title=None,
@@ -407,7 +418,13 @@ class Reply:
         result = await self._engine(record, call)
         if result.approval is not None:
             record["target"] = result.target or record["target"]
+            if result.approval.summary in self.declined:
+                record["status"] = "denied"
+                record["approval"] = result.approval.model_dump()
+                raise ToolFailed(ALREADY_DECLINED)
             if not await self._approve(record, result):
+                if record["status"] == "denied":
+                    self.declined.add(result.approval.summary)
                 raise ToolFailed(NOT_ALLOWED)
             self.notify("browsing")
             result = await self._engine(record, {**call, "approved": True})

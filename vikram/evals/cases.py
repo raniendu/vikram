@@ -15,7 +15,7 @@ JUDGE_POLICY = (
 )
 
 
-Tool = Literal["run_code", "ask_user_question", "submit_plan"]
+Tool = Literal["run_code", "ask_user_question", "submit_plan", "browser"]
 # Added with the local toolkit; omitted from fingerprints at their defaults so
 # earlier cases keep their suite identity.
 TOOL_FIELDS = ("mode", "user_reply", "requires")
@@ -25,8 +25,8 @@ class CaseSpec(BaseModel):
     """A task and its deterministic check or binary grading rubric.
 
     Tool cases also set how the simulated user replies, the reply mode, and the
-    local tools that must complete: an answered question, an approved plan, or
-    a successful sandbox run.
+    local tools that must complete: an answered question, an approved plan, a
+    successful sandbox run, or a browser action on the offline evaluation site.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -246,6 +246,17 @@ CASES = (
         user_reply="The 25 degrees are Fahrenheit; convert them to Celsius.",
         expected="-3.9",
         requires=("ask_user_question",),
+    ),
+    CaseSpec(
+        id="browser-lookup",
+        label="Browser lookup",
+        check="text",
+        prompt=(
+            "Use the browser to open https://kettles.example/ and find the price "
+            "of the Copper Kettle. Reply with only the price, like $12."
+        ),
+        expected="$48",
+        requires=("browser",),
     ),
     CaseSpec(
         id="plan-approval",

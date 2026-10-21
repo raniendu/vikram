@@ -10,7 +10,8 @@
   const MAX_VALUE = 100;
   const MAX_TEXT = 6000;
   // Lowercase: selectors match SVG elements case-sensitively.
-  const SKIP = "script,style,noscript,template,head,svg,canvas,iframe,object,embed";
+  const SKIP =
+    "script,style,noscript,template,head,svg,canvas,iframe,object,embed";
   const CLICKABLE = [
     "a[href]",
     "button",
@@ -68,7 +69,8 @@
     {
       words:
         /\b(delete|remove|erase|deactivate|close (my |your )?account|unsubscribe|cancel (my |your |the )?(subscription|order|plan|membership)|transfer|withdraw|send money)\b/i,
-      reason: "It looks like it deletes or changes something that may not be undone.",
+      reason:
+        "It looks like it deletes or changes something that may not be undone.",
       links: true,
     },
     {
@@ -100,7 +102,8 @@
   }
 
   function textOf(el) {
-    const text = typeof el.innerText === "string" ? el.innerText : el.textContent;
+    const text =
+      typeof el.innerText === "string" ? el.innerText : el.textContent;
     return text || "";
   }
 
@@ -120,9 +123,14 @@
     if (typeof el.checkVisibility === "function") {
       if (!el.checkVisibility({ checkVisibilityCSS: true })) return false;
     } else {
-      for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
+      for (
+        let node = el;
+        node && node.nodeType === 1;
+        node = node.parentElement
+      ) {
         const style = getComputedStyle(node);
-        if (style.display === "none" || style.visibility === "hidden") return false;
+        if (style.display === "none" || style.visibility === "hidden")
+          return false;
       }
     }
     const rect = el.getBoundingClientRect();
@@ -139,14 +147,18 @@
   }
 
   function inputType(el) {
-    return el.tagName === "INPUT" ? String(el.type || "text").toLowerCase() : "";
+    return el.tagName === "INPUT"
+      ? String(el.type || "text").toLowerCase()
+      : "";
   }
 
   function isField(el) {
     if (el.tagName === "TEXTAREA" || el.tagName === "SELECT") return true;
     if (el.tagName === "INPUT") return TEXT_INPUTS.has(inputType(el));
     if (el.isContentEditable) return true;
-    return ["textbox", "searchbox", "combobox"].includes(el.getAttribute("role"));
+    return ["textbox", "searchbox", "combobox"].includes(
+      el.getAttribute("role"),
+    );
   }
 
   function roleOf(el) {
@@ -172,7 +184,8 @@
     if (tag === "INPUT") {
       const type = inputType(el);
       if (type === "checkbox" || type === "radio") return type;
-      if (["submit", "button", "reset", "image"].includes(type)) return "button";
+      if (["submit", "button", "reset", "image"].includes(type))
+        return "button";
       if (type === "search") return "searchbox";
       if (type === "password") return "password field";
       if (type === "range") return "slider";
@@ -187,8 +200,22 @@
     return "clickable";
   }
 
+  // A label's own words, without the text of the controls inside it (a
+  // select's options would otherwise become part of its name).
+  function labelText(label) {
+    const words = [];
+    const walker = document.createTreeWalker(label, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const control =
+        node.parentElement &&
+        node.parentElement.closest("select,textarea,button,option");
+      if (!control || !label.contains(control)) words.push(node.nodeValue);
+    }
+    return words.join(" ");
+  }
+
   function labelsOf(el) {
-    return el.labels ? [...el.labels].map(textOf).join(" ") : "";
+    return el.labels ? [...el.labels].map(labelText).join(" ") : "";
   }
 
   function nameOf(el) {
@@ -227,7 +254,11 @@
 
   function sensitive(el) {
     if (inputType(el) === "password") return true;
-    if (SENSITIVE_AUTOCOMPLETE.test((el.getAttribute("autocomplete") || "").toLowerCase()))
+    if (
+      SENSITIVE_AUTOCOMPLETE.test(
+        (el.getAttribute("autocomplete") || "").toLowerCase(),
+      )
+    )
       return true;
     const hints = [
       el.getAttribute("name"),
@@ -266,9 +297,13 @@
     if (el.disabled || el.getAttribute("aria-disabled") === "true")
       states.push("disabled");
     if (el.getAttribute("aria-expanded") === "true") states.push("expanded");
-    else if (el.getAttribute("aria-expanded") === "false") states.push("collapsed");
+    else if (el.getAttribute("aria-expanded") === "false")
+      states.push("collapsed");
     if (el.getAttribute("aria-selected") === "true") states.push("selected");
-    if (el.getAttribute("aria-current") && el.getAttribute("aria-current") !== "false")
+    if (
+      el.getAttribute("aria-current") &&
+      el.getAttribute("aria-current") !== "false"
+    )
       states.push("current");
     if (el.required) states.push("required");
     return states.slice(0, 6);
@@ -280,7 +315,11 @@
   }
 
   function blockOf(el, cache) {
-    for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
+    for (
+      let node = el;
+      node && node.nodeType === 1;
+      node = node.parentElement
+    ) {
       if (!cache.has(node)) {
         const display = getComputedStyle(node).display;
         cache.set(node, !/^(inline|contents)/.test(display));
@@ -315,14 +354,18 @@
         if (!shown.get(parent)) continue;
         const block = blockOf(parent, blocks);
         // A new block starts a line; inline text keeps its own spacing.
-        const piece = block !== last && parts.length ? `\n${text.trimStart()}` : text;
+        const piece =
+          block !== last && parts.length ? `\n${text.trimStart()}` : text;
         last = block;
         parts.push(piece);
         size += piece.length;
         if (size > MAX_TEXT) return parts.join("").slice(0, MAX_TEXT);
       }
     }
-    return parts.join("").replace(/[ \t]*\n[ \t]*/g, "\n").trim();
+    return parts
+      .join("")
+      .replace(/[ \t]*\n[ \t]*/g, "\n")
+      .trim();
   }
 
   function observe() {
@@ -364,8 +407,12 @@
       notices.push(
         `Only the first ${elements.length} of ${listed.size} elements in view are numbered.`,
       );
-    if ([...document.querySelectorAll("iframe")].some((frame) => rendered(frame)))
-      notices.push("Some content is inside frames that Vikram cannot read or use.");
+    if (
+      [...document.querySelectorAll("iframe")].some((frame) => rendered(frame))
+    )
+      notices.push(
+        "Some content is inside frames that Vikram cannot read or use.",
+      );
     const scroller = document.scrollingElement || document.documentElement;
     return {
       url: location.href,
@@ -433,7 +480,9 @@
 
   function web(href) {
     try {
-      return ["http:", "https:"].includes(new URL(href, location.href).protocol);
+      return ["http:", "https:"].includes(
+        new URL(href, location.href).protocol,
+      );
     } catch {
       return false;
     }
@@ -445,13 +494,18 @@
       bubbles: true,
       cancelable: true,
       composed: true,
-      view: window,
       clientX: rect.left + rect.width / 2,
       clientY: rect.top + rect.height / 2,
       button: 0,
     };
-    const pointer = { ...point, pointerId: 1, pointerType: "mouse", isPrimary: true };
-    const Pointer = typeof PointerEvent === "function" ? PointerEvent : MouseEvent;
+    const pointer = {
+      ...point,
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
+    };
+    const Pointer =
+      typeof PointerEvent === "function" ? PointerEvent : MouseEvent;
     el.dispatchEvent(new Pointer("pointerover", pointer));
     el.dispatchEvent(new MouseEvent("mouseover", point));
     el.dispatchEvent(new Pointer("pointerdown", { ...pointer, buttons: 1 }));
@@ -479,12 +533,20 @@
     if (!approved) {
       const approval = approvalFor(el, "click", false);
       if (approval)
-        return { status: "approval", target, approval, url: location.href, title: document.title };
+        return {
+          status: "approval",
+          target,
+          approval,
+          url: location.href,
+          title: document.title,
+        };
     }
     el.scrollIntoView({ block: "center", inline: "nearest" });
     const link = el.closest("a[href]");
     const elsewhere =
-      link && link.target && !["_self", "_top", "_parent"].includes(link.target.toLowerCase());
+      link &&
+      link.target &&
+      !["_self", "_top", "_parent"].includes(link.target.toLowerCase());
     if (elsewhere && web(link.href)) {
       // Vikram's browser has one page: open new-tab links here instead.
       location.assign(link.href);
@@ -495,7 +557,10 @@
   }
 
   function nativeSetter(el) {
-    const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const proto =
+      el.tagName === "TEXTAREA"
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype;
     return Object.getOwnPropertyDescriptor(proto, "value").set;
   }
 
@@ -517,13 +582,19 @@
     } else if (el.isContentEditable) {
       const selection = getSelection();
       selection.selectAllChildren(el);
-      if (!document.execCommand("insertText", false, text)) el.textContent = text;
+      if (!document.execCommand("insertText", false, text))
+        el.textContent = text;
     } else {
       // The prototype's setter, not the element's: frameworks that track the
       // value (React) then see the change when the input event arrives.
       nativeSetter(el).call(el, text);
       el.dispatchEvent(
-        new InputEvent("input", { bubbles: true, composed: true, inputType: "insertText", data: text }),
+        new InputEvent("input", {
+          bubbles: true,
+          composed: true,
+          inputType: "insertText",
+          data: text,
+        }),
       );
     }
     if (el.tagName === "SELECT")
@@ -591,7 +662,8 @@
   }
 
   function scroll(direction) {
-    const distance = (direction === "up" ? -1 : 1) * Math.round(innerHeight * 0.85);
+    const distance =
+      (direction === "up" ? -1 : 1) * Math.round(innerHeight * 0.85);
     const before = scrollY;
     window.scrollBy({ top: distance, behavior: "instant" });
     if (Math.round(scrollY) !== Math.round(before)) return { status: "done" };
@@ -606,7 +678,10 @@
     }
     return {
       status: "done",
-      notice: direction === "up" ? "Already at the top of the page." : "Already at the bottom of the page.",
+      notice:
+        direction === "up"
+          ? "Already at the top of the page."
+          : "Already at the bottom of the page.",
     };
   }
 

@@ -2,13 +2,17 @@ import { useId, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  Globe,
   ListChecks,
   MessageCircleQuestionMark,
+  ShieldAlert,
   SquareTerminal,
+  Undo2,
 } from "lucide-react";
 import type {
   ActivityRecord,
   Attempt,
+  BrowserRecord,
   CodeRecord,
   PlanRecord,
   QuestionRecord,
@@ -36,6 +40,50 @@ const CODE_STATUS: Record<string, string> = {
   complete: "Complete",
   failed: "Failed",
 };
+const BROWSER_DONE: Record<string, string> = {
+  open: "Opened",
+  click: "Clicked",
+  type: "Typed into",
+  scroll: "Scrolled",
+  back: "Went back",
+  look: "Looked at the page",
+};
+const BROWSER_STATUS: Record<string, string> = {
+  denied: "not allowed",
+  refused: "refused",
+  failed: "failed",
+  timed_out: "timed out",
+  stopped: "stopped",
+  interrupted: "interrupted",
+  waiting: "waiting for your OK",
+  paused: "waiting for the browser",
+};
+
+function host(url: string | null) {
+  try {
+    return url ? new URL(url).host : "";
+  } catch {
+    return "";
+  }
+}
+
+const BROWSER_DOING: Record<string, string> = {
+  open: "Opening",
+  click: "Clicking",
+  type: "Typing into",
+  scroll: "Scrolling",
+  back: "Going back",
+  look: "Looking at the page",
+};
+const PENDING = new Set(["running", "waiting", "paused"]);
+
+export function browserStep(record: BrowserRecord) {
+  const verbs = PENDING.has(record.status) ? BROWSER_DOING : BROWSER_DONE;
+  let text = verbs[record.action] ?? "Used the browser";
+  if (record.target) text += ` ${record.target}`;
+  if (record.text) text += `: “${record.text}”`;
+  return text;
+}
 
 function useSending(onReply: (reply: Reply) => Promise<boolean>) {
   const [sending, setSending] = useState(false);
@@ -316,44 +364,176 @@ function CodeRun({ record }: { record: CodeRecord }) {
   );
 }
 
+function BrowserApproval({
+  record,
+  onReply,
+}: {
+  record: BrowserRecord;
+  onReply: (reply: Reply) => Promise<boolean>;
+}) {
+  const [sending, submit] = useSending(onReply);
+  return (
+    <section
+      className="tool-card waiting"
+      aria-label="Browser action for your approval"
+    >
+      <div className="tool-heading">
+        <ShieldAlert size={14} />
+        Allow this browser action?
+      </div>
+      <p className="approval-summary">
+        {record.approval?.summary ?? browserStep(record)}
+      </p>
+      <p className="tool-note">
+        {record.approval?.reason}
+        {host(record.url) && ` · ${host(record.url)}`}
+      </p>
+      <div className="tool-actions">
+        <button
+          className="primary"
+          disabled={sending}
+          onClick={() => void submit({ decision: "approve" })}
+        >
+          Allow
+        </button>
+        <button
+          className="secondary"
+          disabled={sending}
+          onClick={() => void submit({ decision: "dismiss" })}
+        >
+          Don’t allow
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function BrowserPaused({ onHandBack }: { onHandBack?: () => void }) {
+  return (
+    <section className="tool-card waiting" aria-label="Browser in your control">
+      <div className="tool-heading">
+        <Globe size={14} />
+        Vikram is waiting for the browser
+      </div>
+      <p className="tool-note">
+        You took the browser over. Vikram continues when you hand it back.
+      </p>
+      {onHandBack && (
+        <div className="tool-actions">
+          <button className="primary" onClick={onHandBack}>
+            <Undo2 size={13} />
+            Hand back
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function BrowserLog({
+  records,
+  running,
+}: {
+  records: BrowserRecord[];
+  running: boolean;
+}) {
+  const last = records[records.length - 1];
+  const where = host(
+    [...records].reverse().find((record) => record.url)?.url ?? null,
+  );
+  return (
+    <details className="tool-run browser-log" open={running || undefined}>
+      <summary>
+        {running && last.status === "running" ? (
+          <span className="activity-dot" />
+        ) : (
+          <Globe size={13} />
+        )}
+        Browser · {records.length} {records.length === 1 ? "action" : "actions"}
+        {where && ` · ${where}`}
+      </summary>
+      <ol className="browser-steps">
+        {records.map((record) => (
+          <li key={record.id} className={`browser-step ${record.status}`}>
+            <span>{browserStep(record)}</span>
+            {record.status !== "complete" && record.status !== "running" && (
+              <strong>
+                {" "}
+                · {BROWSER_STATUS[record.status] ?? record.status}
+              </strong>
+            )}
+            {record.error && <small>{record.error}</small>}
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
+}
+
 export function Activity({
   attempt,
   onRespond,
+  onHandBack,
 }: {
   attempt: Attempt;
   onRespond?: Respond;
+  onHandBack?: () => void;
 }) {
   if (!attempt.activity?.length) return null;
+  const running = attempt.status === "running" && !attempt.unsaved;
+  // Consecutive browser actions share one log; waiting ones stand out as cards.
+  const groups: (ActivityRecord | BrowserRecord[])[] = [];
+  for (const record of attempt.activity) {
+    const previous = groups[groups.length - 1];
+    if (record.kind === "browser" && Array.isArray(previous))
+      previous.push(record);
+    else groups.push(record.kind === "browser" ? [record] : record);
+  }
   return (
     <div className="tool-activity">
-      {attempt.activity.map((record) => {
-        const live =
-          !!onRespond &&
-          attempt.status === "running" &&
-          !attempt.unsaved &&
-          record.status === "waiting";
-        const onReply = (reply: Reply) =>
-          onRespond
-            ? onRespond(attempt, record, reply)
-            : Promise.resolve(false);
-        const key = `${record.kind}-${record.id}`;
-        if (record.kind === "question")
-          return (
-            <QuestionCard
-              key={key}
-              record={record}
-              live={live}
-              onReply={onReply}
-            />
-          );
-        if (record.kind === "plan")
-          return (
-            <PlanCard key={key} record={record} live={live} onReply={onReply} />
-          );
-        if (record.kind === "code")
-          return <CodeRun key={key} record={record} />;
-        return null;
+      {groups.map((group) => {
+        if (!Array.isArray(group)) return renderRecord(group);
+        const waiting = group.find(
+          (record) =>
+            running &&
+            (record.status === "waiting" || record.status === "paused"),
+        );
+        return (
+          <div key={`browser-${group[0].id}`} className="browser-group">
+            <BrowserLog records={group} running={running} />
+            {waiting?.status === "waiting" && onRespond && (
+              <BrowserApproval
+                record={waiting}
+                onReply={(reply) => onRespond(attempt, waiting, reply)}
+              />
+            )}
+            {waiting?.status === "paused" && (
+              <BrowserPaused onHandBack={onHandBack} />
+            )}
+          </div>
+        );
       })}
     </div>
   );
+
+  function renderRecord(record: ActivityRecord) {
+    const live =
+      !!onRespond &&
+      attempt.status === "running" &&
+      !attempt.unsaved &&
+      record.status === "waiting";
+    const onReply = (reply: Reply) =>
+      onRespond ? onRespond(attempt, record, reply) : Promise.resolve(false);
+    const key = `${record.kind}-${record.id}`;
+    if (record.kind === "question")
+      return (
+        <QuestionCard key={key} record={record} live={live} onReply={onReply} />
+      );
+    if (record.kind === "plan")
+      return (
+        <PlanCard key={key} record={record} live={live} onReply={onReply} />
+      );
+    if (record.kind === "code") return <CodeRun key={key} record={record} />;
+    return null;
+  }
 }

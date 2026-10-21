@@ -27,6 +27,8 @@ MAX_TYPED = 2_000
 MAX_SCREENSHOT = 4_000_000
 # One helper line: a screenshot, page text, and elements.
 MAX_LINE = 8 * 1024 * 1024
+# Seconds for the helper to start WebKit and say it is ready.
+START_TIMEOUT = 20
 HELPER_NAME = "vikram-desktop"
 ACTIONS = ("open", "click", "type", "scroll", "back", "look")
 
@@ -252,15 +254,17 @@ def helper_path() -> Path | None:
     In an installed app it sits beside the CLI's runtime; in a checkout it is a
     built desktop app (release first).
     """
-    candidates = []
     if getattr(sys, "frozen", False):
-        candidates.append(Path(sys.executable).with_name(HELPER_NAME))
+        path = Path(sys.executable).with_name(HELPER_NAME)
+        return path if path.is_file() and os.access(path, os.X_OK) else None
     target = Path(__file__).resolve().parents[1] / "apps/desktop/src-tauri/target"
-    candidates += [target / "release" / HELPER_NAME, target / "debug" / HELPER_NAME]
-    return next(
-        (path for path in candidates if path.is_file() and os.access(path, os.X_OK)),
-        None,
-    )
+    built = [
+        path
+        for path in (target / "release" / HELPER_NAME, target / "debug" / HELPER_NAME)
+        if path.is_file() and os.access(path, os.X_OK)
+    ]
+    # The newest build: an older one may predate the helper mode.
+    return max(built, key=lambda path: path.stat().st_mtime, default=None)
 
 
 def unavailable_reason() -> str | None:
@@ -314,6 +318,20 @@ class HelperEngine:
             )
         except OSError:
             raise BrowserUnavailable("The browser could not start.") from None
+        try:
+            async with asyncio.timeout(START_TIMEOUT):
+                ready = json.loads(await process.stdout.readline() or b"{}")
+        except (TimeoutError, ValueError, asyncio.LimitOverrunError):
+            ready = {}
+        except BaseException:
+            process.kill()
+            raise
+        if not (isinstance(ready, dict) and ready.get("ready") is True):
+            with contextlib.suppress(ProcessLookupError):
+                process.kill()
+            raise BrowserUnavailable(
+                "The browser did not start. Rebuild or reinstall the Vikram app."
+            )
         self.process = process
         self.reader = asyncio.create_task(self._read(process))
         return process
@@ -384,3 +402,31 @@ class HelperEngine:
             if reader is not None:
                 reader.cancel()
                 await asyncio.gather(reader, return_exceptions=True)
+
+
+def check_browser() -> int:
+    """Start the hidden browser and read a blank page, without the network, to
+    check a packaged app: WebKit, its content blocker, and the page script."""
+    reason = unavailable_reason()
+    if reason is None:
+
+        async def probe() -> EngineResult:
+            engine = HelperEngine()
+            try:
+                return engine_result(
+                    await engine.act({"id": "check", "action": "look"})
+                )
+            finally:
+                await engine.close()
+
+        try:
+            result = asyncio.run(probe())
+            if not result.ok or result.page is None or result.page.url != "about:blank":
+                reason = "The browser returned an unexpected result."
+        except BrowserUnavailable as error:
+            reason = str(error)
+    if reason is not None:
+        sys.stderr.write(f"{reason}\n")
+        return 1
+    sys.stdout.write("The browser is ready.\n")
+    return 0

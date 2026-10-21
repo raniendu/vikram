@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import io
 import json
@@ -14,7 +15,10 @@ from vikram.evals import cli
 from vikram.evals.cases import CASES, completed_tools
 from vikram.evals.history import RunConfig, save_run
 from vikram.evals.runner import _new_run, evaluate_many
+from vikram.evals.site import ScriptedSite, completed_browser
 from vikram.sandbox import CodeRun
+
+CASES_BY_ID = {case.id: case for case in CASES}
 
 
 def setUpModule():
@@ -25,6 +29,14 @@ def setUpModule():
 # Saved history depends on these: the original eight cases stay one series.
 STARTER_SUITE = "4bd8114f23132b9132ebe827efef4727e904e3d1dbb2ed4d79f28eef1e4f6a22"
 STARTER_PROTOCOL = "54d651d1de0aaf42ed689511058fb4b73baea6ec9eda4f17bdf44d69f56f86f0"
+# The three local-tool cases as they were before the browser case was added.
+TOOL_CASES = ("sandbox-computation", "clarifying-question", "plan-approval")
+TOOL_SUITE = "551cd06b07b55d93294cbb814c63b7f05819aefc5dd9849a14c2e392ef5e99e8"
+TOOL_PROTOCOL = "4908b19ba4618d7ebaa29d81b69fad191e2c99b89884103e57a63d701045cdaf"
+TOOL_AGENT = {
+    True: "26dbd28f401421f82b309497953c08cc4af973e5fa839a9760f200d88ecd8061",
+    False: "9694d982b5558f477b9efa1ba4479bd0fa289da9b1252ec3587ede320ce10961",
+}
 
 
 def tool_call(name, arguments, call_id):
@@ -85,6 +97,18 @@ class SuiteIdentityTests(unittest.TestCase):
         self.assertNotEqual(everything.suite_hash, STARTER_SUITE)
         self.assertNotEqual(everything.protocol_hash, STARTER_PROTOCOL)
         self.assertNotEqual(everything.agent_hash, run.agent_hash)
+
+    def test_tool_case_series_keep_their_identity_without_the_browser_case(self):
+        cases = [case for case in CASES if case.id in TOOL_CASES]
+        for sandbox in (True, False):
+            config = RunConfig(model="m", tools=True, sandbox=sandbox)
+            run = _new_run(config, cases, "", "").record
+            self.assertEqual(run.suite_hash, TOOL_SUITE)
+            self.assertEqual(run.protocol_hash, TOOL_PROTOCOL)
+            self.assertEqual(run.agent_hash, TOOL_AGENT[sandbox])
+            browsing = _new_run(config, [*cases, CASES_BY_ID["browser-lookup"]], "", "")
+            self.assertNotEqual(browsing.record.protocol_hash, TOOL_PROTOCOL)
+            self.assertNotEqual(browsing.record.agent_hash, TOOL_AGENT[sandbox])
 
     def test_completed_tools_name_only_finished_work(self):
         activity = [
@@ -169,6 +193,42 @@ class ToolCaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.sandboxes[0].closed)
         run, _ = await self.evaluate("plan-approval", "20779")
         self.assertEqual(run.cases[0].failed, 1)
+
+    async def test_browser_case_needs_the_answer_found_by_browsing(self):
+        run, model = await self.evaluate(
+            "browser-lookup",
+            tool_call("browser_open", {"url": "https://kettles.example/"}, "b1"),
+            tool_call("browser_click", {"element": 2}, "b2"),
+            "$48",
+        )
+        self.assertEqual(run.cases[0].passed, 1)
+        self.assertIn(
+            "browser_click", [t["function"]["name"] for t in model.bodies[0]["tools"]]
+        )
+        self.assertIn("Price: $48", json.dumps(model.bodies[2]["messages"]))
+        # A right answer without using the browser does not pass.
+        run, _ = await self.evaluate("browser-lookup", "$48")
+        self.assertEqual((run.cases[0].passed, run.cases[0].failed), (0, 1))
+
+    def test_offline_site_follows_links_and_never_leaves_its_pages(self):
+        site = ScriptedSite()
+        opened = asyncio.run(
+            site.act({"action": "open", "url": "https://kettles.example"})
+        )
+        self.assertEqual(opened["page"]["elements"][1]["name"], "Copper Kettle")
+        clicked = asyncio.run(site.act({"action": "click", "element": 2}))
+        self.assertIn("Price: $48", clicked["page"]["text"])
+        self.assertFalse(asyncio.run(site.act({"action": "click", "element": 9}))["ok"])
+        back = asyncio.run(site.act({"action": "back"}))
+        self.assertEqual(back["page"]["title"], "Kettle Corner")
+        other = asyncio.run(site.act({"action": "open", "url": "https://example.com/"}))
+        self.assertFalse(other["ok"])
+        self.assertEqual(
+            completed_browser([{"kind": "browser", "status": "complete"}]), ["browser"]
+        )
+        self.assertEqual(
+            completed_browser([{"kind": "browser", "status": "failed"}]), []
+        )
 
     async def test_saved_records_hold_metrics_not_prompts_code_or_answers(self):
         run, _ = await self.evaluate(

@@ -11,6 +11,7 @@ import type {
   Active,
   ActivityRecord,
   Attempt,
+  BrowserControl,
   Chat,
   ChatSummary,
   Folder,
@@ -35,6 +36,8 @@ export function useChats() {
   const [sending, setSending] = useState(false);
   const [importing, setImporting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [browserControl, setBrowserControl] = useState<BrowserControl>("agent");
+  const [phase, setPhase] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const draftRef = useRef(
     new Map<string, { text: string; revision: number }>(),
@@ -118,6 +121,7 @@ export function useChats() {
       setFolders(state.folders);
       setActive(reconcileActive(state.active, events.current));
       setPreferences(state.preferences);
+      setBrowserControl(state.browser?.control ?? "agent");
       setOffline(false);
       const previous = selectedRef.current ?? state.preferences.selected_chat;
       const id = state.chats.some((c) => c.id === previous)
@@ -190,12 +194,16 @@ export function useChats() {
               }
             : old,
         );
-        if (event.status === "running")
+        if (event.status === "running") {
           setActive({
             chat_id: event.chat_id,
             attempt_id: event.attempt_id,
             request_id: event.request_id,
           });
+          setPhase(event.phase ?? null);
+        }
+      } else if (event.event === "browser_control" && event.control) {
+        setBrowserControl(event.control);
       } else if (event.event === "chat_mode" && event.chat_id && event.mode) {
         // An approved plan ends plan mode for the chat's next replies.
         const { chat_id: id, mode } = event;
@@ -205,10 +213,12 @@ export function useChats() {
         setChats((old) => old.map((c) => (c.id === id ? { ...c, mode } : c)));
       } else if (event.event === "idle") {
         setActive((old) => (old?.attempt_id === event.attempt_id ? null : old));
+        setPhase(null);
       } else if (event.event === "notice") setError(event.message ?? null);
       else if (event.event === "fatal" || event.event === "disconnected") {
         setOffline(true);
         setActive(null);
+        setPhase(null);
         for (const [id, event] of events.current) {
           if (event.status === "running")
             events.current.set(id, {
@@ -398,6 +408,19 @@ export function useChats() {
       return false;
     }
   }
+  /** Take the browser over (Vikram's actions wait) or hand it back. */
+  async function controlBrowser(control: BrowserControl) {
+    try {
+      const result = await rpc<{ control: BrowserControl }>("browser_control", {
+        control,
+      });
+      setBrowserControl(result.control);
+      return true;
+    } catch (e) {
+      fail(e);
+      return false;
+    }
+  }
   async function manage(method: string, params: Record<string, unknown>) {
     try {
       await rpc(method, params);
@@ -517,6 +540,9 @@ export function useChats() {
     send,
     stop,
     respond,
+    browserControl,
+    controlBrowser,
+    phase,
     manage,
     deleteChat,
     importAttachments,

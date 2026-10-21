@@ -10,6 +10,10 @@ def main() -> int:
         from vikram.sandbox import check_sandbox
 
         return check_sandbox()
+    if sys.argv[1:2] == ["--check-browser"]:
+        from vikram.browser import check_browser
+
+        return check_browser()
     if sys.argv[1:2] == ["--cli"]:
         from vikram.cli import main as cli_main
 

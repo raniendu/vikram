@@ -27,6 +27,7 @@ from vikram.evals.cases import (
 )
 from vikram.evals.history import CaseResult, RunConfig, RunRecord, fingerprint
 from vikram.evals.provenance import capture_revision
+from vikram.evals.site import ScriptedSite, completed_browser
 from vikram.evals.thinking import thinking_label, thinking_request
 from vikram.interaction import ScriptedInteraction
 from vikram.sandbox import Sandbox, VmSandbox
@@ -64,21 +65,42 @@ def _protocol(cases: Sequence[CaseSpec]) -> dict:
             "completed_tools": inspect.getsource(completed_tools),
             "simulated_user": inspect.getsource(ScriptedInteraction),
         }
+    # Only with the browser case, so runs without it keep their identity.
+    if _browsing(cases):
+        protocol |= {
+            "browser_site": inspect.getsource(ScriptedSite),
+            "completed_browser": inspect.getsource(completed_browser),
+        }
     return protocol
 
 
-def _agent_hash(config: RunConfig) -> str:
+def _browsing(cases: Sequence[CaseSpec]) -> bool:
+    return any("browser" in case.requires for case in cases)
+
+
+def _agent_hash(config: RunConfig, cases: Sequence[CaseSpec] = ()) -> str:
     # Without tools this is the original prompt, so such runs keep their identity.
     if not config.tools:
         return fingerprint(agent_prompt(web=False, toolkit=False))
-    return fingerprint(
-        {
-            mode: agent_prompt(
-                web=False, toolkit=True, sandbox=config.sandbox is True, mode=mode
+    prompts = {
+        mode: agent_prompt(
+            web=False, toolkit=True, sandbox=config.sandbox is True, mode=mode
+        )
+        for mode in ("normal", "plan")
+    }
+    if _browsing(cases):
+        # The browser case's replies also see the browser guidance.
+        prompts |= {
+            f"{mode} with browser": agent_prompt(
+                web=False,
+                toolkit=True,
+                sandbox=config.sandbox is True,
+                mode=mode,
+                browser=True,
             )
             for mode in ("normal", "plan")
         }
-    )
+    return fingerprint(prompts)
 
 
 def _new_run(
@@ -96,7 +118,7 @@ def _new_run(
             revision=capture_revision(),
             benchmark_version=2,
             suite_hash=fingerprint([case.identity() for case in cases]),
-            agent_hash=_agent_hash(config),
+            agent_hash=_agent_hash(config, cases),
             protocol_hash=fingerprint(_protocol(cases)),
             cases=[
                 CaseResult(
@@ -144,11 +166,13 @@ async def _generate(
 
     def answerer(spec: CaseSpec):
         async def answer(prompt: str) -> str:
-            # A fresh reply per attempt: mode, simulated user, VM, and tool activity.
+            # A fresh reply per attempt: mode, simulated user, VM, offline site,
+            # and tool activity.
             reply = Reply(
                 mode=spec.mode,
                 interaction=ScriptedInteraction(spec.user_reply),
                 sandbox=sandbox() if config.sandbox else None,
+                browser=ScriptedSite() if "browser" in spec.requires else None,
             )
             try:
                 async with asyncio.timeout(config.timeout_seconds):
@@ -165,7 +189,10 @@ async def _generate(
             finally:
                 if reply.sandbox is not None:
                     await reply.sandbox.close()
-            set_eval_attribute("completed_tools", completed_tools(reply.activity))
+            set_eval_attribute(
+                "completed_tools",
+                completed_tools(reply.activity) + completed_browser(reply.activity),
+            )
             return result.output
 
         return answer

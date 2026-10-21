@@ -89,9 +89,11 @@ function ThinkingDisclosure({ attempt }: { attempt: Attempt }) {
 function Answer({
   attempt,
   onRespond,
+  onHandBack,
 }: {
   attempt: Attempt;
   onRespond?: Respond;
+  onHandBack?: () => void;
 }) {
   return (
     <div className={`answer ${attempt.unsaved ? "unsaved" : ""}`}>
@@ -107,7 +109,11 @@ function Answer({
         </span>
       </div>
       <ThinkingDisclosure attempt={attempt} />
-      <Activity attempt={attempt} onRespond={onRespond} />
+      <Activity
+        attempt={attempt}
+        onRespond={onRespond}
+        onHandBack={onHandBack}
+      />
       {attempt.content && (
         <div className="markdown">
           <Markdown
@@ -152,13 +158,19 @@ function Answer({
                     ? "Waiting for your answer…"
                     : attempt.phase === "reviewing"
                       ? "Waiting for your approval…"
-                      : attempt.content
-                        ? "Writing…"
-                        : attempt.phase === "thinking"
-                          ? "Thinking…"
-                          : attempt.phase === "loading"
-                            ? "Waiting for Ollama…"
-                            : "Preparing reply…"}
+                      : attempt.phase === "browsing"
+                        ? "Using the browser…"
+                        : attempt.phase === "approving"
+                          ? "Waiting for your OK…"
+                          : attempt.phase === "paused"
+                            ? "Waiting for you to hand back the browser…"
+                            : attempt.content
+                              ? "Writing…"
+                              : attempt.phase === "thinking"
+                                ? "Thinking…"
+                                : attempt.phase === "loading"
+                                  ? "Waiting for Ollama…"
+                                  : "Preparing reply…"}
           </div>
         )}
       {!!attempt.searches?.length && (
@@ -235,11 +247,13 @@ export function Transcript({
   disabled,
   onRetry,
   onRespond,
+  onHandBack,
 }: {
   chat: Chat;
   disabled: boolean;
   onRetry: () => void;
   onRespond?: Respond;
+  onHandBack?: () => void;
 }) {
   const end = useRef<HTMLDivElement>(null);
   const viewport = useRef<HTMLDivElement>(null);
@@ -297,6 +311,7 @@ export function Transcript({
                     key={attempt.id}
                     attempt={attempt}
                     onRespond={onRespond}
+                    onHandBack={onHandBack}
                   />
                 ),
               )}
