@@ -16,10 +16,49 @@ PLAN_STATUS = {
     "timed_out": "not reviewed in time",
     "stopped": "not reviewed",
 }
+BROWSER_DONE = {
+    "open": "opened",
+    "click": "clicked",
+    "type": "typed into",
+    "scroll": "scrolled",
+    "back": "went back",
+    "look": "looked at the page",
+}
+BROWSER_STATUS = {
+    "denied": "not allowed by the user",
+    "refused": "refused",
+    "failed": "failed",
+    "timed_out": "timed out",
+    "stopped": "stopped",
+}
+
+
+def browser_note(actions: list[dict]) -> str:
+    """The last few browser actions and where the browser was left."""
+    steps = []
+    for item in actions[-6:]:
+        step = BROWSER_DONE.get(item.get("action"), "used the browser")
+        if item.get("target"):
+            step += f" {bounded(item['target'], 200)}"
+        if item.get("text"):
+            step += f" with “{bounded(item['text'], 100)}”"
+        if item.get("status") != "complete":
+            step += f" ({BROWSER_STATUS.get(item.get('status'), 'unfinished')})"
+        steps.append(step)
+    note = "- Browser actions: " + "; ".join(steps)
+    last = next((item for item in reversed(actions) if item.get("url")), None)
+    if last:
+        note += (
+            "\n  The browser was left on (untrusted page title): "
+            f"{bounded(last.get('title') or '(untitled)', 200)} — "
+            f"{bounded(last['url'], 500)}"
+        )
+    return note
 
 
 def activity_note(activity: list[dict]) -> str | None:
-    """Questions, the latest plan, and recent sandbox runs, for follow-up turns."""
+    """Questions, the latest plan, recent sandbox runs, and browser actions, for
+    follow-up turns."""
     lines = []
     for item in activity:
         if item.get("kind") != "question":
@@ -55,6 +94,9 @@ def activity_note(activity: list[dict]) -> str | None:
             + "\n```\n  Output: "
             + (bounded(run["output"], 1_000) or "(none)")
         )
+    actions = [item for item in activity if item.get("kind") == "browser"]
+    if actions:
+        lines.append(browser_note(actions))
     if not lines:
         return None
     return "Tool activity while answering this message:\n" + "\n".join(lines)

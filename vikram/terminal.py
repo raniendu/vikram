@@ -27,6 +27,7 @@ from rich.text import Text
 
 from vikram.errors import ReplyError, reply_error
 from vikram.interaction import (
+    ActionRequest,
     AskUserRequest,
     AskUserResponse,
     PlanRequest,
@@ -49,6 +50,9 @@ PHASES = {
     "sandbox": "Running code in the sandbox…",
     "asking": "Waiting for your answer…",
     "reviewing": "Waiting for plan approval…",
+    "browsing": "Using the browser…",
+    "approving": "Waiting for your OK…",
+    "paused": "Waiting for the browser…",
     "answering": "Writing…",
 }
 PLAN_STATUS = {
@@ -87,7 +91,39 @@ def activity_summary(activity: list[dict]) -> list[str]:
     plans = [a for a in activity if a["kind"] == "plan"]
     if plans:
         lines.append(f"Plan · {PLAN_STATUS.get(plans[-1]['status'], 'submitted')}")
+    actions = [a for a in activity if a["kind"] == "browser"]
+    if actions:
+        declined = sum(a["status"] in ("denied", "refused") for a in actions)
+        failed = sum(a["status"] == "failed" for a in actions)
+        lines.append(
+            f"Browser · {len(actions)} {'action' if len(actions) == 1 else 'actions'}"
+            + (f" · {declined} not allowed" if declined else "")
+            + (f" · {failed} failed" if failed else "")
+        )
     return lines
+
+
+BROWSER_VERBS = {
+    "open": "Opened",
+    "click": "Clicked",
+    "type": "Typed into",
+    "scroll": "Scrolled",
+    "back": "Went back",
+    "look": "Looked at the page",
+}
+
+
+def browser_summary(record: dict) -> str:
+    """What one browser action did, for `/activity`."""
+    text = f"Browser · {record['status'].replace('_', ' ')} · "
+    text += BROWSER_VERBS.get(record["action"], record["action"])
+    if record.get("target"):
+        text += f" {record['target']}"
+    if record.get("text"):
+        text += f": “{record['text']}”"
+    if record.get("title") or record.get("url"):
+        text += f" → {record.get('title') or ''} {record.get('url') or ''}".rstrip()
+    return text
 
 
 def render_reply(
@@ -231,6 +267,30 @@ class TerminalInteraction:
                     return PlanReview(decision="revise", feedback=feedback[:2000])
             self.console.print("Type y, c, or n.", style="dim")
 
+    async def approve(self, request: ActionRequest, /) -> bool:
+        body = Text(terminal_text(request.summary) + "\n", style="bold")
+        body.append(terminal_text(request.reason), style="dim")
+        if request.url:
+            body.append("\n" + terminal_text(request.url), style="dim")
+        self.console.print(
+            Panel(
+                body,
+                title="Browser · allow this action?",
+                title_align="left",
+                border_style=ACCENT,
+            )
+        )
+        while True:
+            try:
+                choice = (await self._read("allow? y yes · n no › ")).lower()
+            except EOFError:
+                choice = "n"
+            if choice in ("y", "yes", "allow"):
+                return True
+            if choice in ("", "n", "no"):
+                return False
+            self.console.print("Type y or n.", style="dim")
+
 
 class _QueuedInteraction:
     """Hands each question or plan to the terminal loop, which owns the screen."""
@@ -248,6 +308,9 @@ class _QueuedInteraction:
 
     async def review_plan(self, request: PlanRequest, /) -> PlanReview:
         return await self._submit("plan", request)
+
+    async def approve(self, request: ActionRequest, /) -> bool:
+        return await self._submit("approve", request)
 
 
 class _LiveReply:
@@ -339,6 +402,12 @@ class TerminalChat:
                             style="dim",
                         )
                     )
+            elif item["kind"] == "browser":
+                self.console.print(
+                    Text(terminal_text(browser_summary(item)), style="dim")
+                )
+                if item.get("error"):
+                    self.console.print(Text(terminal_text(item["error"]), style="dim"))
             else:
                 self.console.print(
                     Text(
@@ -362,6 +431,8 @@ class TerminalChat:
             try:
                 if kind == "ask":
                     return await self.prompter.ask(payload)
+                if kind == "approve":
+                    return await self.prompter.approve(payload)
                 return await self.prompter.review_plan(payload)
             except KeyboardInterrupt:
                 return None
@@ -479,7 +550,9 @@ class TerminalChat:
                 f"Web · {len(searches)} requests · /activity to inspect", style="dim"
             )
         elif self.last_event.get("activity"):
-            self.console.print("/activity shows code and answers", style="dim")
+            self.console.print(
+                "/activity shows code, answers, and browser actions", style="dim"
+            )
         for source in self.last_event.get("sources", []):
             self.console.print(
                 Text(
@@ -552,6 +625,12 @@ class TerminalChat:
             "and questions automatically",
             style="dim",
         )
+        if self.session.browser is not None:
+            self.console.print(
+                "Browser · hidden, private, and closed when you exit; Vikram asks "
+                "before it submits, signs in, buys, or posts",
+                style="dim",
+            )
         self.help()
         while True:
             label = "plan › " if self.session.mode == "plan" else "› "
@@ -603,4 +682,12 @@ def run_terminal(session: "ChatSession") -> None:
             category=PydanticAIDeprecationWarning,
             module=r"vikram\.agent",
         )
-        asyncio.run(TerminalChat(session, terminal_input=terminal_input).run())
+        asyncio.run(_run(TerminalChat(session, terminal_input=terminal_input)))
+
+
+async def _run(chat: TerminalChat) -> None:
+    try:
+        await chat.run()
+    finally:
+        # The hidden browser's private data ends with the chat.
+        await chat.session.close()

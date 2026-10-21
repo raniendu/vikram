@@ -193,6 +193,22 @@ class TerminalPromptTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(review.decision, "dismiss")
 
+    async def test_browser_approval_choices(self):
+        from vikram.interaction import ActionRequest
+
+        request = ActionRequest(
+            id="b1",
+            summary="Click “Place order” on shop.example",
+            reason="It looks like it buys or pays for something.",
+            url="https://shop.example/cart",
+        )
+        allowed, shown = await self.typed("maybe\ry\r", lambda p: p.approve(request))
+        self.assertTrue(allowed)
+        self.assertIn("Place order", shown)
+        self.assertIn("Type y or n.", shown)
+        self.assertFalse((await self.typed("\r", lambda p: p.approve(request)))[0])
+        self.assertFalse((await self.typed("n\r", lambda p: p.approve(request)))[0])
+
     async def test_reply_pauses_for_a_question_and_resumes(self):
         async def stream(*args, interaction, mode, **kwargs):
             yield {"text": "", "phase": "asking", "mode": mode, "activity": []}
@@ -303,6 +319,36 @@ class TerminalPromptTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("Sandbox · 1 run · 1 failed", shown)
         self.assertIn("Plan · not approved", shown)
+        actions = [
+            {"kind": "browser", "action": "open", "status": "complete"},
+            {"kind": "browser", "action": "click", "status": "denied"},
+        ]
+        shown = render({"text": "Done", "activity": actions}, status="complete")
+        self.assertIn("Browser · 2 actions · 1 not allowed", shown)
+
+    def test_plain_cli_browser_lines(self):
+        from vikram.cli import browser_line
+
+        record = {"kind": "browser", "action": "open", "target": "https://a.example/"}
+        self.assertEqual(
+            browser_line({**record, "status": "running"}),
+            "Browser: Opening https://a.example/",
+        )
+        self.assertIsNone(browser_line({**record, "status": "complete"}))
+        self.assertEqual(
+            browser_line(
+                {
+                    **record,
+                    "status": "denied",
+                    "approval": {"summary": "Click “Buy”", "reason": "Buys"},
+                }
+            ),
+            "Browser: not allowed: Click “Buy”",
+        )
+        self.assertEqual(
+            browser_line({**record, "status": "refused", "error": "No passwords.\nx"}),
+            "Browser: No passwords.",
+        )
 
 
 if __name__ == "__main__":

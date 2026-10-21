@@ -89,6 +89,32 @@ class ProtocolTests(unittest.TestCase):
             with self.subTest(params=params), self.assertRaises(ValueError):
                 command(method, params)
 
+    def test_browser_commands_are_strictly_validated(self):
+        def command(method, params):
+            return validate_command(
+                json.dumps({"v": 1, "id": "r", "method": method, "params": params})
+            )
+
+        base = {"chat_id": "a" * 32, "attempt_id": "b" * 32, "interaction_id": "b1"}
+        allow = command("respond", {**base, "kind": "browser", "decision": "approve"})
+        self.assertEqual(allow.params["kind"], "browser")
+        control = command("browser_control", {"control": "person"})
+        self.assertEqual(control.params, {"control": "person"})
+        result = command("browser_result", {"call_id": "c" * 32, "result": {"ok": 1}})
+        self.assertEqual(result.params["result"], {"ok": 1})
+        self.assertEqual(command("browser_closed", {}).params, {})
+        for method, params in (
+            ("browser_control", {"control": "anyone"}),
+            ("browser_control", {}),
+            ("browser_result", {"call_id": "../x", "result": {}}),
+            ("browser_result", {"call_id": "c" * 32, "result": []}),
+            ("browser_closed", {"reason": "x"}),
+            ("respond", {**base, "kind": "browser", "decision": "maybe"}),
+        ):
+            with self.subTest(method=method, params=params):
+                with self.assertRaises(ValueError):
+                    command(method, params)
+
     def test_thinking_preserves_booleans_and_named_levels(self):
         self.assertEqual(
             ThinkingControls.model_validate({"values": [False, True]}).values,

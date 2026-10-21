@@ -19,6 +19,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import UsageLimits
 
 from vikram.agent import build_agent
+from vikram.browser import BrowserEngine
 from vikram.errors import ReplyError, reply_error
 from vikram.interaction import Interaction, Unattended
 from vikram.ollama import thinking_request
@@ -67,13 +68,17 @@ async def stream_reply(
     mode: Mode = "normal",
     interaction: Interaction | None = None,
     sandbox: Callable[[], Sandbox | None] | None = None,
+    browser: BrowserEngine | None = None,
+    vision: bool = False,
 ) -> AsyncIterator[dict]:
     """Stream one reply. Tool-capable models (web "auto") also get the toolkit.
 
-    `interaction` is the person who answers questions and reviews plans; without
-    one, questions are declined and plans stay unapproved. `sandbox` makes this
-    reply's code sandbox, by default a new microVM when this host can run one;
-    the reply deletes it when it ends.
+    `interaction` is the person who answers questions, reviews plans, and
+    approves browser actions; without one, questions are declined, plans stay
+    unapproved, and consequential browser actions are declined. `sandbox` makes
+    this reply's code sandbox, by default a new microVM when this host can run
+    one; the reply deletes it when it ends. `browser` is the interface's browser
+    engine, which outlives the reply; `vision` adds screenshots to its pages.
     """
     queue = asyncio.Queue()
     reported, parts = {}, {}
@@ -115,6 +120,9 @@ async def stream_reply(
         mode=mode,
         interaction=interaction or Unattended(),
         notify=lambda phase: send(phase=phase),
+        # The browser needs tool calling, like the rest of the toolkit.
+        browser=browser if web == "auto" else None,
+        vision=vision,
     )
 
     async def observe(response):

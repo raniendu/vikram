@@ -1,8 +1,12 @@
-"""Questions and plan reviews answered by a person; each interface supplies one."""
+"""Questions, plan reviews, and browser approvals answered by a person.
+
+Each interface supplies one `Interaction`; interfaces that can show a browser
+action to the person also implement `Approver`.
+"""
 
 import re
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai_harness.ask_user import (
@@ -14,6 +18,8 @@ from pydantic_ai_harness.ask_user import (
 )
 
 __all__ = [
+    "ActionRequest",
+    "Approver",
     "AskUserAnswer",
     "AskUserRequest",
     "AskUserResponse",
@@ -67,6 +73,21 @@ class PlanReview(BaseModel):
     feedback: str | None = Field(default=None, max_length=2000)
 
 
+@dataclass(frozen=True, kw_only=True)
+class ActionRequest:
+    """A browser action that waits for the person's approval before it runs.
+
+    `id` is the tool call ID, so a UI can match its reply. `summary` says what
+    would happen ("Click “Place order” on shop.example") and `reason` why it
+    needs approval ("It looks like it buys or pays for something.").
+    """
+
+    id: str
+    summary: str
+    reason: str
+    url: str
+
+
 class Interaction(Protocol):
     """Puts a question or a plan in front of the person and waits for the answer.
 
@@ -79,14 +100,28 @@ class Interaction(Protocol):
     async def review_plan(self, request: PlanRequest, /) -> PlanReview: ...
 
 
+@runtime_checkable
+class Approver(Protocol):
+    """An interaction that can ask the person to allow one browser action.
+
+    Without it, every action that needs approval is declined: evaluations, piped
+    runs, and tests never approve a form submission, sign-in, or purchase.
+    """
+
+    async def approve(self, request: ActionRequest, /) -> bool: ...
+
+
 class Unattended:
-    """Nobody can answer: decline questions and leave plans unapproved."""
+    """Nobody can answer: decline questions, plans, and browser actions."""
 
     async def ask(self, request: AskUserRequest, /) -> AskUserResponse:
         return AskUserResponse(cancelled=True)
 
     async def review_plan(self, request: PlanRequest, /) -> PlanReview:
         return PlanReview(decision="dismiss")
+
+    async def approve(self, request: ActionRequest, /) -> bool:
+        return False
 
 
 class ScriptedInteraction:

@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from pydantic_ai.exceptions import AgentRunError
 
+from vikram import browser as browsers
 from vikram.agent import DEFAULT_MODEL
 from vikram.context import context_messages
 from vikram.conversation import stream_reply
@@ -20,14 +21,28 @@ from vikram.models import ModelCatalog, prepare_model, thinking_selection
 
 
 class ChatSession:
+    """One terminal conversation. `browser` is its hidden browser engine, which
+    keeps its pages across replies until `close()`."""
+
     def __init__(
-        self, model: str, *, thinking="on", streamer=stream_reply, mode="normal"
+        self,
+        model: str,
+        *,
+        thinking="on",
+        streamer=stream_reply,
+        mode="normal",
+        browser=None,
     ):
         self.model, self.thinking, self.streamer = model, thinking, streamer
         self.mode = mode
+        self.browser = browser
         self.turns: list[dict] = []
         self.session_id = uuid4().hex
         self.catalog = ModelCatalog()
+
+    async def close(self) -> None:
+        if self.browser is not None and hasattr(self.browser, "close"):
+            await self.browser.close()
 
     async def reply(self, prompt: str, *, interaction=None):
         models = await self.catalog.refresh()
@@ -54,6 +69,8 @@ class ChatSession:
             session_id=self.session_id,
             mode=self.mode,
             interaction=interaction,
+            browser=self.browser,
+            vision=bool(selected.get("vision")),
         )
         last = None
         try:
@@ -101,6 +118,9 @@ class _PromptInteraction:
 
     async def review_plan(self, request, /):
         return await self._guard(self.prompter.review_plan(request))
+
+    async def approve(self, request, /):
+        return await self._guard(self.prompter.approve(request))
 
 
 def _interaction():
@@ -153,6 +173,10 @@ async def _reply(session: ChatSession, message: str) -> None:
                             f"Question skipped (no interactive terminal): "
                             f"{question['question']}\n"
                         )
+            elif record["kind"] == "browser":
+                line = browser_line(record)
+                if line:
+                    sys.stderr.write(line + "\n")
     if last:
         sys.stdout.write(last["text"] + "\n")
         if last.get("sources"):
@@ -163,8 +187,38 @@ async def _reply(session: ChatSession, message: str) -> None:
                 )
 
 
+def browser_line(record: dict) -> str | None:
+    """One terminal line per browser action as it starts, waits, or ends."""
+    target = record.get("target") or ""
+    status = record["status"]
+    if status == "running":
+        verb = {
+            "open": "Opening",
+            "click": "Clicking",
+            "type": "Typing into",
+            "scroll": "Scrolling",
+            "back": "Going back",
+            "look": "Looking at the page",
+        }.get(record["action"], "Browsing")
+        return f"Browser: {verb} {target}".rstrip()
+    if status == "paused":
+        return None
+    if status in ("failed", "refused", "timed_out") and record.get("error"):
+        return "Browser: " + record["error"].splitlines()[0]
+    if status == "denied":
+        summary = (record.get("approval") or {}).get("summary") or "the action"
+        return f"Browser: not allowed: {summary}"
+    return None
+
+
+def _session(model: str, *, thinking="on", mode="normal") -> ChatSession:
+    """A session with the hidden browser when this Mac has the Vikram app."""
+    engine = browsers.HelperEngine() if browsers.unavailable_reason() is None else None
+    return ChatSession(model, thinking=thinking, mode=mode, browser=engine)
+
+
 def _chat(model: str, prompt: str | None, *, thinking="on", mode="normal") -> None:
-    session = ChatSession(model, thinking=thinking, mode=mode)
+    session = _session(model, thinking=thinking, mode=mode)
     if (
         prompt is None
         and sys.stdin.isatty()
@@ -182,32 +236,40 @@ def _chat(model: str, prompt: str | None, *, thinking="on", mode="normal") -> No
             "/plan toggles plan mode; /exit ends the chat.\n"
         )
     with asyncio.Runner() as runner:
-        while True:
-            message = prompt
-            if message is None:
-                try:
-                    message = input("You: ").strip()
-                except EOFError:
-                    return
-                if message == "/exit":
-                    return
-                if message == "/plan":
-                    session.mode = "normal" if session.mode == "plan" else "plan"
-                    sys.stderr.write(
-                        f"Plan mode {'on' if session.mode == 'plan' else 'off'}.\n"
-                    )
-                    continue
-                if message.split(maxsplit=1)[:1] == ["/web"]:
-                    sys.stderr.write(
-                        "There is no web setting. Web tools are available automatically "
-                        "for supported models.\n"
-                    )
-                    continue
-                if not message:
-                    continue
-            runner.run(_reply(session, message))
-            if prompt is not None:
+        try:
+            _loop(runner, session, prompt)
+        finally:
+            # The hidden browser's private data ends with the session.
+            runner.run(session.close())
+
+
+def _loop(runner: asyncio.Runner, session: ChatSession, prompt: str | None) -> None:
+    while True:
+        message = prompt
+        if message is None:
+            try:
+                message = input("You: ").strip()
+            except EOFError:
                 return
+            if message == "/exit":
+                return
+            if message == "/plan":
+                session.mode = "normal" if session.mode == "plan" else "plan"
+                sys.stderr.write(
+                    f"Plan mode {'on' if session.mode == 'plan' else 'off'}.\n"
+                )
+                continue
+            if message.split(maxsplit=1)[:1] == ["/web"]:
+                sys.stderr.write(
+                    "There is no web setting. Web tools are available automatically "
+                    "for supported models.\n"
+                )
+                continue
+            if not message:
+                continue
+        runner.run(_reply(session, message))
+        if prompt is not None:
+            return
 
 
 def main(argv: Sequence[str] | None = None) -> int:

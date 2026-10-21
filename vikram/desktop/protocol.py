@@ -82,15 +82,31 @@ class Answer(Params):
 
 
 class Respond(Chat):
-    """A person's answer to the active reply's question or plan."""
+    """A person's answer to the active reply's question, plan, or browser action.
+
+    For a browser action, "approve" allows it and "dismiss" declines it.
+    """
 
     attempt_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     interaction_id: str = Field(min_length=1, max_length=120)
-    kind: Literal["question", "plan"]
+    kind: Literal["question", "plan", "browser"]
     answers: list[Answer] = Field(default_factory=list, max_length=10)
     cancelled: bool = False
     decision: Literal["approve", "revise", "dismiss"] | None = None
     feedback: str | None = Field(default=None, max_length=2000)
+
+
+class BrowserResult(Params):
+    """The app's answer to one browser action; the toolkit validates `result`."""
+
+    call_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    result: dict[str, Any]
+
+
+class BrowserControl(Params):
+    """The person takes the browser over, or hands it back to Vikram."""
+
+    control: Literal["person", "agent"]
 
 
 PARAMS = {
@@ -115,6 +131,10 @@ PARAMS = {
     "remove_image": Image,
     "send": Send,
     "respond": Respond,
+    "browser_control": BrowserControl,
+    # From the app itself, never the window: results and the panel closing.
+    "browser_result": BrowserResult,
+    "browser_closed": Params,
 }
 
 

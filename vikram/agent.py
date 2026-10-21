@@ -12,6 +12,7 @@ from vikram.toolkit import (
     TEXT_PLAN_PROMPT,
     Mode,
     Reply,
+    has_browser,
     mode_of,
     plan_prompt,
     toolkit_capabilities,
@@ -43,21 +44,36 @@ WEB_PROMPT = CONTENT_PROMPT + WEB_GUIDANCE + "You have no other tools."
 
 
 def agent_prompt(
-    *, web: bool, toolkit: bool, sandbox: bool = True, mode: Mode = "normal"
+    *,
+    web: bool,
+    toolkit: bool,
+    sandbox: bool = True,
+    mode: Mode = "normal",
+    browser: bool = False,
 ) -> str:
     """Instructions for one combination of web tools, local tools, and mode.
 
-    `sandbox` matters only with the toolkit: whether this host can run `run_code`.
+    `sandbox` and `browser` matter only with the toolkit: whether this host can
+    run `run_code`, and whether this reply has a browser.
     """
+    browser = toolkit and browser
     if toolkit:
         prompt = CONTENT_PROMPT + (
-            WEB_GUIDANCE if web else "You have no live internet access. "
+            WEB_GUIDANCE
+            if web
+            else (
+                "You have no live internet access except through the browser. "
+                if browser
+                else "You have no live internet access. "
+            )
         )
-        prompt += toolkit_prompt(sandbox)
+        prompt += toolkit_prompt(sandbox, browser)
     else:
         prompt = WEB_PROMPT if web else SYSTEM_PROMPT
     if mode == "plan":
-        prompt += "\n\n" + (plan_prompt(sandbox) if toolkit else TEXT_PLAN_PROMPT)
+        prompt += "\n\n" + (
+            plan_prompt(sandbox, browser) if toolkit else TEXT_PLAN_PROMPT
+        )
     return prompt
 
 
@@ -87,9 +103,10 @@ def build_agent(
 ) -> Agent[Reply, str]:
     """Build the repository's agent using a model installed in local Ollama.
 
-    `toolkit` adds questions and plan mode, and `sandbox` adds `run_code`. Run it
-    with `deps=Reply(...)`, which carries the reply's mode, person, sandbox, and
-    activity.
+    `toolkit` adds questions, plan mode, and the browser tools, which are offered
+    only to replies with a browser; `sandbox` adds `run_code`. Run it with
+    `deps=Reply(...)`, which carries the reply's mode, person, sandbox, browser,
+    and activity.
     """
     sandbox = toolkit and sandbox
     model = model.strip()
@@ -100,7 +117,11 @@ def build_agent(
         # Recomputed per request, so an approved plan drops plan-mode guidance.
         return (
             agent_prompt(
-                web=web != "off", toolkit=toolkit, sandbox=sandbox, mode=mode_of(ctx)
+                web=web != "off",
+                toolkit=toolkit,
+                sandbox=sandbox,
+                mode=mode_of(ctx),
+                browser=has_browser(ctx),
             )
             + "\n\n"
             + system_time_instructions()

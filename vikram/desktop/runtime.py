@@ -5,8 +5,10 @@ import base64
 import json
 import sqlite3
 from collections.abc import Callable
+from uuid import uuid4
 
 from vikram.agent import DEFAULT_MODEL
+from vikram.browser import ACTION_TIMEOUT, BrowserUnavailable
 from vikram.documents import ensure_space, extract_in_worker
 from vikram.errors import reply_error
 from vikram.interaction import (
@@ -29,7 +31,8 @@ def _plain(text: str) -> str:
 
 
 class DesktopInteraction:
-    """Questions and plan reviews for one attempt, answered with `respond`."""
+    """Questions, plan reviews, and browser approvals for one attempt, answered
+    with `respond`."""
 
     def __init__(self, runtime: "Runtime", route: dict):
         self.runtime, self.route = runtime, route
@@ -40,9 +43,93 @@ class DesktopInteraction:
     async def review_plan(self, request, /):
         return await self.runtime.wait_for_person(self.route, "plan", request)
 
+    async def approve(self, request, /):
+        return await self.runtime.wait_for_person(self.route, "browser", request)
+
+
+CLOSED = {
+    "ok": False,
+    "error": (
+        "The user closed the browser. Do not use it again in this reply; answer "
+        "with what you have."
+    ),
+}
+
+
+class DesktopBrowser:
+    """The app's browser panel, driven through the Tauri host.
+
+    Each action is a `browser` event that the host runs on its WebKit panel; the
+    result returns with `browser_result`. The person can take the panel over
+    (actions wait until they hand it back) or close it, which ends its private
+    session and the browser's use for the rest of that reply.
+    """
+
+    def __init__(self, runtime: "Runtime"):
+        self.runtime = runtime
+        self.calls: dict[str, tuple[str | None, asyncio.Future]] = {}
+        self.control = "agent"
+        self.closed_for: set[str] = set()
+        self._agent = asyncio.Event()
+        self._agent.set()
+
+    @property
+    def paused(self) -> bool:
+        return self.control == "person"
+
+    async def resumed(self) -> None:
+        await self._agent.wait()
+
+    def _attempt(self) -> str | None:
+        return self.runtime.active["attempt_id"] if self.runtime.active else None
+
+    async def act(self, call: dict, /) -> dict:
+        attempt = self._attempt()
+        if attempt in self.closed_for:
+            return CLOSED
+        key = uuid4().hex
+        future = asyncio.get_running_loop().create_future()
+        self.calls[key] = (attempt, future)
+        try:
+            self.runtime.event("browser", call_id=key, call=call)
+            async with asyncio.timeout(ACTION_TIMEOUT):
+                return await future
+        except TimeoutError:
+            raise BrowserUnavailable("The browser did not respond.") from None
+        finally:
+            self.calls.pop(key, None)
+
+    def result(self, call_id: str, result: dict) -> None:
+        # A stopped reply no longer waits; its late result is dropped.
+        entry = self.calls.get(call_id)
+        if entry is not None and not entry[1].done():
+            entry[1].set_result(result)
+
+    def set_control(self, control: str) -> None:
+        self.control = control
+        if control == "agent":
+            self._agent.set()
+        else:
+            self._agent.clear()
+        self.runtime.event("browser_control", control=control)
+
+    def closed(self) -> None:
+        """The person closed the panel: fail waiting actions, end this reply's use."""
+        if (attempt := self._attempt()) is not None:
+            self.closed_for = {attempt}
+        for _, future in self.calls.values():
+            if not future.done():
+                future.set_result(CLOSED)
+        if self.control != "agent":
+            self.set_control("agent")
+
 
 class Runtime:
-    def __init__(self, store: Store, emit: Callable, streamer=stream_reply):
+    """`browser` is true when the app hosts the browser panel (the real app)."""
+
+    def __init__(
+        self, store: Store, emit: Callable, streamer=stream_reply, browser=False
+    ):
         self.store, self.emit, self.streamer = store, emit, streamer
         self.catalog = ModelCatalog()
         self.models: list[dict] = []
@@ -51,6 +138,7 @@ class Runtime:
         self.stopping = False
         self.starting = False
         self.waiting: dict[str, tuple] = {}
+        self.browser = DesktopBrowser(self) if browser else None
 
     def event(self, event: str, **payload) -> None:
         self.emit({"v": 1, "event": event, **payload})
@@ -64,7 +152,14 @@ class Runtime:
             return {"models": [], "connection_error": str(e)}
 
     def snapshot(self) -> dict:
-        return {**self.store.snapshot(), "active": self.active, "models": self.models}
+        return {
+            **self.store.snapshot(),
+            "active": self.active,
+            "models": self.models,
+            "browser": (
+                {"control": self.browser.control} if self.browser is not None else None
+            ),
+        }
 
     def suggested_model(self) -> str | None:
         installed = {m["name"] for m in self.models if m["available"]}
@@ -163,6 +258,8 @@ class Runtime:
                 session_id=attempt["chat_id"],
                 mode=attempt["mode"],
                 interaction=DesktopInteraction(self, route),
+                browser=self.browser,
+                vision=bool(model.get("vision")),
             )
             async for chunk in iterator:
                 if self.stopping or self.active != route:
@@ -317,6 +414,11 @@ class Runtime:
         ):
             raise ValueError("This reply is no longer waiting for that answer.")
         _, kind, request, future = entry
+        if kind == "browser":
+            if p.get("decision") not in ("approve", "dismiss"):
+                raise ValueError("Allow or decline the browser action.")
+            future.set_result(p["decision"] == "approve")
+            return
         if kind == "question":
             response = AskUserResponse(
                 cancelled=p.get("cancelled", False),
@@ -452,6 +554,16 @@ class Runtime:
             await self.stop()
         elif method == "respond":
             self.respond(p)
+        elif method in {"browser_control", "browser_result", "browser_closed"}:
+            if self.browser is None:
+                raise ValueError("This app has no browser.")
+            if method == "browser_control":
+                self.browser.set_control(p["control"])
+                return {"control": self.browser.control}
+            if method == "browser_result":
+                self.browser.result(p["call_id"], p["result"])
+            else:
+                self.browser.closed()
         else:
             raise ValueError("Unknown command.")
         return None

@@ -358,3 +358,81 @@ class InteractionParityTests(unittest.IsolatedAsyncioTestCase):
                 [(r["kind"], r["status"]) for r in attempt["activity"]],
             )
             store.close()
+
+
+class BrowserParityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cli_and_desktop_send_identical_browser_turns(self):
+        from test_browser import FakeEngine, ok
+        from test_toolkit import Model, tool_call
+
+        def model():
+            return Model(
+                tool_call("browser_open", {"url": "https://shop.example/"}, "b1"),
+                tool_call("browser_click", {"element": "1"}, "b2"),
+                "It costs $48.",
+            )
+
+        def results():
+            return [ok(), ok(target="link “Kettles”", url="https://shop.example/k")]
+
+        async def discover():
+            return [
+                parse_model(
+                    ENTRY, {**SHOW, "capabilities": SHOW["capabilities"] + ["tools"]}
+                )
+            ]
+
+        models = [model(), model()]
+        with (
+            patch("vikram.agent.datetime") as clock,
+            tempfile.TemporaryDirectory() as root,
+        ):
+            clock.now.return_value.astimezone.return_value = datetime(
+                2026, 10, 21, tzinfo=timezone.utc
+            )
+            engine = FakeEngine(*results())
+            cli = ChatSession(
+                "local:1",
+                thinking="off",
+                browser=engine,
+                streamer=partial(
+                    stream_reply, transport=httpx.MockTransport(models[0])
+                ),
+            )
+            cli.catalog.refresh = discover
+            _ = [e async for e in cli.reply("Find the kettle price")]
+            store = Store(Path(root))
+            cid = store.create_chat("local:1")["id"]
+            store.update_chat(cid, thinking={"local:1": False})
+            replies = results()
+
+            def host(event):
+                if event["event"] == "browser":
+                    asyncio.get_running_loop().call_soon(
+                        lambda: asyncio.ensure_future(
+                            runtime.command(
+                                "browser_result",
+                                {"call_id": event["call_id"], "result": replies.pop(0)},
+                                "host",
+                            )
+                        )
+                    )
+
+            runtime = Runtime(
+                store,
+                host,
+                streamer=partial(
+                    stream_reply, transport=httpx.MockTransport(models[1])
+                ),
+                browser=True,
+            )
+            runtime.catalog.refresh = discover
+            store.save_draft(cid, "Find the kettle price", 10)
+            await runtime.send(cid, "r1")
+            await runtime.task
+            attempt = store.chat(cid)["messages"][-1]["attempts"][-1]
+            self.assertEqual(attempt["status"], "complete", attempt["error"])
+            self.assertEqual(models[0].bodies, models[1].bodies)
+            self.assertEqual(len(models[0].bodies), 3)
+            self.assertEqual(cli.turns[-1]["activity"], attempt["activity"])
+            store.close()

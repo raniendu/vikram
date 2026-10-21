@@ -27,7 +27,8 @@ def emit(payload: dict) -> None:
 
 async def serve(root: Path) -> None:
     store = Store(root)
-    runtime = Runtime(store, emit)
+    # The app hosts the browser panel that this runtime drives.
+    runtime = Runtime(store, emit, browser=True)
     imports = set()
 
     async def respond(raw):
