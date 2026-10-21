@@ -343,7 +343,7 @@ class HelperEngine:
                     message = json.loads(line)
                     future = self.pending.pop(message["id"], None)
                 except (ValueError, KeyError, TypeError):
-                    break
+                    continue  # Not an answer (a library's stray output): skip it.
                 if future is not None and not future.done():
                     future.set_result(message.get("result"))
         except (ValueError, OSError, asyncio.LimitOverrunError):

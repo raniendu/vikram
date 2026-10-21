@@ -209,6 +209,60 @@ class TerminalPromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((await self.typed("\r", lambda p: p.approve(request)))[0])
         self.assertFalse((await self.typed("n\r", lambda p: p.approve(request)))[0])
 
+    async def test_reply_pauses_for_a_browser_approval_and_resumes(self):
+        from vikram.interaction import ActionRequest
+
+        request = ActionRequest(
+            id="b1",
+            summary="Click “Submit order” on httpbin.org",
+            reason="It submits a form.",
+            url="https://httpbin.org/forms/post",
+        )
+
+        async def stream(*args, interaction, mode, **kwargs):
+            yield {"text": "", "phase": "approving", "mode": mode, "activity": []}
+            allowed = await interaction.approve(request)
+            record = {
+                "kind": "browser",
+                "id": "b1",
+                "action": "click",
+                "status": "complete" if allowed else "denied",
+                "target": "button “Submit order”",
+                "text": None,
+                "url": "https://httpbin.org/post",
+                "title": "",
+                "error": None,
+                "approval": None,
+            }
+            yield {
+                "text": "Submitted." if allowed else "Not submitted.",
+                "phase": "answering",
+                "mode": mode,
+                "activity": [record],
+            }
+
+        session = ChatSession("local:1", streamer=stream)
+        session.catalog.refresh = models
+        output = io.StringIO()
+        with create_pipe_input() as keyboard:
+            terminal = TerminalChat(
+                session,
+                console=Console(file=output, width=80),
+                terminal_input=keyboard,
+                terminal_output=DummyOutput(),
+            )
+            task = asyncio.create_task(terminal.answer("Order it"))
+            async with asyncio.timeout(3):
+                while "allow this action" not in output.getvalue():
+                    await asyncio.sleep(0.01)
+                keyboard.send_text("y\r")
+                await task
+            terminal.show_activity()
+        shown = output.getvalue()
+        self.assertIn("Submitted.", shown)
+        self.assertIn("Browser · 1 action", shown)
+        self.assertIn("Browser · complete · Clicked button “Submit order”", shown)
+
     async def test_reply_pauses_for_a_question_and_resumes(self):
         async def stream(*args, interaction, mode, **kwargs):
             yield {"text": "", "phase": "asking", "mode": mode, "activity": []}

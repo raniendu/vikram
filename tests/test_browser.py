@@ -573,6 +573,7 @@ for line in sys.stdin:
         sys.exit(3)
     if call.get("action") == "hang":
         continue
+    print("a library's stray output", flush=True)
     page = {{"url": "https://example.com/", "title": call["action"]}}
     print(json.dumps({{"id": message["id"], "result": {{"ok": True, "page": page}}}}))
     sys.stdout.flush()
