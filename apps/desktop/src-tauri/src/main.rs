@@ -1,7 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod bridge;
+mod browser;
 use base64::Engine;
 use bridge::Bridge;
+use browser::{Bounds, Browser};
 use serde_json::{json, Value};
 use std::{io::Read, path::PathBuf, sync::atomic::Ordering};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -144,6 +146,36 @@ fn open_link(url: String) -> Result<(), String> {
     open::that(parsed.as_str()).map_err(|_| "Could not open the browser.".into())
 }
 
+/// Where the window shows the browser panel, in window coordinates.
+#[tauri::command]
+fn browser_bounds(browser: State<'_, Browser>, x: f64, y: f64, width: f64, height: f64) {
+    if [x, y, width, height].iter().all(|v| v.is_finite()) && width >= 1.0 && height >= 1.0 {
+        browser.set_bounds(Bounds { x, y, width, height });
+    }
+}
+
+/// Hide the panel while the window shows something over it, such as a dialog.
+#[tauri::command]
+fn browser_visible(browser: State<'_, Browser>, visible: bool) {
+    browser.set_hidden(!visible);
+}
+
+#[tauri::command]
+fn browser_state(browser: State<'_, Browser>) -> Value {
+    browser.snapshot()
+}
+
+/// The person closed the browser: its private session ends, and the reply that
+/// was using it is told.
+#[tauri::command]
+async fn browser_close(app: AppHandle) -> Result<(), String> {
+    app.state::<Browser>().close(&app);
+    app.state::<Bridge>()
+        .call(&app, "browser_closed", json!({}))
+        .await
+        .map(|_| ())
+}
+
 #[tauri::command]
 async fn quit(app: AppHandle) {
     app.state::<Bridge>().exiting.store(true, Ordering::SeqCst);
@@ -153,6 +185,12 @@ async fn quit(app: AppHandle) {
 }
 
 fn main() {
+    let context = tauri::generate_context!();
+    if std::env::args().nth(1).as_deref() == Some("--browser-helper") {
+        // The CLI's hidden browser: no window, Dock icon, or chat service.
+        browser::helper(context);
+        return;
+    }
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(window) = app.get_webview_window("main") {
@@ -161,6 +199,7 @@ fn main() {
             }
         }))
         .manage(Bridge::default())
+        .manage(Browser::default())
         .invoke_handler(tauri::generate_handler![
             rpc,
             reconnect,
@@ -168,6 +207,10 @@ fn main() {
             import_drop,
             copy_text,
             open_link,
+            browser_bounds,
+            browser_visible,
+            browser_state,
+            browser_close,
             quit
         ])
         .on_window_event(|window, event| {
@@ -180,7 +223,7 @@ fn main() {
                 let _ = window.emit("quit-requested", ());
             }
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("Could not start Vikram");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {

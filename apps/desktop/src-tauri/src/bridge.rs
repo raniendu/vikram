@@ -121,6 +121,9 @@ impl Bridge {
                         };
                         let _ = pending.reply.send(result);
                     }
+                } else if value.get("event").and_then(Value::as_str) == Some("browser") {
+                    // A browser action for the panel; never shown to the window.
+                    run_browser_action(handle.clone(), value);
                 } else {
                     let _ = handle.emit("runtime", value);
                 }
@@ -213,6 +216,25 @@ impl Bridge {
     pub fn shutdown(&self) {
         self.shutdown_generation(None);
     }
+}
+
+/// Run one action on the browser panel and send its result back to the service.
+fn run_browser_action(app: AppHandle, event: Value) {
+    let Some(call_id) = event.get("call_id").and_then(Value::as_str).map(str::to_owned) else {
+        return;
+    };
+    let call = event.get("call").cloned().unwrap_or(Value::Null);
+    tauri::async_runtime::spawn(async move {
+        let result = app
+            .state::<crate::browser::Browser>()
+            .act(&app, "main", call)
+            .await;
+        // A reconnected or stopped service no longer waits; it drops the result.
+        let _ = app
+            .state::<Bridge>()
+            .call(&app, "browser_result", json!({"call_id": call_id, "result": result}))
+            .await;
+    });
 }
 
 #[cfg(test)]
