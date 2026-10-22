@@ -1,0 +1,38 @@
+[package]
+name = "vikram-desktop"
+version = "0.1.0"
+description = "Private local conversations with Ollama"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# "unstable" enables child webviews: the browser panel inside the main window.
+tauri = { version = "2", features = ["unstable"] }
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "time"] }
+rfd = "0.17"
+base64 = "0.22"
+arboard = { version = "3", default-features = false }
+open = "5"
+url = "2"
+
+# The browser's WebKit calls: isolated script world, snapshots, content blocking.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSDictionary", "NSError", "NSString", "NSValue", "NSData", "NSObject"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSBitmapImageRep", "NSImage", "NSImageRep", "NSGraphics", "NSResponder", "NSView", "NSWindow"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-app-kit", "WKContentRuleList", "WKContentRuleListStore", "WKContentWorld", "WKFrameInfo", "WKSnapshotConfiguration", "WKUserContentController", "WKWebView"] }
+
+[profile.dev]
+debug = 0
+incremental = false
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 8

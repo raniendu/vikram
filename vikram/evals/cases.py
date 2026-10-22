@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic_evals.evaluators import Evaluator, EvaluatorContext
 
 JUDGE_POLICY = (
@@ -15,8 +15,19 @@ JUDGE_POLICY = (
 )
 
 
+Tool = Literal["run_code", "ask_user_question", "submit_plan", "browser"]
+# Added with the local toolkit; omitted from fingerprints at their defaults so
+# earlier cases keep their suite identity.
+TOOL_FIELDS = ("mode", "user_reply", "requires")
+
+
 class CaseSpec(BaseModel):
-    """A task and its deterministic check or binary grading rubric."""
+    """A task and its deterministic check or binary grading rubric.
+
+    Tool cases also set how the simulated user replies, the reply mode, and the
+    local tools that must complete: an answered question, an approved plan, a
+    successful sandbox run, or a browser action on the offline evaluation site.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     id: str
@@ -25,10 +36,31 @@ class CaseSpec(BaseModel):
     prompt: str
     expected: str = ""
     rubric: str = ""
+    mode: Literal["normal", "plan"] = "normal"
+    user_reply: str | None = None
+    requires: tuple[Tool, ...] = ()
 
     @property
     def group(self) -> Literal["objective", "judged"]:
         return "judged" if self.check == "rubric" else "objective"
+
+    @model_validator(mode="after")
+    def validate_tools(self) -> "CaseSpec":
+        if self.requires and self.check == "rubric":
+            raise ValueError("Tool requirements need an objective check.")
+        return self
+
+    @property
+    def uses_tools(self) -> bool:
+        return bool(self.requires or self.user_reply or self.mode != "normal")
+
+    def identity(self) -> dict:
+        """The fingerprinted case definition."""
+        data = self.model_dump()
+        for key in TOOL_FIELDS:
+            if data[key] == type(self).model_fields[key].default:
+                del data[key]
+        return data
 
 
 @dataclass
@@ -48,6 +80,33 @@ class ObjectiveCheck(Evaluator[str, str, None]):
             return False
         expected = json.loads(self.expected)
         return _same_json(actual, expected)
+
+
+@dataclass
+class ToolCheck(Evaluator[str, str, None]):
+    """Require each named local tool to have completed during the answer."""
+
+    requires: tuple[str, ...]
+
+    def evaluate(self, ctx: EvaluatorContext[str, str, None]) -> bool:
+        completed = ctx.attributes.get("completed_tools", [])
+        return all(tool in completed for tool in self.requires)
+
+
+def completed_tools(activity: list[dict]) -> list[str]:
+    """Tool names only: what finished, never what was asked, run, or answered."""
+    done = {
+        "run_code": any(
+            a["kind"] == "code" and a["status"] == "complete" for a in activity
+        ),
+        "ask_user_question": any(
+            a["kind"] == "question" and a["status"] == "answered" for a in activity
+        ),
+        "submit_plan": any(
+            a["kind"] == "plan" and a["status"] == "approved" for a in activity
+        ),
+    }
+    return [tool for tool, finished in done.items() if finished]
 
 
 def _same_json(actual: object, expected: object) -> bool:
@@ -163,5 +222,52 @@ CASES = (
             "does not invent a departure date or claim to have read it, and "
             "asks the user to provide the contents or relevant excerpt."
         ),
+    ),
+    CaseSpec(
+        id="sandbox-computation",
+        label="Sandbox computation",
+        check="text",
+        prompt=(
+            "What is the sum of all prime numbers below 10,000? "
+            "Reply with only the integer."
+        ),
+        expected="5736396",
+        requires=("run_code",),
+    ),
+    CaseSpec(
+        id="clarifying-question",
+        label="Clarifying question",
+        check="text",
+        prompt=(
+            "I need 25 degrees converted to the other temperature scale for my "
+            "report. Reply with only the converted number rounded to one decimal "
+            "place."
+        ),
+        user_reply="The 25 degrees are Fahrenheit; convert them to Celsius.",
+        expected="-3.9",
+        requires=("ask_user_question",),
+    ),
+    CaseSpec(
+        id="browser-lookup",
+        label="Browser lookup",
+        check="text",
+        prompt=(
+            "Use the browser to open https://kettles.example/ and find the price "
+            "of the Copper Kettle. Reply with only the price, like $12."
+        ),
+        expected="$48",
+        requires=("browser",),
+    ),
+    CaseSpec(
+        id="plan-approval",
+        label="Plan mode",
+        check="text",
+        mode="plan",
+        prompt=(
+            "How many integers from 1 to 100,000 are divisible by 7 or by 11, but "
+            "not by both? Reply with only the integer."
+        ),
+        expected="20779",
+        requires=("submit_plan", "run_code"),
     ),
 )

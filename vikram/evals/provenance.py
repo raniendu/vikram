@@ -3,10 +3,18 @@
 import hashlib
 import platform
 import subprocess
-from importlib.metadata import distributions, version
+from importlib.metadata import PackageNotFoundError, distributions, version
 from pathlib import Path
 
 from vikram.evals.history import AgentRevision, fingerprint
+
+
+def _installed(name: str) -> str:
+    try:
+        return version(name)
+    except PackageNotFoundError:
+        # The VM runtime installs only where it runs (Apple silicon and Linux).
+        return "not installed"
 
 
 def _git(root: Path, *arguments: str) -> str | None:
@@ -53,6 +61,8 @@ def capture_revision() -> AgentRevision:
         harness={
             "python": platform.python_version(),
             "pydantic-ai": version("pydantic-ai-slim"),
+            "pydantic-ai-harness": version("pydantic-ai-harness"),
             "pydantic-evals": version("pydantic-evals"),
+            "smolmachines": _installed("smolmachines"),
         },
     )

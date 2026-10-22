@@ -1,14 +1,231 @@
 # Vikram
 
-One local assistant, built with Pydantic AI and Ollama.
+A private desktop chat app and CLI, built with Tauri, Pydantic AI, and Ollama.
 
 Vikram runs a single agent defined in this repository. Its instructions live in
 `vikram/agent.py`, and it sends model requests to your local Ollama server at
-`http://localhost:11434/v1`.
+`http://localhost:11434/v1`. Models that support tool calling can also run
+Python in an isolated local VM, ask you clarifying questions, in plan mode wait
+for your approval before they work, and use a private web browser that you can
+watch, stop, or take over.
 
-## Run
+## Desktop app (Apple Silicon Mac)
 
-Install [uv](https://docs.astral.sh/uv/) and [Ollama](https://ollama.com/). Start
+Install the desktop app and CLI together by opening **Install Vikram.app** from
+the installer ZIP. Then open `~/Applications/Vikram.app` or run `vikram` in a new
+terminal. Use `vikram update` to update both, `vikram update --check` to check
+without installing, and `vikram --version` to see the running CLI version.
+Updates use stable GitHub Releases; no release is published yet. The local
+installer is ad-hoc signed, pending Developer ID signing and notarization for
+public distribution. [Installation and release details](docs/releases.md).
+
+The Tauri app supports saved chats and flat folders, per-chat local models and
+advertised thinking settings (on by default), streamed replies, stop/retry, Markdown/code copy,
+and image, PDF, Word, text/code, CSV, and Excel attachments. Its light and dark themes follow
+[raniendu.dev](https://raniendu.dev). Fonts ship with the app.
+
+Use your existing Ollama installation and installed models. The picker rejects
+remote/cloud-backed and non-chat models. No model downloads happen automatically.
+One reply runs at a time; other chats keep independent drafts and histories.
+
+Build with native ARM64 Python 3.13+, Node 22.12+ and Rust (Xcode command-line
+tools must be installed):
+
+```bash
+uv sync --locked
+npm --prefix apps/desktop ci
+uv run python scripts/build_desktop.py
+```
+
+To produce the combined installer as well:
+
+```bash
+uv run python scripts/build_installer.py
+```
+
+Open `dist/installers/Install Vikram.app` to install both components in one
+action. Packaging also produces `dist/installers/Vikram-0.1.0-macos-arm64.zip`.
+The installer preserves an existing uv-managed CLI launcher, keeps chats and
+models, and checks the 20 GiB reserve before changing the installed version.
+
+Open `apps/desktop/src-tauri/target/release/bundle/macos/Vikram.app`.
+The bundled app includes its Python service; it needs no separate Python runtime.
+This is an ad-hoc signed local build, not a notarized distribution release.
+Local signing leaves Hardened Runtime off so the bundled Python libraries can
+load. Distribution would require Developer ID signing and notarization. The
+build boots the bundled Python sandbox VM once, then verifies the bundle signature,
+starts the bundled browser once on a blank page (no network), and checks sidecar
+startup in an empty test library.
+The build script requires 24 GiB free to protect the owner's 20 GiB reserve.
+
+For development:
+
+```bash
+uv run python scripts/build_desktop.py --sidecar-only
+npm --prefix apps/desktop run desktop
+```
+
+The browser-only Vite preview shows the layout. Chat operations require the Tauri
+shell; there is no chat HTTP server. The renderer talks to a constrained Rust
+bridge and a versioned private stdio service.
+
+Chats, drafts, settings and imported file copies live in
+`~/Library/Application Support/dev.raniendu.vikram/`, separately from evaluation
+history. SQLite and attachments are private to the current account. There is no
+additional app password/encryption layer or cloud sync. Deleting a folder keeps
+its chats. Deleting a chat removes only its app-owned attachments, never source files.
+Use the trash button beside a conversation in the sidebar, then confirm its name
+in the deletion dialog. The header's three-dot menu also includes Delete chat.
+Stop a running reply before deleting its conversation.
+The developer-only `VIKRAM_CHAT_DATA_DIR` environment variable selects an isolated
+test library; it is not available to the renderer.
+
+Attach up to four files per message, 10 MiB each. Images retain the 24-megapixel limit. Images in
+saved history are omitted with a marker when a text-only model is selected.
+Unsupported draft images must be removed or used with an image-capable model.
+When Ollama returns thinking text, a collapsed **Thinking** row lets you inspect
+it live or after the reply. Thinking has its own copy action and is saved with
+the desktop reply, up to 64,000 characters; longer traces show a limit notice.
+It is never added to later conversation context, logs, or evaluation records.
+Old replies cannot recover thinking that was previously discarded.
+Failed/stopped/interrupted
+partials remain copyable and are excluded from subsequent inference context.
+Only the latest unsuccessful user turn can be retried.
+
+Keyboard: **⌘N** new chat, **⌘B** sidebar, **⌘,** settings, **Enter** send,
+**Shift+Enter** newline. Closing during a reply asks before stopping it.
+
+See the [approved spec](docs/superpowers/specs/2026-10-14-local-chat-design.md)
+and [implementation/validation record](docs/superpowers/plans/2026-10-14-local-chat.md).
+
+## Documents and automatic web search
+
+Documents are read locally. PDF text layers, Word main-body text/tables, UTF-8
+or BOM-marked UTF-16 text/code, CSV/TSV, and XLSX cell values are supported.
+Open a document card to inspect the extracted text. Large documents show a
+Partial notice: up to 20,000 characters per file, 100 PDF pages, 10 sheets,
+1,000 rows and 100 columns are processed. Formula caches are used when present;
+formulas and macros never run. Scanned PDFs need OCR, which is not included.
+Imports run in a disposable parser process with a 15-second timeout. File
+imports and builds preserve at least 20 GiB free space.
+
+CLI and Tauri use the same conversation runner, agent instructions, model
+capability checks, web tools, limits, and completed-turn context policy.
+Compatible local models always have `web_search` and `web_fetch` available and
+decide when to use them. This applies to interactive and one-shot CLI calls and
+every desktop chat, including chats previously saved with Web Off. Neither
+interface has a web on/off setting. The old CLI `--web` flag is rejected;
+old `/web` commands explain the automatic policy without sending a message.
+
+Every model request includes the Mac's current local date, time, weekday,
+timezone/UTC offset and UTC timestamp in its system instructions. This refreshes
+throughout a session and is independent of web tools; asking for the time needs
+no search.
+
+Search uses [Parallel's anonymous MCP endpoint](https://docs.parallel.ai/integrations/mcp/search-mcp)
+without API keys, OAuth, or a paid fallback. Its free service has rate limits.
+The local model receives retrieved excerpts; answers remain local. Queries,
+search objectives, requested URLs, and an opaque session ID go to Parallel.
+Queries may include conversation or attachment details. Original files and full
+chat history are not uploaded as a search payload. CLI and app show tool
+activity, failures, and retrieved sources.
+
+Each reply permits three serial remote calls and ten model requests, with
+bounded excerpts and request timeouts. Stop/Ctrl-C closes model and search
+requests. Models without tool support continue normal chat with a notice.
+There are no arbitrary MCP servers or computer-control tools.
+
+The [extension spec](docs/superpowers/specs/2026-10-14-documents-and-web-search-design.md)
+and [build record](docs/superpowers/plans/2026-10-14-documents-and-web-search.md)
+cover this behavior.
+
+## Questions, plan mode, and the Python sandbox
+
+Tool-capable models get three local tools in both the CLI and the desktop app,
+built on [Pydantic AI Harness](https://pydantic.dev/docs/ai/harness/):
+
+- **Python sandbox** (`run_code`, Harness SmolSandbox). Vikram writes and runs
+  Python for exact arithmetic, counting, dates, and data processing. Code runs
+  in a local microVM ([smolvm](https://github.com/smol-machines/smolvm) on
+  Apple's Hypervisor framework) with its own Linux kernel: no network, none of
+  your files, and none of your environment. Each reply that runs code boots a
+  new VM (1 CPU, 512 MiB, 1 GB disks) from a bundled, digest-pinned
+  `python:3.13-alpine` image, so only the standard library is installed, and
+  deletes the VM when the reply ends. It will not boot a VM that could take the
+  Mac below 20 GiB free. Each snippet is a fresh Python process with 15 seconds; files in
+  `/workspace` last for the rest of the reply. Errors go back to the model to
+  fix, and a failing snippet never ends the reply. On a Mac that cannot run VMs,
+  Vikram says why and does not offer the sandbox: code never runs outside a VM.
+- **Clarifying questions** (`ask_user_question`, Harness Ask User). When a
+  request is ambiguous, Vikram shows multiple-choice questions and waits. Pick
+  options, type your own answer, or skip; skipped questions make Vikram choose
+  and say what it chose.
+- **Plan mode.** Vikram first asks any questions and does research, then submits
+  a numbered plan. Its sandbox refuses to run code until you approve. Approve to let it carry
+  out the plan in the same reply (plan mode then turns off), request changes with
+  feedback, or choose Not now to keep the plan for later.
+
+In the desktop app, use the **Plan** toggle beside the paperclip. Questions and
+plans appear as cards in the reply, and **Ran Python** rows expand to show the
+code and its output. In the terminal, `/plan` toggles plan mode (`--plan` starts
+in it). Questions and plans pause the live reply: type option numbers or your
+own words (Enter skips), and answer plans with `y`, `c` (request changes), or `n`.
+Ctrl+C stops the reply. `/activity` shows sandbox code, output, answers, and
+plans. Piped one-shot runs cannot ask, so questions are declined and plans stay
+unapproved.
+
+Per reply: at most six sandbox runs, three question calls, three plan
+submissions, and ten model requests; the last request offers no tools so the
+model must answer. A question or plan waits up to 15 minutes. Later turns see
+your answers, the latest plan and decision, and recent sandbox runs.
+See the [design](docs/superpowers/specs/2026-10-20-questions-plan-mode-sandbox-design.md).
+
+## The browser
+
+Tool-capable models can also use a real web browser (WebKit, the engine behind
+Safari) through six tools: open a page, click, type, scroll, go back, and look
+again. Each page reaches the model as a numbered list of what it can click or
+type into plus the visible text, and vision models also get a screenshot. Page
+content is treated as untrusted data, never as instructions.
+
+- **In the app,** the browser opens as a panel beside the chat. You watch it
+  live. **Take over** pauses Vikram's next browser action so you can use the
+  page yourself (for example to sign in), and **Hand back** lets it continue.
+  **Stop** ends the reply, and closing the panel ends the browser's session.
+- **In the CLI,** the same browser runs hidden, through the Vikram app's binary
+  in a helper mode, so the CLI needs the app installed (or, in a checkout, the
+  desktop app built). It starts on first use and closes when the CLI exits.
+
+Safety rules are the same in both:
+
+- **Private session.** The browser has its own non-persistent profile: none of
+  your Safari or other browsers' cookies or passwords, and closing the browser
+  or quitting Vikram clears it.
+- **Asks first.** Submitting a form (including pressing Enter in a field),
+  signing in, buying or paying, posting or sending, deleting, and agreeing to
+  terms wait for your approval: a card in the app, a `y`/`n` prompt in the
+  terminal. Piped runs cannot approve, so those actions are declined. A
+  declined action is not asked again in the same reply.
+- **Never types secrets.** Password, payment-card, and one-time-code fields
+  are refused; Vikram tells you what is needed so you can enter it yourself.
+  Their contents are never shown to the model.
+- **No local network or files.** Only public `http` and `https` pages open.
+  Addresses on this Mac or your networks (localhost, private and Tailscale
+  ranges, `.local` names) are blocked for every request a page makes, as are
+  `file:` and other schemes. Downloads, uploads, and pop-up windows are
+  blocked.
+
+Per reply: at most eight browser actions; only the latest page view is sent to
+the model in full. Approvals and take-overs wait up to 15 minutes. Later turns
+see which actions ran and where the browser was left. Clicks and typing use
+script events, which a few sites ignore; take over for those. See the
+[design](docs/superpowers/specs/2026-10-21-agent-browser-design.md).
+
+## Run the CLI
+
+The combined Mac installer bundles the CLI's Python runtime. For a developer
+checkout, install [uv](https://docs.astral.sh/uv/). Both installations need
+[Ollama](https://ollama.com/). Start
 the Ollama app, or start its server in a terminal:
 
 ```bash
@@ -20,17 +237,33 @@ If Ollama is already running, skip `ollama serve`. In another terminal:
 ```bash
 uv sync --locked
 ollama pull gemma4:26b-a4b-it-qat
+uv run python scripts/fetch_sandbox_image.py
 uv run vikram
 ```
+
+The third command downloads the Python sandbox's image once (about 20 MB, from
+Docker Hub) and verifies it against the digest pinned in `vikram/sandbox.py`.
+Without it, chats still work and Vikram says the sandbox is unavailable.
 
 Or ask one question:
 
 ```bash
 uv run vikram "Explain Python generators in three sentences."
+uv run vikram --thinking off "Find the official Ollama tool-calling documentation."
+uv run vikram --plan "Compare 10-year savings for 3%, 4%, and 4.5% yearly rates."
 ```
 
-Conversation history exists only in memory for the current interactive session.
-Chat conversations are not saved between runs. Type `/exit` or press Ctrl-D to exit.
+CLI conversation history exists only in memory for the current interactive session.
+The desktop app saves its own chats independently. In a terminal, Vikram streams
+formatted Markdown with a compact activity line and editable multiline input.
+Normal terminal scrollback is retained. **Enter** sends, **Alt+Enter** adds a
+newline, and **↑** recalls input. **Ctrl+T** reveals/hides live thinking;
+afterward, **Ctrl+T** or `/trace` prints the latest reply's thinking on request.
+`/activity` inspects its web requests, sandbox runs, questions, plans, and
+browser actions. `/plan` toggles plan mode. **Ctrl+C** stops a running reply and
+returns to input; at the input prompt it exits. `/exit` or **Ctrl+D** also exits.
+Terminal thinking stays in memory only. One-shot commands and redirected output
+keep plain answer text without thinking or terminal decoration.
 
 ## Choose a local model
 
@@ -43,34 +276,83 @@ uv run vikram --model MODEL_NAME "Hello"
 
 You can also set `OLLAMA_MODEL`. The command-line option takes precedence over
 that environment variable, which takes precedence over the default. Model
-selection changes the model used by the same agent.
+selection changes the model used by the same agent. CLI session labels and help
+use the app's readable names, such as **Gemma 4 · 26B A4B IT QAT**. Pass the
+original Ollama ID to `--model`; requests and stored identities retain that ID.
 
 ## Code
 
 - `vikram/agent.py`: the agent's instructions, default model, and `build_agent`.
-- `vikram/cli.py`: one-shot and interactive terminal conversations.
+- `vikram/cli.py`: one-shot and interactive terminal adapter.
+- `vikram/terminal.py`: inline Markdown chat, editable input, and optional thinking view.
+- `vikram/installation.py` and `releases.py`: shared installer and verified updates.
+- `vikram/bundle.py`: desktop, CLI, document-parser and installer runtime dispatch.
+- `vikram/conversation.py` and `context.py`: shared execution and conversation context.
+- `vikram/toolkit.py`: Python sandbox, clarifying questions, plan mode, and browser tools.
+- `vikram/sandbox.py`: the per-reply Python microVM and its pinned image.
+- `vikram/browser.py`: the browser engine contract, page views, and the CLI's helper.
+- `vikram/interaction.py`: the question, plan-review, and approval contract interfaces implement.
+- `vikram/web.py`: bounded anonymous Parallel MCP tools.
+- `vikram/documents.py`: local document extraction and parser process ownership.
+- `vikram/models.py`: shared local-model and capability discovery.
 - `vikram/__main__.py`: entry point for `python -m vikram`.
 - `vikram/evals/`: starter cases, evaluation runner, metrics history, and HTML report.
+- `vikram/desktop/`: private stdio adapter, SQLite, and attachments.
+- `apps/desktop/`: React interface and Tauri Rust shell; `src-tauri/src/browser.rs`
+  and `browser.js` are the WebKit browser and its page script.
+- `vikram/ollama.py`: shared validation/mapping for advertised thinking settings.
 
 ```mermaid
 flowchart LR
-    CLI[Terminal CLI] <--> Agent[Pydantic AI agent]
+    CLI[Terminal CLI] <--> Runner[Shared conversation runner]
+    App[Tauri app] <--> Sidecar[Private Python sidecar]
+    Sidecar <--> Runner
+    Runner <--> Agent[Pydantic AI agent]
     Agent <--> Ollama[Local Ollama model]
+    Runner <--> Parallel[Anonymous Parallel search tools]
+    Agent <--> Toolkit[Questions, plan approval, run_code, browser]
+    Toolkit <--> VM[Python microVM per reply]
+    Toolkit <--> Browser[WebKit browser: app panel or hidden helper]
 ```
 
-The agent is defined directly in Python; no spec folder is needed.
+The desktop app and CLI share model/tool behavior. Evaluations explicitly use
+web Off and keep the local toolkit for tool-capable models; grading also uses
+local Ollama and saves only metrics. No application
+component loads `.env` files.
 
-The assistant has no tools, delegation, API server, or desktop app. Evaluation
-grading also uses local Ollama, and evaluation metrics are saved locally. The
-application does not load `.env` files.
+Offline verification (no model inference):
+
+```bash
+uv run python -m unittest discover -s tests -v
+npm --prefix apps/desktop test
+npm --prefix apps/desktop run build
+cargo test --offline --manifest-path apps/desktop/src-tauri/Cargo.toml
+uv run vikram --help
+uv run vikram-eval --help
+uv run black --check vikram tests scripts
+uv run isort --check-only vikram tests scripts
+```
 
 ## Evaluate the agent
 
 Evaluations are run manually with [Pydantic Evals](https://ai.pydantic.dev/evals/).
 The eight starter cases cover arithmetic, text transformation, sorting, JSON
 extraction, summarization, grounded answers, explanation, and honesty about
-unavailable information. They establish a small baseline, not a comprehensive
-quality benchmark.
+unavailable information. Four tool cases cover an exact sandbox computation, a
+clarifying question, a plan-mode task, and a browser lookup. They establish a
+small baseline, not a comprehensive quality benchmark.
+
+Tool cases need a model that advertises tool calling, and the sandbox and plan
+cases need a Mac that can run the sandbox VM; each attempt gets its own VM.
+A simulated user answers
+any question with a fixed typed reply and approves plans. The browser case
+browses a small offline site with canned pages (no network, no WebKit), where
+the price it asks for is only one click away. A tool case passes only when its
+answer matches and its required tools completed: a successful sandbox run, an
+answered question, an approved plan, or a browser action. Web tools stay off in
+every evaluation, while tool-capable models keep the local toolkit. Running only
+the starter cases, or only the first three tool cases, keeps their original
+suite identity and history.
 
 Both answers and grading run locally through Ollama; no API key is needed.
 The default rubric judge is `gemma4:26b-a4b-it-qat`, with thinking off and
@@ -84,13 +366,15 @@ uv run vikram-eval run --model MODEL --judge-model gemma4:26b-a4b-it-qat
 uv run vikram-eval run --samples 10 --k 1 3 5 10
 ```
 
-By default, the benchmark discovers each model's supported thinking values from
+By default, the benchmark runs each model with thinking on, as Vikram chats do.
+`--thinking all` instead discovers each model's supported thinking values from
 Ollama's `/api/show` metadata and runs every value sequentially. Boolean controls
 become off/on rows; named controls retain their exact levels. This follows
 [Ollama's thinking API](https://docs.ollama.com/capabilities/thinking) and its
 [OpenAI-compatible thinking controls](https://docs.ollama.com/api/openai-compatibility).
-Every model/level gets a separate saved result. Eight cases with five attempts
-and two levels means 80 agent attempts, plus grading for rubric cases.
+Every model/level gets a separate saved result. Eleven cases with five attempts
+means 55 agent attempts per model, plus grading for rubric cases; sweeping two
+levels doubles that.
 
 Each case gets five sequential attempts **per thinking level**, with empty
 conversation history each time and agent temperature 0.7. The runner uses two
@@ -120,13 +404,15 @@ For a focused run, repeat `--case`. This objective-only smoke check skips judgin
 uv run vikram-eval run --case arithmetic --case sorting --samples 1 --k 1 --thinking default
 ```
 
-Use `--thinking default` for one run with no thinking override, `--thinking off on`
-for boolean controls, or `--thinking low medium high` when the model advertises
-those levels. Explicit levels are validated before generating answers. If the
-server has no thinking metadata, automatic coverage stops with an explanation;
-update Ollama, or choose `--thinking default` for a run marked as unspecified.
-The runner never guesses model levels or silently treats an unsupported level
-as a measured one. A model advertising only `false` runs once, with thinking off.
+Use `--thinking off` to evaluate without thinking, `--thinking off on` for
+boolean controls, `--thinking low medium high` when the model advertises those
+levels, `--thinking all` for every advertised level, or `--thinking default` for
+one run with no thinking override. `on` is the model's `true` control, or its own
+named level when it has no on/off switch. Explicit levels are validated before
+generating answers. If the server has no thinking metadata for a model, the run
+stops with an explanation; update Ollama, or choose `--thinking default` for a
+run marked as unspecified. The runner never guesses model levels or silently
+treats an unsupported level as a measured one.
 
 Use `uv run vikram-eval run --help` to see the case IDs. To add a domain-specific
 task later, add a `CaseSpec` with a unique ID and an explicit expected answer or
@@ -232,7 +518,7 @@ both local models into Ollama, benchmark them and all their supported thinking
 levels together while holding the working tree and eval settings fixed:
 
 ```bash
-uv run vikram-eval run --model MODEL_A --model MODEL_B --experiment "Model comparison"
+uv run vikram-eval run --model MODEL_A --model MODEL_B --thinking all --experiment "Model comparison"
 ```
 
 Choose two runs at the same thinking level in the optional comparison panel to

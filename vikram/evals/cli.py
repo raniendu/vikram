@@ -12,6 +12,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.models.ollama import OllamaModel
 from pydantic_ai.providers.ollama import OllamaProvider
 
+from vikram import sandbox
 from vikram.agent import DEFAULT_MODEL, build_agent
 from vikram.evals.cases import CASES, CaseSpec
 from vikram.evals.history import (
@@ -23,7 +24,12 @@ from vikram.evals.history import (
 )
 from vikram.evals.report import write_report
 from vikram.evals.runner import evaluate_many
-from vikram.evals.thinking import discover_thinking, select_levels, thinking_label
+from vikram.evals.thinking import (
+    discover_thinking,
+    discover_tools,
+    select_levels,
+    thinking_label,
+)
 
 
 def _progress(message: str) -> None:
@@ -57,7 +63,13 @@ async def _benchmark(
     runs = await evaluate_many(
         configs,
         cases,
-        build_agent,
+        # Evaluations never use the web; tool-capable models keep the local toolkit.
+        lambda config: build_agent(
+            config.model,
+            web="off",
+            toolkit=bool(config.tools),
+            sandbox=bool(config.sandbox),
+        ),
         judge,
         _progress,
         completed,
@@ -84,8 +96,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     run_parser.add_argument(
         "--thinking",
         nargs="+",
-        default=["all"],
-        help="all supported levels (default), on/off, named levels, or default for an unswept run",
+        default=["on"],
+        help="on (default, as Vikram chats), off, named levels, all supported levels, or default for the model's own unspecified behavior",
     )
     run_parser.add_argument(
         "--judge-model",
@@ -139,6 +151,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         selected = [case for case in CASES if args.case is None or case.id in args.case]
         needs_judge = any(case.group == "judged" for case in selected)
+        needs_tools = any(case.uses_tools for case in selected)
+        sandbox_reason = sandbox.unavailable_reason()
+        if sandbox_reason and any("run_code" in case.requires for case in selected):
+            sys.stderr.write(
+                f"{sandbox_reason} The sandbox and plan cases need it; choose other "
+                "cases with --case.\n"
+            )
+            return 1
         models = list(
             dict.fromkeys(
                 model.strip()
@@ -178,8 +198,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             try:
                 controls = discover_thinking(model)
                 levels = select_levels(controls, args.thinking)
+                tools = discover_tools(model)
             except ValueError as exc:
                 sys.stderr.write(f"{exc}\n")
+                return 1
+            if needs_tools and not tools:
+                sys.stderr.write(
+                    f"{model} does not advertise tool calling, which the sandbox, "
+                    "question, plan, and browser cases need. Choose cases with "
+                    "--case or another model.\n"
+                )
                 return 1
             configs.extend(
                 config.model_copy(
@@ -187,13 +215,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "model": model,
                         "thinking": level,
                         "thinking_levels": controls.values if controls else None,
+                        "tools": tools,
+                        "sandbox": sandbox_reason is None if tools else None,
                     }
                 )
                 for level in levels
             )
         _progress(
             f"Benchmark: {len(configs)} model/thinking configurations, "
-            f"{len(selected)} cases, {config.samples} attempts per case."
+            f"{len(selected)} cases, {config.samples} attempts per case. "
+            "Web tools are off; tool-capable models keep questions and plan mode "
+            "with a simulated user"
+            + (
+                ", and run code in a new VM per attempt."
+                if sandbox_reason is None
+                else f". {sandbox_reason}"
+            )
         )
         if needs_judge:
             _progress(

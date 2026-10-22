@@ -1,0 +1,453 @@
+"""Per-user installation of one versioned payload for the CLI and Mac app."""
+
+import contextlib
+import fcntl
+import json
+import os
+import platform
+import plistlib
+import pwd
+import re
+import shlex
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+from importlib.metadata import version as package_version
+from itertools import chain
+from pathlib import Path
+from uuid import uuid4
+
+REPOSITORY = "raniendu/vikram"
+RESERVE = 20 * 1024**3
+RUNTIME_SPACE = 1024**3
+MAX_EXPANDED = 512 * 1024**2
+ROOT_NAME = "dev.raniendu.vikram.install"
+MARKER = b"Vikram installer v1: raniendu/vikram\n"
+PROFILE_BLOCK = b"""# >>> Vikram CLI >>>
+case ":$PATH:" in
+  *":$HOME/.local/bin:"*) ;;
+  *) export PATH="$HOME/.local/bin:$PATH" ;;
+esac
+# <<< Vikram CLI <<<
+"""
+
+
+class InstallError(Exception):
+    """An actionable installation failure, safe to display to the user."""
+
+
+def version_tuple(value: str) -> tuple[int, int, int]:
+    if not isinstance(value, str) or not re.fullmatch(
+        r"(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})", value
+    ):
+        raise InstallError("Expected a stable MAJOR.MINOR.PATCH release version.")
+    return tuple(int(part) for part in value.split("."))
+
+
+def cli_version() -> str:
+    return package_version("vikram")
+
+
+@dataclass(frozen=True)
+class Layout:
+    home: Path
+
+    def __post_init__(self):
+        object.__setattr__(self, "home", self.home.resolve())
+
+    @property
+    def root(self) -> Path:
+        return self.home / "Library/Application Support" / ROOT_NAME
+
+    @property
+    def versions(self) -> Path:
+        return self.root / "versions"
+
+    @property
+    def current(self) -> Path:
+        return self.root / "current"
+
+    @property
+    def app(self) -> Path:
+        return self.home / "Applications/Vikram.app"
+
+    @property
+    def cli(self) -> Path:
+        return self.home / ".local/bin/vikram"
+
+    @property
+    def legacy_cli(self) -> Path:
+        return self.cli.with_name("vikram.before-vikram-installer")
+
+
+def runtime_layout() -> Layout:
+    if getattr(sys, "frozen", False):
+        binary = Path(sys.executable).resolve()
+        if len(binary.parents) >= 9 and binary.parents[5].name == ROOT_NAME:
+            layout = Layout(binary.parents[8])
+            if layout.root == binary.parents[5]:
+                return layout
+    return Layout(Path.home())
+
+
+def check_platform() -> None:
+    if (
+        platform.system() != "Darwin"
+        or platform.machine() != "arm64"
+        or int(platform.mac_ver()[0].split(".")[0] or "0") < 13
+    ):
+        raise InstallError(
+            "This installer requires Apple Silicon and macOS 13 or newer."
+        )
+    if os.geteuid() == 0:
+        raise InstallError("Run the installer as your normal account, without sudo.")
+
+
+def ensure_space(path: Path, additional: int = 0) -> None:
+    while not path.exists():
+        path = path.parent
+    if shutil.disk_usage(path).free < RESERVE + RUNTIME_SPACE + additional:
+        raise InstallError(
+            "Not enough disk space. Free space must stay above 20 GiB, including "
+            "the new bundle and temporary runtime files."
+        )
+
+
+def _directory(path: Path, home: Path) -> None:
+    """Never follow a symlink while creating installer-owned destinations."""
+    relatives = path.relative_to(home).parts
+    for index in range(len(relatives) + 1):
+        item = home.joinpath(*relatives[:index])
+        if item.is_symlink():
+            raise InstallError(f"Installation directory is a symlink: {item}")
+        if not item.exists():
+            item.mkdir(mode=0o700)
+        info = item.stat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+            raise InstallError(
+                f"Installation directory must belong to your account: {item}"
+            )
+
+
+def _atomic_write(path: Path, data: bytes, mode: int = 0o600) -> None:
+    temporary = path.with_name(f".{path.name}-{uuid4().hex}")
+    try:
+        with temporary.open("xb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fchmod(stream.fileno(), mode)
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+@contextlib.contextmanager
+def install_lock(layout: Layout):
+    _directory(layout.root, layout.home)
+    marker = layout.root / ".managed"
+    if marker.is_symlink():
+        raise InstallError("The installation marker is a symlink.")
+    # Acquire the lock before initializing the marker, including a first install.
+    fd = os.open(
+        layout.root / "install.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
+    )
+    with os.fdopen(fd, "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise InstallError(
+                "Another Vikram installation or update is already running."
+            ) from None
+        if marker.exists():
+            if marker.stat().st_size != len(MARKER) or marker.read_bytes() != MARKER:
+                raise InstallError("Unrecognized existing installation directory.")
+        else:
+            if set(p.name for p in layout.root.iterdir()) != {"install.lock"}:
+                raise InstallError("Unrecognized existing installation directory.")
+            _atomic_write(marker, MARKER)
+        _directory(layout.versions, layout.home)
+        yield
+
+
+def bundle_version(app: Path) -> str:
+    plist = app / "Contents/Info.plist"
+    try:
+        if plist.is_symlink() or plist.stat().st_size > 64 * 1024:
+            raise ValueError()
+        with plist.open("rb") as stream:
+            info = plistlib.load(stream)
+        result = info["CFBundleShortVersionString"]
+        version_tuple(result)
+        if (
+            info["CFBundleIdentifier"] != "dev.raniendu.vikram"
+            or info["CFBundleExecutable"] != "vikram-desktop"
+        ):
+            raise ValueError()
+        for name in ("vikram-desktop", "vikram-sidecar"):
+            binary = app / "Contents/MacOS" / name
+            if (
+                not binary.is_file()
+                or binary.is_symlink()
+                or not os.access(binary, os.X_OK)
+            ):
+                raise ValueError()
+        return result
+    except (OSError, ValueError, KeyError, TypeError, plistlib.InvalidFileException):
+        raise InstallError("This is not a valid Vikram application bundle.") from None
+
+
+def bundle_size(app: Path) -> int:
+    total, count = 0, 0
+    for path in chain([app], app.rglob("*")):
+        info = path.lstat()
+        count += 1
+        if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+            raise InstallError(
+                "The application contains a symlink or unsupported file."
+            )
+        if stat.S_ISREG(info.st_mode):
+            total += info.st_size
+        if total > MAX_EXPANDED or count > 10000:
+            raise InstallError("The application exceeds the installation size limit.")
+    return total
+
+
+def verify_bundle(app: Path) -> None:
+    try:
+        subprocess.run(
+            ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)],
+            capture_output=True,
+            check=True,
+            timeout=30,
+        )
+    except (subprocess.SubprocessError, OSError):
+        raise InstallError(
+            "The application's code signature could not be verified."
+        ) from None
+
+
+def check_runtime(app: Path, version: str) -> None:
+    binary = app / "Contents/MacOS/vikram-sidecar"
+    try:
+        with tempfile.TemporaryDirectory(prefix="vikram-install-check-") as library:
+            env = {
+                **os.environ,
+                "VIKRAM_CHAT_DATA_DIR": library,
+                "PYINSTALLER_RESET_ENVIRONMENT": "1",
+            }
+            cli = subprocess.run(
+                [str(binary), "--cli", "--version"],
+                text=True,
+                capture_output=True,
+                timeout=45,
+                check=True,
+                env=env,
+            )
+            if cli.stdout.strip() != f"Vikram {version}":
+                raise ValueError()
+            desktop = subprocess.run(
+                [str(binary)],
+                text=True,
+                capture_output=True,
+                timeout=45,
+                input='{"v":1,"id":"install-check","method":"hello"}\n',
+                check=True,
+                env=env,
+            )
+            if json.loads(desktop.stdout)["result"]["protocol"] != 1:
+                raise ValueError()
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        raise InstallError(
+            "The new CLI or desktop service failed its startup check. The current version is unchanged."
+        ) from None
+
+
+def installed_version(layout: Layout) -> str | None:
+    if not os.path.lexists(layout.current):
+        return None
+    if not layout.current.is_symlink():
+        raise InstallError("Unrecognized existing installation pointer.")
+    target = os.readlink(layout.current)
+    if not re.fullmatch(r"versions/[0-9]+\.[0-9]+\.[0-9]+-[0-9a-f]{32}", target):
+        raise InstallError("Unrecognized existing installation pointer.")
+    destination = layout.root / target
+    if destination.is_symlink() or layout.versions.is_symlink():
+        raise InstallError("The installed version directory is a symlink.")
+    return bundle_version(destination / "Vikram.app")
+
+
+def login_profile(home: Path) -> str | None:
+    if (
+        os.environ.get("ZDOTDIR")
+        and Path(os.environ["ZDOTDIR"]).expanduser().resolve() != home
+    ):
+        return None
+    shell = Path(pwd.getpwuid(os.getuid()).pw_shell).name
+    if shell == "bash":
+        return next(
+            (
+                name
+                for name in (".bash_profile", ".bash_login", ".profile")
+                if os.path.lexists(home / name)
+            ),
+            ".bash_profile",
+        )
+    return ".zprofile" if shell == "zsh" else None
+
+
+def launcher(layout: Layout) -> bytes:
+    runtime = layout.current / "Vikram.app/Contents/MacOS/vikram-sidecar"
+    return f"""#!/bin/sh
+# Vikram managed CLI v1
+runtime={shlex.quote(str(runtime))}
+if [ -x "$runtime" ]; then
+  exec "$runtime" --cli "$@"
+fi
+legacy={shlex.quote(str(layout.legacy_cli))}
+if [ -x "$legacy" ]; then
+  exec "$legacy" "$@"
+fi
+printf '%s\\n' 'Vikram installation is incomplete. Open Install Vikram.app again.' >&2
+exit 1
+""".encode()
+
+
+def _preflight_links(layout: Layout) -> tuple[bool, Path | None]:
+    _directory(layout.app.parent, layout.home)
+    _directory(layout.cli.parent, layout.home)
+    app_target = layout.current / "Vikram.app"
+    if os.path.lexists(layout.app) and not (
+        layout.app.is_symlink() and os.readlink(layout.app) == str(app_target)
+    ):
+        raise InstallError(
+            f"Move the existing {layout.app} aside, then run the installer again."
+        )
+    migrate = False
+    if os.path.lexists(layout.cli):
+        if layout.cli.is_symlink():
+            expected = layout.home / ".local/share/uv/tools/vikram/bin/vikram"
+            migrate = layout.cli.resolve() == expected.resolve()
+            valid_backup = layout.legacy_cli.is_symlink() and os.readlink(
+                layout.legacy_cli
+            ) == os.readlink(layout.cli)
+            if not migrate or (os.path.lexists(layout.legacy_cli) and not valid_backup):
+                raise InstallError(
+                    f"Preserve the existing {layout.cli} elsewhere before installing."
+                )
+        elif (
+            not layout.cli.is_file()
+            or layout.cli.stat().st_size > 8192
+            or layout.cli.read_bytes() != launcher(layout)
+        ):
+            raise InstallError(
+                f"Preserve the existing {layout.cli} elsewhere before installing."
+            )
+    name = login_profile(layout.home)
+    profile = layout.home / name if name else None
+    if profile and (
+        profile.is_symlink()
+        or (
+            profile.exists()
+            and (not profile.is_file() or profile.stat().st_size > 1024 * 1024)
+        )
+    ):
+        raise InstallError(
+            f"The shell profile {profile} is linked or unsupported. Add ~/.local/bin to PATH manually, or use a regular profile before installing."
+        )
+    return migrate, profile
+
+
+def activate(layout: Layout, release: Path) -> None:
+    temporary = layout.root / f".current-{uuid4().hex}"
+    try:
+        temporary.symlink_to(release.relative_to(layout.root))
+        os.replace(temporary, layout.current)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def install_bundle(source: Path, layout: Layout, *, _locked: bool = False) -> str:
+    check_platform()
+    ensure_space(layout.home, MAX_EXPANDED)
+    # The updater holds this same lock while downloading and extracting.
+    with contextlib.nullcontext() if _locked else install_lock(layout):
+        current = installed_version(layout)
+        version = bundle_version(source)
+        if current and version_tuple(version) < version_tuple(current):
+            raise InstallError(f"Refusing to downgrade Vikram {current} to {version}.")
+        size = bundle_size(source)
+        verify_bundle(source)
+        migrate, profile = _preflight_links(layout)
+        ensure_space(layout.root, size)
+        release = layout.versions / f"{version}-{uuid4().hex}"
+        changed, backup_created = [], False
+
+        def activated() -> bool:
+            try:
+                return os.readlink(layout.current) == str(
+                    release.relative_to(layout.root)
+                )
+            except FileNotFoundError:
+                return False
+
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix=".stage-", dir=layout.versions
+            ) as temporary:
+                staged = Path(temporary) / "Vikram.app"
+                shutil.copytree(source, staged, copy_function=shutil.copy2)
+                # Validate the copied bytes before any of the launch paths change.
+                bundle_size(staged)
+                if bundle_version(staged) != version:
+                    raise InstallError("The bundle version changed while staging.")
+                verify_bundle(staged)
+                check_runtime(staged, version)
+                ensure_space(layout.root)
+                release.mkdir(mode=0o700)
+                os.replace(staged, release / "Vikram.app")
+            if migrate and not os.path.lexists(layout.legacy_cli):
+                # A backup also provides a working fallback if first install is interrupted.
+                layout.legacy_cli.symlink_to(os.readlink(layout.cli))
+                backup_created = True
+            if not layout.app.is_symlink():
+                layout.app.symlink_to(layout.current / "Vikram.app")
+                changed.append((layout.app, None, None))
+            if not layout.cli.exists() or migrate:
+                old = os.readlink(layout.cli) if migrate else None
+                _atomic_write(layout.cli, launcher(layout), 0o755)
+                changed.append((layout.cli, old, None))
+            if profile:
+                old = profile.read_bytes() if profile.exists() else None
+                if b"# >>> Vikram CLI >>>" not in (old or b""):
+                    mode = (
+                        stat.S_IMODE(profile.stat().st_mode)
+                        if profile.exists()
+                        else 0o600
+                    )
+                    _atomic_write(profile, (old or b"") + b"\n" + PROFILE_BLOCK, mode)
+                    changed.append((profile, old, mode))
+            activate(layout, release)
+            return version
+        except BaseException:
+            # The rename is the commit point. A signal immediately after it
+            # must not turn cleanup into deletion of the now-active release.
+            if activated():
+                return version
+            raise
+        finally:
+            if not activated():
+                for path, old, mode in reversed(changed):
+                    if isinstance(old, bytes):
+                        _atomic_write(path, old, mode)
+                    else:
+                        path.unlink(missing_ok=True)
+                        if isinstance(old, str):
+                            path.symlink_to(old)
+                if backup_created and layout.cli.is_symlink():
+                    layout.legacy_cli.unlink(missing_ok=True)
+                if release.exists():
+                    shutil.rmtree(release)

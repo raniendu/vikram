@@ -1,0 +1,6 @@
+{
+  "identifier": "main",
+  "description": "Local window events for the chat webview only; the browser panel gets nothing. Filesystem and process access stay in Rust.",
+  "webviews": ["main"],
+  "permissions": ["core:event:default"]
+}

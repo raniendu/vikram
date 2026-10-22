@@ -4,39 +4,28 @@ import json
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
 from vikram.evals.history import ThinkingValue
+from vikram.ollama import ThinkingControls, thinking_on, thinking_request
 
 
-class ThinkingControls(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    values: list[ThinkingValue] = Field(min_length=1)
-    default: ThinkingValue | None = None
-
-    @model_validator(mode="after")
-    def validate_values(self) -> "ThinkingControls":
-        if any(isinstance(value, str) and not value.strip() for value in self.values):
-            raise ValueError("Thinking levels must not be empty.")
-        self.values = list(dict.fromkeys(self.values))
-        return self
-
-
-def discover_thinking(model: str) -> ThinkingControls | None:
-    """Read only the advertised values; never persist templates or model prompts."""
+def _show(model: str) -> dict:
     request = Request(
         "http://localhost:11434/api/show",
         data=json.dumps({"model": model}).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+    with urlopen(request, timeout=10) as response:
+        payload = json.load(response)
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid model metadata.")
+    return payload
+
+
+def discover_thinking(model: str) -> ThinkingControls | None:
+    """Read only the advertised values; never persist templates or model prompts."""
     try:
-        with urlopen(request, timeout=10) as response:
-            payload = json.load(response)
-        if not isinstance(payload, dict):
-            raise ValueError("Invalid model metadata.")
-        metadata = payload.get("thinking")
+        metadata = _show(model).get("thinking")
         return None if metadata is None else ThinkingControls.model_validate(metadata)
     except (URLError, TimeoutError, OSError, ValueError):
         raise ValueError(
@@ -45,16 +34,31 @@ def discover_thinking(model: str) -> ThinkingControls | None:
         ) from None
 
 
+def discover_tools(model: str) -> bool:
+    """Whether Ollama advertises tool calling, as the chat interfaces check."""
+    try:
+        capabilities = _show(model).get("capabilities")
+    except (URLError, TimeoutError, OSError, ValueError):
+        raise ValueError(
+            "Could not read model capabilities from local Ollama. "
+            "Check that Ollama is running and the model is installed."
+        ) from None
+    return isinstance(capabilities, list) and "tools" in capabilities
+
+
 def select_levels(
     controls: ThinkingControls | None, requested: list[str]
 ) -> list[ThinkingValue | None]:
-    """Expand all supported levels, or validate an explicit smaller selection."""
+    """Expand all supported levels, or validate an explicit smaller selection.
+
+    "on" is Vikram's chat default for this model: True, or its own named level.
+    """
     if requested == ["default"]:
         return [None]
     if controls is None:
         raise ValueError(
-            "Ollama did not advertise thinking levels. Update Ollama for automatic "
-            "benchmark coverage, or use --thinking default for an unswept run."
+            "Ollama did not advertise thinking controls for this model. Update "
+            "Ollama, or use --thinking default for the model's own behavior."
         )
     if requested == ["all"]:
         return list(controls.values)
@@ -62,8 +66,12 @@ def select_levels(
         raise ValueError("Use all or default alone, or list supported thinking levels.")
     selected: list[ThinkingValue | None] = []
     for item in requested:
-        value: ThinkingValue = {"on": True, "off": False}.get(item, item)
-        if value not in controls.values:
+        value = (
+            thinking_on(controls.values, controls.default)
+            if item == "on"
+            else {"off": False}.get(item, item)
+        )
+        if value is None or value not in controls.values:
             raise ValueError(f"Unsupported thinking level: {item}.")
         if value not in selected:
             selected.append(value)
@@ -76,11 +84,3 @@ def thinking_label(value: ThinkingValue | None) -> str:
     if isinstance(value, bool):
         return "on" if value else "off"
     return value
-
-
-def thinking_request(value: ThinkingValue | None) -> dict[str, str]:
-    """Map Ollama controls to its OpenAI-compatible request field."""
-    if value is None:
-        return {}
-    effort = ("high" if value else "none") if isinstance(value, bool) else value
-    return {"reasoning_effort": effort}
