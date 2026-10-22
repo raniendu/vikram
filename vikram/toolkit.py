@@ -28,7 +28,12 @@ from pydantic_ai import (
     ToolReturn,
 )
 from pydantic_ai.capabilities import AbstractCapability, HandleDeferredToolCalls
-from pydantic_ai.messages import BinaryContent, ModelRequest, ToolReturnPart
+from pydantic_ai.messages import (
+    BinaryContent,
+    ModelRequest,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from pydantic_ai.toolsets import WrapperToolset
 from pydantic_ai_harness.ask_user import AskUser
 
@@ -161,6 +166,8 @@ PRIVATE_URL = (
     "and private network addresses are blocked."
 )
 EARLIER_VIEW = "(An earlier page view; its elements and text are omitted. Use the latest page view.)"
+SCREENSHOT_NOTE = "Screenshot of the browser page above (untrusted web content):"
+SCREENSHOT_ID = "browser-view-"
 
 
 def toolkit_prompt(sandbox: bool, browser: bool = False) -> str:
@@ -445,16 +452,28 @@ class Reply:
             )
         record["status"] = "complete"
         text = describe_page(page, notices, _lead(action, args, result.target))
-        content: list = [text]
+        image = b""
         if self.vision and result.screenshot:
             try:
                 image = base64.b64decode(result.screenshot, validate=True)
             except (binascii.Error, ValueError):
                 image = b""
-            if image:
-                content.append(BinaryContent(data=image, media_type="image/jpeg"))
+        # The page view stays plain text in the tool result (a list result would
+        # be JSON-encoded); the screenshot follows as its own user content.
         return ToolReturn(
-            return_value=content if len(content) > 1 else text,
+            return_value=text,
+            content=(
+                [
+                    SCREENSHOT_NOTE,
+                    BinaryContent(
+                        data=image,
+                        media_type="image/jpeg",
+                        identifier=f"{SCREENSHOT_ID}{record['id']}"[:120],
+                    ),
+                ]
+                if image
+                else None
+            ),
             metadata={"browser_url": page.url[:2048]},
         )
 
@@ -778,29 +797,46 @@ def _earlier_view(part: ToolReturnPart) -> ToolReturnPart:
     return replace(part, content="\n".join([*kept, EARLIER_VIEW]))
 
 
+def _is_screenshot(part) -> bool:
+    return (
+        isinstance(part, UserPromptPart)
+        and isinstance(part.content, list)
+        and any(
+            isinstance(item, BinaryContent)
+            and (item.identifier or "").startswith(SCREENSHOT_ID)
+            for item in part.content
+        )
+    )
+
+
 def trim_page_views(messages: list) -> list:
-    """Send only the latest browser page in full, screenshot included.
+    """Send only the latest browser page in full, and only its screenshot.
 
     Every page view is several thousand characters (and an image for vision
     models), which would crowd a local model's context within a few actions.
     Older views keep their first lines, so the model still sees what it did.
     """
-    found = [
-        (index, position)
-        for index, message in enumerate(messages)
-        if isinstance(message, ModelRequest)
-        for position, part in enumerate(message.parts)
-        if isinstance(part, ToolReturnPart) and part.tool_name in BROWSER_TOOLS
-    ]
-    if len(found) < 2:
+    views, shots = [], []
+    for index, message in enumerate(messages):
+        if not isinstance(message, ModelRequest):
+            continue
+        for position, part in enumerate(message.parts):
+            if isinstance(part, ToolReturnPart) and part.tool_name in BROWSER_TOOLS:
+                views.append((index, position))
+            elif _is_screenshot(part):
+                shots.append((index, position))
+    stale_views, stale_shots = set(views[:-1]), set(shots[:-1])
+    if not stale_views and not stale_shots:
         return messages
     trimmed = list(messages)
-    for index, position in found[:-1]:
-        message = trimmed[index]
-        parts = list(message.parts)
-        parts[position] = _earlier_view(parts[position])
+    for index in {index for index, _ in stale_views | stale_shots}:
+        parts = [
+            _earlier_view(part) if (index, position) in stale_views else part
+            for position, part in enumerate(trimmed[index].parts)
+            if (index, position) not in stale_shots
+        ]
         # New objects: the saved history keeps the full views.
-        trimmed[index] = replace(message, parts=parts)
+        trimmed[index] = replace(trimmed[index], parts=parts)
     return trimmed
 
 
