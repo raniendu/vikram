@@ -223,16 +223,20 @@ class ActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("earlier page view", first.lower())
         self.assertNotIn("Welcome to the shop", first)
         self.assertIn("URL: https://shop.example/", first)
+        # Plain text with real line breaks, not a JSON-encoded list.
+        self.assertTrue(latest.startswith("Clicked link “Kettles”.\nPage: Shop\n"))
         self.assertIn("Welcome to the shop", latest)
-        images = [
-            part
+        shots = [
+            message["content"]
             for message in body["messages"]
-            if message["role"] == "user" and isinstance(message["content"], list)
-            for part in message["content"]
-            if part.get("type") == "image_url"
+            if message["role"] == "user"
+            and isinstance(message["content"], list)
+            and any(part.get("type") == "image_url" for part in message["content"])
         ]
-        self.assertEqual(len(images), 1)
-        self.assertTrue(images[0]["image_url"]["url"].startswith("data:image/jpeg"))
+        self.assertEqual(len(shots), 1)
+        note, image = shots[0][0], shots[0][-1]
+        self.assertIn("Screenshot of the browser page above", note["text"])
+        self.assertTrue(image["image_url"]["url"].startswith("data:image/jpeg"))
         # Only requests are trimmed: the reply itself still completed both views.
         self.assertEqual(
             [r["status"] for r in browser_records(events)], ["complete"] * 2
