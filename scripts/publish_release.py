@@ -8,6 +8,10 @@ reads the latest release back with the updater's own parser, which requires
 GitHub's SHA-256 digest. A published release is never changed; a draft left by a
 failed attempt is reused.
 
+Before anything reaches GitHub, it downloads the third-party sources the
+archive's notices list and checks each against its pinned digest. The release
+carries them, and the notices, beside the archive (see scripts/third_party.py).
+
     uv run python scripts/publish_release.py --dry-run --tag v0.2.0 ARCHIVE
 """
 
@@ -15,7 +19,9 @@ import argparse
 import hashlib
 import os
 import sys
+import tempfile
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 import httpx
@@ -23,6 +29,7 @@ import httpx
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from scripts import third_party  # noqa: E402
 from vikram.installation import REPOSITORY, InstallError, version_tuple  # noqa: E402
 from vikram.releases import Release, parse_release  # noqa: E402
 
@@ -68,13 +75,18 @@ def check_archive(tag: str, archive: Path, expected: str | None = None) -> Relea
         "browser_download_url": url,
     }
     try:
-        return parse_release(
+        release = parse_release(
             {"tag_name": tag, "draft": False, "prerelease": False, "assets": [asset]}
         )
     except InstallError:
         raise PublishError(
             f"`vikram update` would refuse this {size}-byte archive."
         ) from None
+    try:
+        third_party.archive_notices(archive, version)
+    except third_party.SourceError as error:
+        raise PublishError(str(error)) from None
+    return release
 
 
 def release_notes(release: Release) -> str:
@@ -92,6 +104,12 @@ installs it, but macOS may refuse to open a copy downloaded in a web browser. Se
 [Installing and releasing Vikram](https://github.com/{REPOSITORY}/blob/main/docs/releases.md).
 
 SHA-256 of `{name}`: `{release.sha256}`
+
+The Python sandbox includes GPL, LGPL and MPL software. \
+`{third_party.notices_asset(release.version)}` lists its third-party components and \
+licenses (the app carries the same notices), and \
+`{third_party.sources_asset(release.version)}` holds their complete corresponding \
+source.
 """
 
 
@@ -204,17 +222,23 @@ class GitHub:
         return self.call("GET", f"{API}/releases/latest").json()
 
 
+def _sha256(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
 def publish(
     github: GitHub,
     tag: str,
     commit: str,
     archive: Path,
     release: Release,
+    extras: Sequence[tuple[Path, str]] = (),
     *,
     attempts: int = 10,
     delay: float = 3.0,
 ) -> str:
-    """Publish the checked archive for tag and return the release page URL."""
+    """Publish the checked archive and extra assets; return the release page URL."""
     if github.tag_commit(tag) != commit:
         raise PublishError(f"{tag} no longer points to the built commit {commit}.")
     existing = github.releases_for(tag)
@@ -232,29 +256,30 @@ def publish(
         draft = github.create_draft(tag, commit, release)
         print(f"Created a draft release for {tag}.")
     checksum = archive.with_name(f"{archive.name}.sha256")
-    for path, content_type in ((archive, "application/zip"), (checksum, "text/plain")):
+    assets = [(archive, "application/zip"), (checksum, "text/plain"), *extras]
+    for path, content_type in assets:
         for asset in draft["assets"]:
             if asset["name"] == path.name:
                 github.delete_asset(asset["id"])
         github.upload(draft, path, content_type)
         print(f"Uploaded {path.name}.")
-    # Nobody can see the draft yet: compare GitHub's copy with the build first.
-    uploaded = [
-        asset
-        for asset in github.release(draft["id"])["assets"]
-        if asset["name"] == archive.name
-    ]
-    if (
-        len(uploaded) != 1
-        or uploaded[0]["state"] != "uploaded"
-        or uploaded[0]["size"] != release.size
-        or uploaded[0].get("digest") not in (None, f"sha256:{release.sha256}")
-        or github.asset_sha256(uploaded[0]["id"]) != release.sha256
-    ):
-        raise PublishError(
-            "GitHub's copy of the archive does not match the build. The release "
-            "is still an unpublished draft."
-        )
+    # Nobody can see the draft yet: compare GitHub's copies with the build first.
+    stored = github.release(draft["id"])["assets"]
+    for path, _ in assets:
+        digest = release.sha256 if path == archive else _sha256(path)
+        uploaded = [asset for asset in stored if asset["name"] == path.name]
+        if (
+            len(uploaded) != 1
+            or uploaded[0]["state"] != "uploaded"
+            or uploaded[0]["size"] != path.stat().st_size
+            or uploaded[0].get("digest") not in (None, f"sha256:{digest}")
+            or github.asset_sha256(uploaded[0]["id"]) != digest
+        ):
+            name = "the archive" if path == archive else path.name
+            raise PublishError(
+                f"GitHub's copy of {name} does not match the build. The release "
+                "is still an unpublished draft."
+            )
     page = github.publish(draft["id"])["html_url"]
     print(f"Published {tag} as the latest release.")
     for attempt in range(attempts):
@@ -294,27 +319,39 @@ def main() -> None:
         if args.dry_run:
             print(
                 f"{args.archive.name} ({release.size} bytes, SHA-256 "
-                f"{release.sha256}) passes the updater's checks for {args.tag}. "
-                "Dry run: nothing was published."
+                f"{release.sha256}) passes the updater's checks for {args.tag} and "
+                "carries its third-party notices. Dry run: nothing was published."
             )
             _outputs(version=release.version, sha256=release.sha256)
             return
         token = os.environ.get("GITHUB_TOKEN")
         if not token or not args.commit:
             raise PublishError("Publishing needs --commit and GITHUB_TOKEN.")
-        with httpx.Client(
-            timeout=httpx.Timeout(60, connect=10),
-            follow_redirects=False,
-            trust_env=False,
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {token}",
-                "User-Agent": "vikram-release",
-                "X-GitHub-Api-Version": API_VERSION,
-            },
-        ) as client:
-            page = publish(GitHub(client), args.tag, args.commit, args.archive, release)
-    except (PublishError, OSError, httpx.HTTPError) as error:
+        with tempfile.TemporaryDirectory(prefix="vikram-release-") as work:
+            # The sources are downloaded and checked before anything reaches GitHub.
+            extras = third_party.release_assets(
+                args.archive, release.version, Path(work)
+            )
+            with httpx.Client(
+                timeout=httpx.Timeout(60, connect=10),
+                follow_redirects=False,
+                trust_env=False,
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": f"Bearer {token}",
+                    "User-Agent": "vikram-release",
+                    "X-GitHub-Api-Version": API_VERSION,
+                },
+            ) as client:
+                page = publish(
+                    GitHub(client),
+                    args.tag,
+                    args.commit,
+                    args.archive,
+                    release,
+                    extras,
+                )
+    except (PublishError, third_party.SourceError, OSError, httpx.HTTPError) as error:
         raise SystemExit(f"Release stopped: {error}") from None
     print(page)
     _outputs(url=page)

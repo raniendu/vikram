@@ -136,8 +136,21 @@ def main() -> None:
         check=True,
         stdout=subprocess.DEVNULL,
     )
+    from scripts.third_party import (
+        SourceError,
+        build_notices,
+        check_notices,
+        project_version,
+    )
     from vikram.sandbox import IMAGE_FILE
 
+    # The notices for the sandbox's third-party parts, which Tauri bundles. They
+    # also stop the build when the image or VM runtime outgrew the source list.
+    version = project_version()
+    try:
+        build_notices(version)
+    except SourceError as error:
+        raise SystemExit(str(error)) from None
     spec = sidecar_spec(ROOT / "build/sandbox" / IMAGE_FILE)
     subprocess.run(
         [
@@ -189,6 +202,12 @@ def main() -> None:
             ],
             check=True,
         )
+        try:
+            check_notices(
+                desktop / "src-tauri/target/release/bundle/macos/Vikram.app", version
+            )
+        except SourceError as error:
+            raise SystemExit(str(error)) from None
         # The CLI's hidden browser: the bundled app in helper mode, reading a
         # blank page with its content blocker installed, without the network.
         browser = subprocess.run(

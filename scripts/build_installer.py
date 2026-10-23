@@ -16,6 +16,7 @@ from pathlib import Path
 
 from build_desktop import ROOT, check_space
 
+from scripts.third_party import SourceError, check_notices
 from vikram.installation import (
     bundle_size,
     bundle_version,
@@ -72,6 +73,10 @@ def main() -> None:
     bundle_size(source)
     verify_bundle(source)
     check_runtime(source, version)
+    try:
+        check_notices(source, version)
+    except SourceError as error:
+        raise SystemExit(str(error)) from None
     destination = ROOT / "dist/installers"
     destination.mkdir(parents=True, exist_ok=True)
     cache = ROOT / "build/installer-module-cache"
@@ -136,6 +141,10 @@ def main() -> None:
         app = extract_release(staged_archive, Path(temporary) / "archive-check")
         verify_bundle(app.parents[2])
         verify_bundle(app)
+        try:
+            check_notices(app, version)
+        except SourceError as error:
+            raise SystemExit(f"The packaged archive: {error}") from None
         if (
             not stat.S_IMODE((app / "Contents/MacOS/vikram-sidecar").stat().st_mode)
             & 0o111

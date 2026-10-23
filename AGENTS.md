@@ -31,6 +31,11 @@ signed release. Never push a release tag, start or approve a release run, or
 create, edit or delete a GitHub Release without the owner's explicit direction
 for that release. Keep pull request workflows on GitHub-hosted runners, give the
 self-hosted job no write access, and pin workflow actions to commit SHAs.
+The owner chose on 2026-10-23 to attach the exact source of the sandbox's GPL,
+LGPL and MPL components to every release, beside third-party notices that ship
+inside Vikram.app. Keep `scripts/third-party/sources.json` in step with the
+sandbox image and smolmachines (`scripts/third_party.py refresh`), and never
+publish a release without its notices and verified sources.
 The owner requested clarifying questions, plan mode, and a Python sandbox built
 on Pydantic libraries; the design is in
 `docs/superpowers/specs/2026-10-20-questions-plan-mode-sandbox-design.md`.
@@ -80,6 +85,9 @@ unrelated tools, hosted inference, or public server surfaces.
 - `scripts/bump_version.py`: one release version in the four version files and
   three lockfiles.
 - `scripts/publish_release.py`: draft, upload, digest check, then latest release.
+- `scripts/third_party.py`: the sandbox's third-party notices (bundled in the
+  app) and the pinned GPL/LGPL/MPL sources each release attaches; their list and
+  license texts are in `scripts/third-party/`.
 - `.github/workflows/release.yml`: tag-triggered build on the release Mac and
   publish on GitHub; `ci.yml` runs pull request startup and formatting checks.
 - `vikram/installation.py`, `releases.py`: atomic bundle installation and GitHub updates.
@@ -135,6 +143,10 @@ Desktop commands:
 - `uv run python scripts/bump_version.py --check`: print the version if every file agrees.
 - `uv run python scripts/publish_release.py --dry-run --tag vVERSION dist/installers/Vikram-VERSION-macos-arm64.zip`:
   check an archive against the updater's rules without contacting GitHub.
+- `uv run python scripts/third_party.py refresh`: pin the sandbox's third-party
+  sources again after changing the image or smolmachines (needs the network).
+- `uv run python scripts/third_party.py sources --check dist/installers/Vikram-VERSION-macos-arm64.zip`:
+  check that every source the archive's notices list is still published.
 - `uv run vikram update --check`: check the latest stable GitHub release without installation.
 - `npm --prefix apps/desktop run desktop`: start Tauri development mode after building the sidecar.
 - `apps/desktop/src-tauri/target/release/bundle/macos/Vikram.app/Contents/MacOS/vikram-sidecar --check-browser`:

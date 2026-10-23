@@ -9,6 +9,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from scripts.third_party import check_notices
 from vikram.installation import (
     Layout,
     bundle_version,
@@ -75,11 +76,15 @@ def main() -> None:
         root = Path(temporary)
         source = extract_release(args.archive, root / "extracted")
         verify_bundle(source.parents[2])
+        # The sandbox's third-party notices, and the list of the sources
+        # published beside the archive.
+        sources = check_notices(source, bundle_version(source))
         home = root / "Account with spaces"
         home.mkdir()
         layout = Layout(home)
         version = install_bundle(source, layout)
         assert installed_version(layout) == version == bundle_version(layout.app)
+        assert check_notices(layout.app, version) == sources
         env = {**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"}
         for arguments in (["--version"], ["--help"], ["update", "--help"]):
             result = subprocess.run(
@@ -111,6 +116,11 @@ def main() -> None:
         )
         print(
             "CLI startup/version/update help, interactive terminal, Python sandbox, browser, and desktop service startup passed. Owner installation and chats were not touched."
+        )
+        files = sum(len(component["files"]) for component in sources["components"])
+        print(
+            f"Third-party notices are in the app; they list {files} source files "
+            f"for {len(sources['components'])} components."
         )
 
 
