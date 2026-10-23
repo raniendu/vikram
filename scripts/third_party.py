@@ -25,6 +25,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import tomllib
 import zipfile
 from collections.abc import Callable
@@ -55,6 +56,9 @@ DISTFILES = "https://distfiles.alpinelinux.org/distfiles"
 KERNEL = "https://cdn.kernel.org/pub/linux/kernel"
 LIBKRUNFW = "smol-machines/libkrunfw"
 SPDX = "https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/text"
+# A host's temporary failures, which a request survives by trying again.
+TRANSIENT = {429, 500, 502, 503, 504}
+ATTEMPTS, DELAY = 4, 2.0
 # Licenses whose terms reach the source code: GPL, LGPL, AGPL and MPL.
 COPYLEFT = re.compile(r"(?<![A-Za-z])(?:A?GPL|LGPL|MPL)-")
 PYTHON_FILES = re.compile(
@@ -249,8 +253,21 @@ def client() -> httpx.Client:
     )
 
 
+def _send(session: httpx.Client, method: str, url: str) -> httpx.Response:
+    """A request, tried again after a pause while the host fails temporarily."""
+    for attempt in range(1, ATTEMPTS):
+        try:
+            response = session.request(method, url)
+            if response.status_code not in TRANSIENT:
+                return response
+        except httpx.TransportError:
+            pass
+        time.sleep(DELAY * attempt)
+    return session.request(method, url)
+
+
 def _fetch(session: httpx.Client, url: str) -> httpx.Response:
-    response = session.get(url)
+    response = _send(session, "GET", url)
     if response.status_code != 200:
         raise SourceError(f"{url} returned HTTP {response.status_code}.")
     return response
@@ -258,7 +275,7 @@ def _fetch(session: httpx.Client, url: str) -> httpx.Response:
 
 def _published_size(session: httpx.Client, url: str) -> int | None:
     """The size a host reports for a file, or `None` when it does not say."""
-    response = session.head(url)
+    response = _send(session, "HEAD", url)
     if response.status_code != 200:
         raise SourceError(f"{url} is not published (HTTP {response.status_code}).")
     length = response.headers.get("content-length")
@@ -342,7 +359,7 @@ def alpine_components(
             raise SourceError(f"Alpine {release}: cannot tell which {origin} is built.")
         for repository in ("main", "community"):
             base = f"{ALPINE}/-/raw/{commit}/{repository}/{origin}"
-            response = session.get(f"{base}/APKBUILD")
+            response = _send(session, "GET", f"{base}/APKBUILD")
             if response.status_code == 200:
                 break
         else:
@@ -366,7 +383,7 @@ def alpine_components(
         for digest, name in apkbuild_checksums(recipe.decode()):
             # Patches and helper files live beside the recipe; Alpine's mirror
             # keeps every upstream file a release branch was built from.
-            local = session.get(f"{base}/{name}")
+            local = _send(session, "GET", f"{base}/{name}")
             if (
                 local.status_code == 200
                 and hashlib.sha512(local.content).hexdigest() == digest
@@ -414,7 +431,7 @@ def refresh_license_texts(
         path = folder / f"{identifier}.txt"
         if path.exists() or not re.fullmatch(r"[A-Za-z0-9.+-]+", identifier):
             continue
-        response = session.get(f"{SPDX}/{identifier}.txt")
+        response = _send(session, "GET", f"{SPDX}/{identifier}.txt")
         if response.status_code == 200:
             path.write_bytes(response.content)
         elif response.status_code != 404:
@@ -761,21 +778,42 @@ def archive_notices(archive: Path, version: str) -> tuple[str, dict]:
         raise SourceError("The installer archive could not be read.") from None
 
 
-def _download(session: httpx.Client, item: dict, path: Path) -> None:
+class _Transient(Exception):
+    """A download the host interrupted or refused for now."""
+
+
+def _download_once(session: httpx.Client, item: dict, path: Path) -> None:
     algorithm = "sha512" if "sha512" in item else "sha256"
     digest, size = hashlib.new(algorithm), 0
-    with session.stream("GET", item["url"]) as response:
-        if response.status_code != 200:
-            raise SourceError(f"{item['url']} returned HTTP {response.status_code}.")
-        with path.open("xb") as stream:
-            for chunk in response.iter_bytes():
-                size += len(chunk)
-                if size > item["size"]:
-                    raise SourceError(f"{item['url']} is larger than pinned.")
-                digest.update(chunk)
-                stream.write(chunk)
+    try:
+        with session.stream("GET", item["url"]) as response:
+            status = response.status_code
+            if status != 200:
+                failure = _Transient if status in TRANSIENT else SourceError
+                raise failure(f"{item['url']} returned HTTP {status}.")
+            with path.open("wb") as stream:
+                for chunk in response.iter_bytes():
+                    size += len(chunk)
+                    if size > item["size"]:
+                        raise SourceError(f"{item['url']} is larger than pinned.")
+                    digest.update(chunk)
+                    stream.write(chunk)
+    except httpx.TransportError:
+        raise _Transient(f"{item['url']} could not be downloaded.") from None
     if size != item["size"] or digest.hexdigest() != item[algorithm]:
         raise SourceError(f"{item['url']} does not match its pinned digest.")
+
+
+def _download(session: httpx.Client, item: dict, path: Path) -> None:
+    """Download one pinned file, trying again while the host fails temporarily."""
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            return _download_once(session, item, path)
+        except _Transient as error:
+            path.unlink(missing_ok=True)
+            if attempt == ATTEMPTS:
+                raise SourceError(str(error)) from None
+        time.sleep(DELAY * attempt)
 
 
 def render_readme(sources: dict, version: str) -> str:

@@ -9,6 +9,7 @@ import tomllib
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 
@@ -133,6 +134,8 @@ class Hosts:
 
     def __init__(self, files: dict[str, bytes], heads: dict[str, dict] = None):
         self.files, self.heads, self.requests = files, heads or {}, []
+        # Statuses or errors a URL returns before it answers normally.
+        self.failures: dict[str, list] = {}
 
     def client(self, test) -> httpx.Client:
         client = httpx.Client(transport=httpx.MockTransport(self.handle))
@@ -142,6 +145,11 @@ class Hosts:
     def handle(self, request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         self.requests.append((request.method, url))
+        if self.failures.get(url):
+            failure = self.failures[url].pop(0)
+            if isinstance(failure, Exception):
+                raise failure
+            return httpx.Response(failure)
         if request.method == "HEAD" and url in self.heads:
             return httpx.Response(200, headers=self.heads[url])
         if url in self.files:
@@ -495,6 +503,9 @@ class SourcesTests(unittest.TestCase):
         self.hosts = Hosts(
             {f"https://example.test/{name}": data for name, data in FILES.items()}
         )
+        pause = patch.object(third_party, "DELAY", 0)
+        pause.start()
+        self.addCleanup(pause.stop)
 
     def fetch(self, folder: str) -> Path:
         destination = self.root / folder
@@ -567,6 +578,31 @@ class SourcesTests(unittest.TestCase):
         del self.hosts.heads[url], self.hosts.files[url]
         with self.assertRaisesRegex(SourceError, "not published"):
             third_party.check_published(session, self.sources)
+
+    def test_temporary_host_failures_are_tried_again(self):
+        recipe = "https://example.test/APKBUILD"
+        tarball = "https://example.test/busybox-1.37.0.tar.bz2"
+        session = self.hosts.client(self)
+        self.hosts.failures[recipe] = [502]
+        third_party.check_published(session, self.sources)
+        self.assertEqual(self.hosts.requests.count(("HEAD", recipe)), 2)
+        self.hosts.failures[tarball] = [503, httpx.ConnectError("reset"), 429]
+        with tarfile.open(self.fetch("retried")) as archive:
+            self.assertEqual(len(archive.getmembers()), 4)
+        self.assertEqual(self.hosts.requests.count(("GET", tarball)), 4)
+        self.hosts.requests.clear()
+        self.hosts.failures[tarball] = [502] * third_party.ATTEMPTS
+        with self.assertRaisesRegex(SourceError, "HTTP 502"):
+            self.fetch("unavailable")
+        self.assertEqual(
+            self.hosts.requests.count(("GET", tarball)), third_party.ATTEMPTS
+        )
+        # A missing file is an answer, not a temporary failure.
+        self.hosts.requests.clear()
+        self.hosts.failures[recipe] = [404]
+        with self.assertRaisesRegex(SourceError, "HTTP 404"):
+            self.fetch("missing-recipe")
+        self.assertEqual(self.hosts.requests, [("GET", recipe)])
 
     def test_release_assets_are_the_notices_and_the_checked_sources(self):
         archive = self.root / "Vikram-0.2.0-macos-arm64.zip"
