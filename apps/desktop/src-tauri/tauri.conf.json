@@ -29,7 +29,7 @@
     "active": true,
     "targets": ["app"],
     "externalBin": ["binaries/vikram-sidecar"],
-    "resources": ["../licenses/*"],
+    "resources": ["../licenses/*", "notices"],
     "macOS": {
       "minimumSystemVersion": "13.0",
       "signingIdentity": "-",

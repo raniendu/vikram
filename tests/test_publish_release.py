@@ -6,13 +6,14 @@ import os
 import re
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
 import httpx
 import yaml
 
-from scripts import publish_release
+from scripts import publish_release, third_party
 from scripts.publish_release import GitHub, PublishError
 from vikram import releases
 
@@ -34,6 +35,9 @@ class FakeGitHub:
         self.draft_digests = True
         self.wrong_digest = False
         self.corrupt = False
+        # Corrupt only the stored copy of the asset with this name.
+        self.corrupt_name = None
+        self.names = {}
         self.storage_saw_token = False
         self.ids = iter(range(1, 1000))
 
@@ -76,6 +80,7 @@ class FakeGitHub:
             asset_id = next(self.ids)
             self.contents[asset_id] = request.content
             name = request.url.params["name"]
+            self.names[asset_id] = name
             asset = {
                 "id": asset_id,
                 "name": name,
@@ -88,8 +93,10 @@ class FakeGitHub:
             return httpx.Response(201, json=asset)
         if request.url.host == STORAGE:
             self.storage_saw_token |= "authorization" in request.headers
-            content = self.contents[int(path.split("/")[-1])]
-            return httpx.Response(200, content=b"corrupt" if self.corrupt else content)
+            asset_id = int(path.split("/")[-1])
+            content = self.contents[asset_id]
+            corrupt = self.corrupt or self.names[asset_id] == self.corrupt_name
+            return httpx.Response(200, content=b"corrupt" if corrupt else content)
         rest = path.removeprefix(REPO)
         if method == "GET" and rest.startswith("/git/ref/tags/"):
             target = self.refs.get(rest.removeprefix("/git/ref/tags/"))
@@ -157,13 +164,50 @@ class PublishReleaseTests(unittest.TestCase):
         self.release = publish_release.check_archive("v0.2.0", self.archive)
         self.github = FakeGitHub()
 
-    def archive_for(self, version, payload, directory=None):
+    def archive_for(self, version, payload, directory=None, notices=None):
+        """An installer archive whose app carries third-party notices for version."""
         directory = directory or self.directory
         archive = directory / f"Vikram-{version}-macos-arm64.zip"
-        archive.write_bytes(payload)
-        digest = hashlib.sha256(payload).hexdigest()
+        root = releases.ARCHIVE_ROOT
+        folder = f"{root}/Contents/Resources/Vikram.app/{third_party.APP_NOTICES}"
+        notices = version if notices is None else notices
+        sources = {
+            "format": 1,
+            "components": [
+                {
+                    "folder": "vm-runtime/linux-6.18.55",
+                    "files": [
+                        {
+                            "name": "linux-6.18.55.tar.xz",
+                            "url": "https://cdn.kernel.org/linux-6.18.55.tar.xz",
+                            "size": 1,
+                            "sha256": "0" * 64,
+                        }
+                    ],
+                }
+            ],
+        }
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr(f"{root}/Contents/Info.plist", payload)
+            if notices:
+                output.writestr(
+                    f"{folder}/{third_party.NOTICES_FILE}",
+                    f"Vikram {notices} includes\n<{third_party.sources_url(notices)}>\n",
+                )
+                output.writestr(
+                    f"{folder}/{third_party.SOURCES_FILE}", json.dumps(sources)
+                )
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         (directory / f"{archive.name}.sha256").write_text(f"{digest}  {archive.name}\n")
         return archive
+
+    def extras(self):
+        """The notices and sources assets a release publishes beside the archive."""
+        notices = self.directory / third_party.notices_asset("0.2.0")
+        notices.write_text("# Third-party notices\n")
+        sources = self.directory / third_party.sources_asset("0.2.0")
+        sources.write_bytes(b"sources tar " * 1000)
+        return [(notices, "text/markdown"), (sources, "application/x-tar")]
 
     def publish(self, **options):
         with contextlib.redirect_stdout(io.StringIO()):
@@ -200,6 +244,18 @@ class PublishReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(PublishError, "does not match the archive"):
             publish_release.check_archive("v0.2.0", self.archive)
 
+    def test_archive_must_carry_notices_for_its_version(self):
+        for notices, message in (
+            ("", "no third-party notices"),
+            ("0.1.0", "not for Vikram 0.2.0"),
+        ):
+            with self.subTest(notices=notices):
+                folder = self.directory / (notices or "none")
+                folder.mkdir()
+                archive = self.archive_for("0.2.0", b"app", folder, notices)
+                with self.assertRaisesRegex(PublishError, message):
+                    publish_release.check_archive("v0.2.0", archive)
+
     def test_publishes_a_verified_draft_and_only_then_marks_it_latest(self):
         page = self.publish()
         self.assertEqual(page, "https://github.com/raniendu/vikram/releases/tag/v0.2.0")
@@ -229,6 +285,38 @@ class PublishReleaseTests(unittest.TestCase):
         self.assertFalse(release["draft"])
         self.assertTrue(release["latest"])
         self.assertEqual(releases.parse_release(release), self.release)
+
+    def test_notices_and_sources_are_checked_before_the_release_is_visible(self):
+        extras = self.extras()
+        page = self.publish(extras=extras)
+        self.assertEqual(page, "https://github.com/raniendu/vikram/releases/tag/v0.2.0")
+        (release,) = self.github.releases
+        self.assertEqual(
+            [asset["name"] for asset in release["assets"]],
+            [
+                self.archive.name,
+                f"{self.archive.name}.sha256",
+                "Vikram-0.2.0-THIRD-PARTY-NOTICES.md",
+                "Vikram-0.2.0-third-party-sources.tar",
+            ],
+        )
+        calls = self.github.calls
+        publishing = calls.index(("PATCH", f"{REPO}/releases/1"))
+        for asset in release["assets"]:
+            self.assertLess(calls.index(("GET", f"/assets/{asset['id']}")), publishing)
+        body = release["created_with"]["body"]
+        self.assertIn("`Vikram-0.2.0-third-party-sources.tar` holds", body)
+        self.assertIn("`Vikram-0.2.0-THIRD-PARTY-NOTICES.md`", body)
+
+    def test_a_corrupt_sources_copy_leaves_an_unpublished_draft(self):
+        self.github.draft_digests = False
+        self.github.corrupt_name = "Vikram-0.2.0-third-party-sources.tar"
+        with self.assertRaisesRegex(
+            PublishError, "copy of Vikram-0.2.0-third-party-sources.tar does not match"
+        ):
+            self.publish(extras=self.extras())
+        self.assertNotIn("PATCH", [method for method, _ in self.github.calls])
+        self.assertTrue(self.github.releases[0]["draft"])
 
     def test_annotated_tags_resolve_to_their_commit(self):
         self.github.refs["v0.2.0"] = {"type": "tag", "sha": "t" * 40}
@@ -327,6 +415,18 @@ class PublishReleaseTests(unittest.TestCase):
         def client(**options):
             return real_client(transport=httpx.MockTransport(handle), **options)
 
+        prepared = []
+
+        def release_assets(archive, version, destination):
+            # The sources are fetched before anything reaches GitHub.
+            self.assertEqual(self.github.calls, [])
+            self.assertEqual((archive, version), (self.archive, "0.2.0"))
+            prepared.append(destination)
+            assets = []
+            for path, kind in self.extras():
+                assets.append((Path(path.replace(destination / path.name)), kind))
+            return assets
+
         argv = ["", "--tag", "v0.2.0", "--commit", COMMIT, str(self.archive)]
         with (
             patch.dict(
@@ -335,15 +435,31 @@ class PublishReleaseTests(unittest.TestCase):
             patch("sys.argv", argv + ["--sha256", self.release.sha256]),
             patch.object(httpx, "Client", side_effect=client),
             patch.object(publish_release.time, "sleep"),
+            patch.object(third_party, "release_assets", side_effect=release_assets),
             contextlib.redirect_stdout(io.StringIO()),
         ):
             publish_release.main()
         page = "https://github.com/raniendu/vikram/releases/tag/v0.2.0"
         self.assertEqual(output.read_text(), f"url={page}\n")
         self.assertTrue(self.github.releases[0]["latest"])
+        self.assertEqual(len(self.github.releases[0]["assets"]), 4)
+        # The downloaded sources lived only in a temporary folder.
+        self.assertFalse(prepared[0].exists())
         # The token reaches GitHub's API but never its storage host.
         self.assertIn("Bearer secret", tokens)
         self.assertFalse(self.github.storage_saw_token)
+
+    def test_unavailable_sources_stop_before_github(self):
+        argv = ["", "--tag", "v0.2.0", "--commit", COMMIT, str(self.archive)]
+        failure = third_party.SourceError("https://example.test/a returned HTTP 404.")
+        with (
+            patch.dict(os.environ, {"GITHUB_TOKEN": "secret"}),
+            patch("sys.argv", argv),
+            patch.object(httpx, "Client", side_effect=AssertionError("GitHub")),
+            patch.object(third_party, "release_assets", side_effect=failure),
+        ):
+            with self.assertRaisesRegex(SystemExit, "Release stopped: .*HTTP 404"):
+                publish_release.main()
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
@@ -374,6 +490,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "scripts/build_installer.py",
             "scripts/check_installer.py",
             "scripts/publish_release.py --dry-run",
+            "scripts/third_party.py sources --check",
         ):
             self.assertIn(command, commands)
         self.assertIs(build["steps"][0]["with"]["persist-credentials"], False)
