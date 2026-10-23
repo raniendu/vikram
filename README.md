@@ -18,7 +18,9 @@ without installing, and `vikram --version` to see the running CLI version.
 Updates use stable GitHub Releases, which a version tag builds on the owner's Mac
 and publishes; none is published yet. Releases are ad-hoc signed and not
 notarized, pending Developer ID signing: `vikram update` installs them, but macOS
-may refuse to open a copy downloaded in a web browser.
+may refuse to open a copy downloaded in a web browser. The app carries notices
+for its Python sandbox's third-party software, and each release attaches the
+source code of the sandbox's GPL, LGPL and MPL components.
 [Installation and release details](docs/releases.md).
 
 The Tauri app supports saved chats and flat folders, per-chat local models and
