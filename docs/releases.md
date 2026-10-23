@@ -61,10 +61,12 @@ so the installed app never fetches it. Later builds reuse the verified copy.
 
 ```sh
 uv run python scripts/build_installer.py
-uv run python scripts/check_installer.py dist/installers/Vikram-0.1.0-macos-arm64.zip
+uv run python scripts/check_installer.py dist/installers/Vikram-VERSION-macos-arm64.zip
 ```
 
-The build produces the versioned ZIP, its `.sha256` checksum, and a clickable
+`VERSION` is the release version, which
+`uv run python scripts/bump_version.py --check` prints. The build produces the
+versioned ZIP, its `.sha256` checksum, and a clickable
 `dist/installers/Install Vikram.app`. `--skip-build` packages a previously built
 app, checking its version, signature and runtime first. The smoke check extracts
 the actual ZIP and exercises installation, reinstallation, bundled CLI startup,
@@ -75,43 +77,139 @@ Ollama/Parallel.
 
 All four versions must agree: `pyproject.toml`,
 `apps/desktop/package.json`, `apps/desktop/src-tauri/Cargo.toml`, and
-`apps/desktop/src-tauri/tauri.conf.json`. Refresh Python/npm/Cargo lockfiles when
-bumping them. The build also checks the installed Python metadata; run
+`apps/desktop/src-tauri/tauri.conf.json`, and so must the uv, npm and Cargo
+lockfiles. `uv run python scripts/bump_version.py X.Y.Z` sets a new version in all
+seven files. It changes only the version strings, keeps every dependency pin, and
+refuses a version that is not newer. The Settings dialog shows the version from
+`package.json`. The build also checks the installed Python metadata; run
 `uv sync --locked` after a version change. Each published stable version is
 unique: use a new version for every changed release rather than replacing assets
 on an existing tag. Updates never downgrade or replace an already current version.
 
-## Public release gate
+## Publish a release
 
-The current artifact is **ad-hoc signed for local use, not notarized**. A locally
-built installer can be used on this Mac. A downloaded copy on another Mac may be
-blocked by Gatekeeper. Do not disable Gatekeeper or strip quarantine attributes.
+The owner chose this process on 2026-10-21: a version tag starts a release, the
+build runs on the owner's Apple Silicon Mac as a self-hosted GitHub Actions
+runner, releases are ad-hoc signed (see
+[Signing and distribution](#signing-and-distribution)), and a script bumps the
+version. GitHub's own Apple Silicon runners cannot build releases: they do not
+support nested virtualization, so they cannot boot the sandbox VM that the build
+and installer checks start.
 
-Before publishing a public download, configure Developer ID signing for the
-Tauri app, its embedded Python executable/libraries, the sandbox's VM runtime,
-and the installer; configure and
-test Hardened Runtime entitlements for bundled Python; then notarize and staple
-the distribution using Apple's tools. The VM helper `smol-vmm` needs its
+Pushing a tag such as `v0.2.0` on a commit in `main` runs
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) in two jobs:
+
+1. **Build and check on the release Mac**, with a read-only token. It checks that
+   the tag is on `main` and matches every version file and lockfile, runs the
+   offline Python and frontend tests, builds with `scripts/build_installer.py`,
+   checks the ZIP with `scripts/check_installer.py`, runs the native tests, and
+   checks the archive against the updater's rules. It hands the ZIP and its
+   checksum to the next job, then deletes its build directories.
+2. **Publish the release**, on a GitHub-hosted runner: the only job that can
+   write. `scripts/publish_release.py` creates a draft release, uploads
+   `Vikram-X.Y.Z-macos-arm64.zip` and its `.sha256`, compares GitHub's SHA-256
+   `digest` of the upload with the build's, and only then publishes the draft as
+   the latest release. Finally it reads the latest release back with the
+   updater's own parser. A failed attempt leaves at most an unpublished draft,
+   which a rerun reuses. A published release is never changed.
+
+A manual run (**Actions › Release › Run workflow**, or
+`gh workflow run release.yml --ref BRANCH`) is a dry run: it builds and checks the
+chosen branch and publishes nothing. GitHub offers manual runs once the workflow
+is on `main`.
+
+### Set up the release Mac once
+
+1. In the repository's **Settings › Actions › Runners**, choose **New self-hosted
+   runner**, **macOS** and **ARM64**. Follow GitHub's download and configure
+   commands in a folder such as `~/actions-runner`; when `config.sh` asks for
+   additional labels, enter `vikram-release`. Skip installing it as a service.
+2. In **Settings › Actions › General**, set the approval for fork pull request
+   workflows to **Require approval for all external contributors**. The
+   repository is public, and a pull request can edit workflow files to run on
+   the release Mac; approval lets you read such a change before anything runs.
+   Vikram's own pull request checks run on GitHub-hosted runners.
+3. Optionally, under **Settings › Environments › release** (created by the first
+   publish, or create it yourself), add yourself as a required reviewer so each
+   publish waits for your approval, and allow only tags matching `v*`.
+
+The runner runs jobs as your macOS account, with the `PATH` of the terminal that
+starts it. That terminal needs the README's build tools: uv, Node 22.12 or newer,
+Rust, and the Xcode command-line tools. Stay logged in, because the browser check
+opens a hidden WebKit window. A build needs 24 GiB free to keep the 20 GiB
+reserve. Start the runner only while releasing, so nothing else can use it.
+
+### Cut a release
+
+Each release needs a version newer than any installed copy. The first local
+installers were 0.1.0, so the first release must be 0.1.1 or later. Bump the
+version on a branch:
+
+```sh
+git switch -c release-0.2.0 origin/main
+uv run python scripts/bump_version.py 0.2.0
+uv sync --locked
+git commit -am "Release 0.2.0"
+```
+
+Merge it through a pull request. Then start the runner (`./run.sh` in its
+folder), tag the merge commit, and push the tag:
+
+```sh
+git fetch origin
+git tag v0.2.0 origin/main
+git push origin v0.2.0
+```
+
+Follow the run under **Actions › Release**. When it succeeds,
+`vikram update --check` reports the new version and `vikram update` installs it.
+Stop the runner with Ctrl+C.
+
+If the build job fails, nothing was published. Fix the problem through a pull
+request, delete the tag (`git push origin :refs/tags/v0.2.0`, then
+`git tag -d v0.2.0`), and tag the new merge commit. If only the publish job
+fails, use **Re-run failed jobs** within seven days, while the build's archive is
+kept. Never replace or edit the assets of a published release; release a new
+version instead.
+
+## Signing and distribution
+
+Releases are **ad-hoc signed and not notarized**. On 2026-10-21 the owner chose
+to publish them this way, for updating their own Macs, until Developer ID signing
+is set up. `vikram update` downloads with its own HTTPS client, so macOS does not
+quarantine the archive, and it verifies GitHub's digest, the code signatures and
+the bundled runtime before switching versions. A copy downloaded in a web browser
+is quarantined, and Gatekeeper may refuse to open it. Do not disable Gatekeeper
+or strip quarantine attributes.
+
+Before offering releases as a public download, configure Developer ID signing
+for the Tauri app, its embedded Python executable/libraries, the sandbox's VM
+runtime, and the installer; configure and test Hardened Runtime entitlements for
+bundled Python; then notarize and staple the distribution using Apple's tools. The VM helper `smol-vmm` needs its
 `com.apple.security.hypervisor` and `com.apple.security.cs.disable-library-validation`
 entitlements: the build ships it unmodified because PyInstaller's re-signing
-strips them, so production signing must re-apply them. The release must also
-carry the VM runtime's notices (bundled from smolmachines' `THIRD_PARTY_NOTICES.md`
-and `licenses/`) and those of the sandbox image, and meet the source terms of
-their GPL and LGPL parts: the Linux kernel in libkrunfw, and the Alpine packages
-in the guest root filesystem and the Python image. The current build script deliberately
-uses local signing and is not a production signing pipeline. See
+strips them, so production signing must re-apply them. The current build script
+deliberately uses local signing and is not a production signing pipeline. See
 [Apple's packaging guidance](https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution)
 and [notarization guidance](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
+Because the release Mac builds every release, its keychain can hold the signing
+identity and notarization credentials without adding them to GitHub.
 
-Once signing, notarization and validation are complete, an owner-authorized
-release should use tag `vMAJOR.MINOR.PATCH` and attach the exact asset
-`Vikram-MAJOR.MINOR.PATCH-macos-arm64.zip`. Mark it as a stable latest release only
-after every asset is uploaded. GitHub supplies the SHA-256 `digest` in its
-[release asset API](https://docs.github.com/en/rest/releases/assets); the updater
-requires and verifies it. Checksums establish integrity against the trusted
-repository metadata; they do not substitute for Apple notarization. HTTPS,
-bounded redirects, extraction limits and local signature checks also apply.
+Still open, with publishing left to the owner's judgment: the release must also
+carry the VM runtime's notices (smolmachines' `THIRD_PARTY_NOTICES.md` and
+`licenses/`, which the build bundles inside the app's runtime) and those of the
+sandbox image, and meet the source terms of their GPL and LGPL parts: the Linux
+kernel in libkrunfw, and the Alpine packages in the guest root filesystem and the
+Python image.
 
-No release has been published by this implementation task. Until the first
-stable release is published, `vikram update --check` reports that there is none.
-Building artifacts never commits, pushes, publishes, or uploads anything to Apple.
+Every release uses tag `vMAJOR.MINOR.PATCH` and the exact asset
+`Vikram-MAJOR.MINOR.PATCH-macos-arm64.zip`, and becomes the stable latest release
+only after its assets are uploaded and checked. GitHub supplies the SHA-256
+`digest` in its [release asset API](https://docs.github.com/en/rest/releases/assets);
+the updater requires and verifies it. Checksums establish integrity against the
+trusted repository metadata; they do not substitute for Apple notarization.
+HTTPS, bounded redirects, extraction limits and local signature checks also apply.
+
+Until the first stable release is published, `vikram update --check` reports that
+there is none. Building artifacts locally never commits, pushes, publishes, or
+uploads anything to Apple; only a pushed version tag publishes a release.

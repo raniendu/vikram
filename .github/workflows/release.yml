@@ -1,0 +1,183 @@
+name: Release
+
+# Pushing a vMAJOR.MINOR.PATCH tag on main builds, checks, and publishes that
+# version for `vikram update`. A manual run (Actions > Release > Run workflow)
+# builds and checks the chosen branch without publishing. See docs/releases.md.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build and check on the release Mac
+    if: github.repository == 'raniendu/vikram'
+    # The owner's Apple Silicon Mac. GitHub-hosted Mac runners cannot boot the
+    # sandbox VM that the build and installer checks start (no nested virtualization).
+    runs-on: [self-hosted, macOS, ARM64, vikram-release]
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.archive.outputs.version }}
+      sha256: ${{ steps.archive.outputs.sha256 }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the build tools
+        run: |
+          for tool in uv node npm cargo xcrun; do
+            if ! command -v "$tool" > /dev/null; then
+              echo "::error::$tool is not on the runner's PATH. Start the runner from a terminal where Vikram builds."
+              exit 1
+            fi
+          done
+          if ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 12) ? 0 : 1)'; then
+            echo "::error::Vikram builds with Node 22.12 or newer."
+            exit 1
+          fi
+          uv --version
+          node --version
+          cargo --version
+          xcrun --find swiftc
+
+      - name: Check that the tag is on main
+        if: github.ref_type == 'tag'
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME is not on main. Merge the version bump first, then tag its merge commit."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: |
+          uv sync --locked
+          npm --prefix apps/desktop ci
+
+      - name: Check that every version matches
+        id: version
+        run: |
+          expected=()
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            expected=("${GITHUB_REF_NAME#v}")
+          fi
+          version=$(uv run python scripts/bump_version.py --check "${expected[@]}")
+          cargo metadata --locked --format-version 1 --manifest-path apps/desktop/src-tauri/Cargo.toml > /dev/null
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Run the offline tests
+        run: |
+          uv run python -m unittest discover -s tests
+          npm --prefix apps/desktop test
+
+      - name: Build the installer
+        run: uv run python scripts/build_installer.py
+
+      - name: Check the installer in a disposable account
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: uv run python scripts/check_installer.py "dist/installers/Vikram-$VERSION-macos-arm64.zip"
+
+      # Tauri's build script needs the sidecar, so the native tests follow the build.
+      - name: Run the native tests
+        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+      - name: Check the archive the updater will download
+        id: archive
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: uv run python scripts/publish_release.py --dry-run --tag "v$VERSION" "dist/installers/Vikram-$VERSION-macos-arm64.zip"
+
+      - name: Hand the archive to the publish job
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installer
+          path: |
+            dist/installers/Vikram-${{ steps.archive.outputs.version }}-macos-arm64.zip
+            dist/installers/Vikram-${{ steps.archive.outputs.version }}-macos-arm64.zip.sha256
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Summarize
+        env:
+          VERSION: ${{ steps.archive.outputs.version }}
+          SHA256: ${{ steps.archive.outputs.sha256 }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            result="Built and checked. The publish job releases it."
+          else
+            result="Dry run: built and checked. Nothing was published."
+          fi
+          {
+            echo
+            echo "### Vikram $VERSION"
+            echo
+            echo "$result"
+            echo
+            echo "SHA-256: \`$SHA256\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Free the build space
+        if: always()
+        run: git clean -ffdxq
+
+  publish:
+    name: Publish the release
+    needs: build
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    # GitHub-hosted, so the release Mac never holds a token that can write.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    environment:
+      name: release
+      url: ${{ steps.publish.outputs.url }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Fetch the checked archive
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: installer
+          path: release
+
+      - name: Publish as the latest release
+        id: publish
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          SHA256: ${{ needs.build.outputs.sha256 }}
+        run: |
+          uv run python scripts/publish_release.py --tag "$GITHUB_REF_NAME" \
+            --commit "$GITHUB_SHA" --sha256 "$SHA256" \
+            "release/Vikram-$VERSION-macos-arm64.zip"
+
+      - name: Summarize
+        env:
+          URL: ${{ steps.publish.outputs.url }}
+        run: printf 'Published %s\n' "$URL" >> "$GITHUB_STEP_SUMMARY"

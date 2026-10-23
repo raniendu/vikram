@@ -1,0 +1,4 @@
+# The release workflow's self-hosted runner: the owner's Apple Silicon Mac.
+self-hosted-runner:
+  labels:
+    - vikram-release

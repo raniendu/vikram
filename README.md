@@ -15,9 +15,11 @@ Install the desktop app and CLI together by opening **Install Vikram.app** from
 the installer ZIP. Then open `~/Applications/Vikram.app` or run `vikram` in a new
 terminal. Use `vikram update` to update both, `vikram update --check` to check
 without installing, and `vikram --version` to see the running CLI version.
-Updates use stable GitHub Releases; no release is published yet. The local
-installer is ad-hoc signed, pending Developer ID signing and notarization for
-public distribution. [Installation and release details](docs/releases.md).
+Updates use stable GitHub Releases, which a version tag builds on the owner's Mac
+and publishes; none is published yet. Releases are ad-hoc signed and not
+notarized, pending Developer ID signing: `vikram update` installs them, but macOS
+may refuse to open a copy downloaded in a web browser.
+[Installation and release details](docs/releases.md).
 
 The Tauri app supports saved chats and flat folders, per-chat local models and
 advertised thinking settings (on by default), streamed replies, stop/retry, Markdown/code copy,
@@ -44,9 +46,12 @@ uv run python scripts/build_installer.py
 ```
 
 Open `dist/installers/Install Vikram.app` to install both components in one
-action. Packaging also produces `dist/installers/Vikram-0.1.0-macos-arm64.zip`.
+action. Packaging also produces `dist/installers/Vikram-VERSION-macos-arm64.zip`.
 The installer preserves an existing uv-managed CLI launcher, keeps chats and
 models, and checks the 20 GiB reserve before changing the installed version.
+To publish a release that `vikram update` installs, bump the version with
+`uv run python scripts/bump_version.py X.Y.Z` and follow
+[Publish a release](docs/releases.md#publish-a-release).
 
 Open `apps/desktop/src-tauri/target/release/bundle/macos/Vikram.app`.
 The bundled app includes its Python service; it needs no separate Python runtime.

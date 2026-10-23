@@ -24,6 +24,13 @@ The owner requested the combined CLI/Mac installer and `vikram update`; its
 design is in `docs/superpowers/specs/2026-10-14-install-and-update-design.md` and
 distribution instructions are in `docs/releases.md`. Build local artifacts and
 validate with disposable install directories; publishing requires owner direction.
+The owner chose the release process in `docs/releases.md`: a pushed `vX.Y.Z` tag
+on `main` builds and checks on the owner's self-hosted Mac runner (label
+`vikram-release`, read-only token), then a GitHub-hosted job publishes an ad-hoc
+signed release. Never push a release tag, start or approve a release run, or
+create, edit or delete a GitHub Release without the owner's explicit direction
+for that release. Keep pull request workflows on GitHub-hosted runners, give the
+self-hosted job no write access, and pin workflow actions to commit SHAs.
 The owner requested clarifying questions, plan mode, and a Python sandbox built
 on Pydantic libraries; the design is in
 `docs/superpowers/specs/2026-10-20-questions-plan-mode-sandbox-design.md`.
@@ -70,6 +77,11 @@ unrelated tools, hosted inference, or public server surfaces.
 - `scripts/build_desktop.py`: reproducible sidecar/app packaging, disk reserve check.
 - `scripts/fetch_sandbox_image.py`: fetches and verifies the pinned sandbox image.
 - `scripts/build_installer.py`: combined per-user CLI/Mac installer artifact.
+- `scripts/bump_version.py`: one release version in the four version files and
+  three lockfiles.
+- `scripts/publish_release.py`: draft, upload, digest check, then latest release.
+- `.github/workflows/release.yml`: tag-triggered build on the release Mac and
+  publish on GitHub; `ci.yml` runs pull request startup and formatting checks.
 - `vikram/installation.py`, `releases.py`: atomic bundle installation and GitHub updates.
 - `tests/`: focused offline chat and recovery checks.
 - `vikram/ollama.py`: shared thinking metadata validation and request mapping.
@@ -118,7 +130,11 @@ Desktop commands:
 
 - `uv run python scripts/build_desktop.py`: build native sidecar and `.app`.
 - `uv run python scripts/build_installer.py`: build combined installer and release ZIP.
-- `uv run python scripts/check_installer.py dist/installers/Vikram-0.1.0-macos-arm64.zip`: isolated packaged-install smoke check.
+- `uv run python scripts/check_installer.py dist/installers/Vikram-VERSION-macos-arm64.zip`: isolated packaged-install smoke check.
+- `uv run python scripts/bump_version.py 0.2.0`: set a new release version everywhere.
+- `uv run python scripts/bump_version.py --check`: print the version if every file agrees.
+- `uv run python scripts/publish_release.py --dry-run --tag vVERSION dist/installers/Vikram-VERSION-macos-arm64.zip`:
+  check an archive against the updater's rules without contacting GitHub.
 - `uv run vikram update --check`: check the latest stable GitHub release without installation.
 - `npm --prefix apps/desktop run desktop`: start Tauri development mode after building the sidecar.
 - `apps/desktop/src-tauri/target/release/bundle/macos/Vikram.app/Contents/MacOS/vikram-sidecar --check-browser`:

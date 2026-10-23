@@ -21,6 +21,7 @@ import { desktop, native, onNative } from "./bridge";
 import { formatModelName } from "./modelNames";
 import { thinkingOn } from "./state";
 import type { ChatSummary, Folder, Thinking } from "./types";
+import { version } from "../package.json";
 
 export default function App() {
   const app = useChats();
@@ -573,7 +574,7 @@ export default function App() {
             </p>
           </section>
           <div className="settings-footer">
-            Vikram <span>0.1.0</span>
+            Vikram <span>{version}</span>
           </div>
         </Dialog>
       )}
