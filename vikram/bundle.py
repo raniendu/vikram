@@ -14,6 +14,11 @@ def main() -> int:
         from vikram.browser import check_browser
 
         return check_browser()
+    if sys.argv[1:] == ["--run-schedules"]:
+        # The background agent: run due scheduled tasks, then exit.
+        from vikram.schedules import main as schedules_main
+
+        return schedules_main()
     if sys.argv[1:2] == ["--cli"]:
         from vikram.cli import main as cli_main
 

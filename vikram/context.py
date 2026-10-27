@@ -33,6 +33,43 @@ BROWSER_STATUS = {
 }
 
 
+TASK_VERBS = {
+    "create": "scheduled",
+    "update": "changed",
+    "pause": "paused",
+    "resume": "resumed",
+    "delete": "deleted",
+}
+TASK_STATUS = {
+    "denied": "not approved by the user",
+    "timed_out": "not approved in time",
+    "failed": "failed",
+    "stopped": "stopped",
+}
+
+
+def task_note(records: list[dict]) -> list[str]:
+    """What happened to scheduled tasks, so a follow-up can refer to them."""
+    lines = []
+    for item in records[-6:]:
+        name = bounded(item.get("name") or "a task", 100)
+        line = f"- You {TASK_VERBS.get(item.get('action'), 'changed')} the scheduled task “{name}”"
+        details = [
+            part
+            for part in (
+                item.get("description"),
+                f"id {item['task_id'][:8]}" if item.get("task_id") else None,
+            )
+            if part
+        ]
+        if details:
+            line += f" ({', '.join(details)})"
+        if item.get("status") != "complete":
+            line += f": {TASK_STATUS.get(item.get('status'), 'unfinished')}"
+        lines.append(line)
+    return lines
+
+
 def browser_note(actions: list[dict]) -> str:
     """The last few browser actions and where the browser was left."""
     steps = []
@@ -97,6 +134,9 @@ def activity_note(activity: list[dict]) -> str | None:
     actions = [item for item in activity if item.get("kind") == "browser"]
     if actions:
         lines.append(browser_note(actions))
+    lines.extend(
+        task_note([item for item in activity if item.get("kind") == "schedule"])
+    )
     if not lines:
         return None
     return "Tool activity while answering this message:\n" + "\n".join(lines)

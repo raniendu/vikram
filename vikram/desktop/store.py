@@ -433,6 +433,56 @@ class Store:
         attempt["reasoning_truncated"] = bool(attempt["reasoning_truncated"])
         return attempt
 
+    def import_run(
+        self, title: str, prompt: str, run: dict, *, model: str | None
+    ) -> dict:
+        """A finished scheduled run as a new chat, so the person can follow up.
+
+        Only a complete answer becomes context for the chat's next replies.
+        """
+        cid, mid, aid, timestamp = uid(), uid(), uid(), now()
+        status = run["status"] if run["status"] in TERMINAL else "interrupted"
+        with self.db:
+            self.db.execute(
+                "INSERT INTO chats(id,title,custom_title,model,created,updated,web) "
+                "VALUES(?,?,1,?,?,?,?)",
+                (
+                    cid,
+                    title.strip()[:160] or "Scheduled run",
+                    model,
+                    timestamp,
+                    timestamp,
+                    DEFAULT_WEB,
+                ),
+            )
+            self.db.execute(
+                "INSERT INTO messages VALUES(?,?,?,?)", (mid, cid, prompt, timestamp)
+            )
+            self.db.execute(
+                "INSERT INTO attempts(id,chat_id,message_id,request_id,requested_model,"
+                "actual_model,thinking,status,content,error,created,updated,web,sources,"
+                "searches,reasoning,activity) VALUES(?,?,?,?,?,?,'null',?,?,?,?,?,?,?,?,?,?)",
+                (
+                    aid,
+                    cid,
+                    mid,
+                    f"run-{run['id']}",
+                    run.get("model") or model or "",
+                    run.get("actual_model"),
+                    status,
+                    run.get("content") or "",
+                    run.get("error"),
+                    timestamp,
+                    timestamp,
+                    DEFAULT_WEB,
+                    json.dumps(run.get("sources") or []),
+                    json.dumps(run.get("searches") or []),
+                    run.get("reasoning") or "",
+                    json.dumps(run.get("activity") or []),
+                ),
+            )
+        return self.chat(cid)
+
     def checkpoint(
         self,
         attempt_id: str,

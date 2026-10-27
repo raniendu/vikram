@@ -370,6 +370,18 @@ def activate(layout: Layout, release: Path) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _refresh_scheduler(layout: Layout) -> None:
+    """Keep an existing scheduled-task agent's definition current.
+
+    It already runs the new version through `current`; never fail an install
+    that has already switched over because of it.
+    """
+    from vikram.schedules import refresh_installed_agent
+
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        refresh_installed_agent(layout.home)
+
+
 def install_bundle(source: Path, layout: Layout, *, _locked: bool = False) -> str:
     check_platform()
     ensure_space(layout.home, MAX_EXPANDED)
@@ -431,6 +443,7 @@ def install_bundle(source: Path, layout: Layout, *, _locked: bool = False) -> st
                     _atomic_write(profile, (old or b"") + b"\n" + PROFILE_BLOCK, mode)
                     changed.append((profile, old, mode))
             activate(layout, release)
+            _refresh_scheduler(layout)
             return version
         except BaseException:
             # The rename is the commit point. A signal immediately after it

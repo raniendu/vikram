@@ -82,14 +82,15 @@ class Answer(Params):
 
 
 class Respond(Chat):
-    """A person's answer to the active reply's question, plan, or browser action.
+    """A person's answer to the active reply's question, plan, browser action,
+    or scheduled task to save.
 
-    For a browser action, "approve" allows it and "dismiss" declines it.
+    For a browser action or a task, "approve" allows it and "dismiss" declines it.
     """
 
     attempt_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     interaction_id: str = Field(min_length=1, max_length=120)
-    kind: Literal["question", "plan", "browser"]
+    kind: Literal["question", "plan", "browser", "schedule"]
     answers: list[Answer] = Field(default_factory=list, max_length=10)
     cancelled: bool = False
     decision: Literal["approve", "revise", "dismiss"] | None = None
@@ -107,6 +108,48 @@ class BrowserControl(Params):
     """The person takes the browser over, or hands it back to Vikram."""
 
     control: Literal["person", "agent"]
+
+
+TASK_ID = Field(pattern=r"^[0-9a-f]{32}$")
+
+
+class ScheduleTime(Params):
+    """Validated again by `vikram.schedules.Schedule`."""
+
+    model_config = ConfigDict(extra="forbid", strict=False)
+    repeat: Literal["once", "daily", "weekly", "monthly", "interval"]
+    time: str | None = Field(default=None, max_length=5)
+    date: str | None = Field(default=None, max_length=10)
+    days: list[Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]] | None = Field(
+        default=None, max_length=7
+    )
+    day_of_month: StrictInt | None = Field(default=None, ge=1, le=31)
+    every_minutes: StrictInt | None = Field(default=None, ge=15, le=7 * 24 * 60)
+
+
+class TaskFields(Params):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    prompt: str | None = Field(default=None, min_length=1, max_length=4000)
+    schedule: ScheduleTime | None = None
+    model: str | None = Field(default=None, max_length=256)
+    thinking: StrictBool | StrictStr | None = None
+    enabled: StrictBool | None = None
+
+
+class NewTask(Params):
+    fields: TaskFields
+
+
+class Task(Params):
+    task_id: str = TASK_ID
+
+
+class UpdateTask(Task):
+    fields: TaskFields
+
+
+class Run(Params):
+    run_id: str = TASK_ID
 
 
 PARAMS = {
@@ -132,6 +175,14 @@ PARAMS = {
     "send": Send,
     "respond": Respond,
     "browser_control": BrowserControl,
+    "schedules": Params,
+    "schedule": Task,
+    "schedule_run": Run,
+    "create_schedule": NewTask,
+    "update_schedule": UpdateTask,
+    "delete_schedule": Task,
+    "run_schedule": Task,
+    "open_run": Run,
     # From the app itself, never the window: results and the panel closing.
     "browser_result": BrowserResult,
     "browser_closed": Params,
@@ -156,6 +207,29 @@ def validate_parameters(cmd: Command) -> Command:
             if key in fields
         ):
             raise ValueError("Invalid chat settings.")
+    if cmd.method in {"create_schedule", "update_schedule"}:
+        fields = cmd.params["fields"]
+        if cmd.method == "create_schedule" and not {
+            "name",
+            "prompt",
+            "schedule",
+            "model",
+        } <= set(fields):
+            raise ValueError(
+                "A scheduled task needs a name, prompt, schedule, and model."
+            )
+        if not fields or any(
+            fields.get(key) is None
+            for key in ("name", "prompt", "schedule", "enabled")
+            if key in fields
+        ):
+            raise ValueError("Invalid scheduled task.")
+        if "schedule" in fields:
+            fields["schedule"] = {
+                key: value
+                for key, value in fields["schedule"].items()
+                if value is not None
+            }
     if cmd.method == "preference":
         key, value = cmd.params["key"], cmd.params["value"]
         if key == "appearance" and value not in ("system", "light", "dark"):

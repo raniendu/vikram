@@ -91,6 +91,10 @@ def activity_summary(activity: list[dict]) -> list[str]:
     plans = [a for a in activity if a["kind"] == "plan"]
     if plans:
         lines.append(f"Plan · {PLAN_STATUS.get(plans[-1]['status'], 'submitted')}")
+    for task in (a for a in activity if a["kind"] == "schedule"):
+        line = task_line(task)
+        if line:
+            lines.append(line)
     actions = [a for a in activity if a["kind"] == "browser"]
     if actions:
         declined = sum(a["status"] in ("denied", "refused") for a in actions)
@@ -101,6 +105,34 @@ def activity_summary(activity: list[dict]) -> list[str]:
             + (f" · {failed} failed" if failed else "")
         )
     return lines
+
+
+TASK_LINES = {
+    "create": "Scheduled",
+    "update": "Changed",
+    "pause": "Paused",
+    "resume": "Resumed",
+    "delete": "Deleted",
+}
+
+
+def task_line(record: dict) -> str | None:
+    """One line per scheduled-task change: 'Scheduled “News” · Weekdays at 08:00'."""
+    name = record.get("name") or "task"
+    if record["status"] == "complete":
+        text = f"{TASK_LINES.get(record['action'], 'Changed')} “{name}”"
+        if record["action"] in ("create", "update") and record.get("description"):
+            text += f" · {record['description']}"
+        return text
+    if record["status"] in ("denied", "timed_out"):
+        return (
+            f"Not scheduled: “{name}”"
+            if record["action"] == "create"
+            else (f"Not changed: “{name}”")
+        )
+    if record["status"] == "failed" and record.get("error"):
+        return "Scheduled task: " + record["error"].splitlines()[0]
+    return None
 
 
 BROWSER_VERBS = {
@@ -269,13 +301,24 @@ class TerminalInteraction:
 
     async def approve(self, request: ActionRequest, /) -> bool:
         body = Text(terminal_text(request.summary) + "\n", style="bold")
-        body.append(terminal_text(request.reason), style="dim")
+        if request.kind == "schedule":
+            body.append(
+                "Vikram will run this on its own, even when the app is closed:\n",
+                style="dim",
+            )
+            body.append(terminal_text(request.reason))
+        else:
+            body.append(terminal_text(request.reason), style="dim")
         if request.url:
             body.append("\n" + terminal_text(request.url), style="dim")
         self.console.print(
             Panel(
                 body,
-                title="Browser · allow this action?",
+                title=(
+                    "Scheduled task · save it?"
+                    if request.kind == "schedule"
+                    else "Browser · allow this action?"
+                ),
                 title_align="left",
                 border_style=ACCENT,
             )
@@ -408,6 +451,13 @@ class TerminalChat:
                 )
                 if item.get("error"):
                     self.console.print(Text(terminal_text(item["error"]), style="dim"))
+            elif item["kind"] == "schedule":
+                line = task_line(item) or f"Scheduled task · {item['status']}"
+                self.console.print(Text(terminal_text(line), style="dim"))
+                if item.get("prompt"):
+                    self.console.print(
+                        Text(terminal_text(f"Prompt: {item['prompt']}"), style="dim")
+                    )
             else:
                 self.console.print(
                     Text(

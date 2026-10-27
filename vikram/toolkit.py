@@ -13,6 +13,7 @@ import base64
 import binascii
 import copy
 import json
+import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Annotated, Any, Literal
@@ -58,6 +59,15 @@ from vikram.interaction import (
     check_response,
 )
 from vikram.sandbox import RUN_TIMEOUT, Sandbox, SandboxUnavailable
+from vikram.schedules import (
+    MAX_NAME,
+    MAX_PROMPT,
+    Schedule,
+    TaskBook,
+    describe,
+    repair_schedule,
+    schedule_from,
+)
 
 Mode = Literal["normal", "plan"]
 RUN_CODE, ASK_USER, SUBMIT_PLAN = "run_code", "ask_user_question", "submit_plan"
@@ -71,9 +81,17 @@ BROWSER_TOOLS = {
     "browser_back": "back",
     "browser_look": "look",
 }
+# One budget for the scheduled-task tools.
+SCHEDULE = "schedule"
+SCHEDULE_TOOLS = {
+    "schedule_task": "create",
+    "list_scheduled_tasks": "list",
+    "update_scheduled_task": "update",
+    "delete_scheduled_task": "delete",
+}
 # Model requests per reply, including the final answer, which never offers tools.
 REQUEST_LIMIT = 10
-LIMITS = {RUN_CODE: 6, ASK_USER: 3, SUBMIT_PLAN: 3, BROWSER: 8}
+LIMITS = {RUN_CODE: 6, ASK_USER: 3, SUBMIT_PLAN: 3, BROWSER: 8, SCHEDULE: 6}
 INTERACTION_TIMEOUT = 15 * 60
 MAX_CODE = 20_000
 MAX_OUTPUT = 8_000
@@ -106,6 +124,21 @@ BROWSER_PROMPT = (
     "the user declines, do not try another way. Never type passwords, payment "
     "details, or one-time codes: tell the user what is needed so they can enter "
     "it themselves."
+)
+SCHEDULE_PROMPT = (
+    "\n- schedule_task saves a prompt that you run later on your own, even when "
+    "the app is closed: use it when the user asks for something at a later time "
+    'or repeatedly ("every weekday at 8am, summarize…", "remind me tomorrow at '
+    '3pm to…"). Work out the date and time from the current clock. The user '
+    "approves the task before it is saved. list_scheduled_tasks, "
+    "update_scheduled_task (also pauses and resumes), and delete_scheduled_task "
+    "manage saved tasks."
+)
+SCHEDULED_RUN_PROMPT = (
+    "This reply is a scheduled run of the task {task}. Nobody is at the computer "
+    "to answer questions or approve actions, and the browser is unavailable. Do "
+    "what the task asks now, making reasonable choices and saying which, and reply "
+    "with the result itself; for a reminder, state the reminder."
 )
 TEXT_PLAN_PROMPT = (
     "Plan mode is on: the user wants to approve a plan before any work is done. "
@@ -168,14 +201,45 @@ PRIVATE_URL = (
 EARLIER_VIEW = "(An earlier page view; its elements and text are omitted. Use the latest page view.)"
 SCREENSHOT_NOTE = "Screenshot of the browser page above (untrusted web content):"
 SCREENSHOT_ID = "browser-view-"
+SCHEDULE_FIELDS = ("repeat", "time", "date", "days", "day_of_month", "every_minutes")
+TASKS_UNAVAILABLE = "Scheduled tasks are unavailable here."
+SCHEDULE_PLAN_FIRST = (
+    "Plan mode is on, so scheduled tasks cannot change yet. Include the task in "
+    "your plan, call submit_plan, and wait for the user's approval."
+)
+TASK_NOT_APPROVED = (
+    "The user did not approve this scheduled task, so nothing was saved. Do not "
+    "try another way; tell the user it was not scheduled."
+)
+SCHEDULE_HINT = (
+    "Use repeat once (date YYYY-MM-DD and time HH:MM), daily (time), weekly (days "
+    "such as mon, fri and time), monthly (day_of_month and time), or interval "
+    "(every_minutes, at least 15). Times are 24-hour local time."
+)
+LIMIT_REACHED[SCHEDULE] = (
+    "The scheduled-task limit for this reply was reached. Tell the user what was done."
+)
 
 
-def toolkit_prompt(sandbox: bool, browser: bool = False) -> str:
+def toolkit_prompt(
+    sandbox: bool,
+    browser: bool = False,
+    tasks: bool = False,
+    scheduled: str | None = None,
+) -> str:
+    """`tasks` adds the scheduled-task tools; `scheduled` names the task this
+    unattended run is for, which has no questions."""
+    if scheduled:
+        # Questions, the browser, and new tasks are not offered to these runs.
+        tools = SANDBOX_PROMPT.rstrip("\n") if sandbox else ""
+        note = SCHEDULED_RUN_PROMPT.format(task=scheduled)
+        return f"Local tools:\n{tools}\n\n{note}" if tools else note
     return (
         "Local tools:\n"
         + (SANDBOX_PROMPT if sandbox else "")
         + QUESTIONS_PROMPT
         + (BROWSER_PROMPT if browser else "")
+        + (SCHEDULE_PROMPT if tasks else "")
     )
 
 
@@ -222,6 +286,10 @@ class Reply:
     sandbox: Sandbox | None = None
     browser: BrowserEngine | None = None
     vision: bool = False
+    # The scheduled tasks this reply may manage; `None` offers no task tools.
+    tasks: TaskBook | None = None
+    # For an unattended scheduled run, the task it runs (see `SCHEDULED_RUN_PROMPT`).
+    scheduled: str | None = None
     activity: list[dict] = field(default_factory=list)
     counts: dict[str, int] = field(default_factory=dict)
     # One browser action at a time, approvals and hand-backs included.
@@ -493,14 +561,169 @@ class Reply:
     async def _approve(self, record: dict, result: EngineResult) -> bool:
         """Ask the person to allow a consequential action; no approver declines."""
         approval = result.approval
-        record["status"] = "waiting"
         record["approval"] = approval.model_dump()
-        request = ActionRequest(
-            id=record["id"],
-            summary=approval.summary,
-            reason=approval.reason,
-            url=result.page.url if result.page is not None else "",
+        return await self._allowed(
+            record,
+            ActionRequest(
+                id=record["id"],
+                summary=approval.summary,
+                reason=approval.reason,
+                url=result.page.url if result.page is not None else "",
+            ),
         )
+
+    async def manage_tasks(self, call_id: str, action: str, args: dict) -> str:
+        """Create, list, change, pause, resume, or delete scheduled tasks.
+
+        Saving a new or changed task waits for the person's approval; pausing,
+        resuming, deleting, and listing do not. Refusals and declines are
+        finished results the model adapts to.
+        """
+        book = self.tasks
+        if book is None:
+            raise ToolFailed(TASKS_UNAVAILABLE)
+        if self.mode == "plan" and action != "list":
+            raise ToolFailed(SCHEDULE_PLAN_FIRST)
+        if not self._spend(SCHEDULE):
+            raise ToolFailed(LIMIT_REACHED[SCHEDULE])
+        try:
+            store = book.open()
+        except (OSError, ValueError, sqlite3.Error):
+            raise ToolFailed(TASKS_UNAVAILABLE) from None
+        if action == "list":
+            return task_list(store.tasks())
+        record = self._record(
+            kind="schedule",
+            id=call_id,
+            action=action,
+            status="running",
+            task_id=None,
+            name=None,
+            description=None,
+            prompt=None,
+            next_run=None,
+            error=None,
+        )
+        try:
+            return await self._manage(book, record, action, args)
+        except ToolFailed as failure:
+            if record["status"] == "running":
+                record["status"], record["error"] = "failed", str(failure.message)
+            raise
+        except asyncio.CancelledError:
+            record["status"] = "stopped"
+            raise
+        finally:
+            self.notify("loading")
+
+    async def _manage(self, book: TaskBook, record: dict, action: str, args: dict):
+        store = book.store
+        try:
+            task = store.find(args["task"]) if action != "create" else None
+        except ValueError as error:
+            raise ToolFailed(str(error)) from None
+        if task is not None:
+            record.update(
+                task_id=task["id"],
+                name=task["name"],
+                description=task["description"],
+                prompt=bounded(task["prompt"], 500),
+            )
+        if action == "delete":
+            try:
+                store.delete(task["id"])
+            except ValueError as error:
+                raise ToolFailed(str(error)) from None
+            record["status"] = "complete"
+            book.changed()
+            return f"Deleted the scheduled task “{task['name']}”."
+        edits = {
+            key: args[key]
+            for key in ("name", "prompt")
+            if isinstance(args.get(key), str) and args[key].strip()
+        }
+        given = {
+            key: args.get(key) for key in SCHEDULE_FIELDS if args.get(key) is not None
+        }
+        try:
+            if action == "create":
+                schedule = schedule_from(args)
+                if not edits.get("name") or not edits.get("prompt"):
+                    raise ValueError("Give the task a name and a prompt.")
+            elif given:
+                base = dict(task["schedule"])
+                if given.get("repeat") not in (None, base["repeat"]):
+                    base = {}
+                schedule = schedule_from(repair_schedule({**base, **given}))
+            else:
+                schedule = None
+        except ValueError as error:
+            raise ToolFailed(f"{error} {SCHEDULE_HINT}") from None
+        paused = args.get("paused")
+        if action == "update" and not edits and schedule is None:
+            if not isinstance(paused, bool):
+                raise ToolFailed(
+                    "Nothing to change. Pass paused, or a new name, prompt, or schedule."
+                )
+            record["action"] = "pause" if paused else "resume"
+            changed = store.update(task["id"], enabled=not paused)
+            record.update(status="complete", next_run=changed["next_run"])
+            book.changed()
+            return (
+                f"Paused “{changed['name']}”."
+                if paused
+                else f"Resumed “{changed['name']}”. {_next_text(changed)}"
+            )
+        name = edits.get("name", task["name"] if task else "")[:MAX_NAME].strip()
+        prompt = edits.get("prompt", task["prompt"] if task else "")[:MAX_PROMPT]
+        prompt = prompt.strip()
+        description = describe(schedule or Schedule.model_validate(task["schedule"]))
+        record.update(name=name, description=description, prompt=bounded(prompt, 500))
+        summary = (
+            f"Schedule “{name}” · {description}"
+            if action == "create"
+            else f"Change “{task['name']}” · {description}"
+        )
+        if not await self._allowed(
+            record,
+            ActionRequest(
+                id=record["id"], summary=summary, reason=prompt, url="", kind="schedule"
+            ),
+        ):
+            raise ToolFailed(TASK_NOT_APPROVED)
+        try:
+            if action == "create":
+                saved = store.create(
+                    name=name,
+                    prompt=prompt,
+                    schedule=schedule,
+                    model=book.model,
+                    thinking=book.thinking,
+                    origin=book.origin,
+                )
+            else:
+                fields = dict(edits)
+                if schedule is not None:
+                    fields["schedule"] = schedule
+                if isinstance(paused, bool):
+                    fields["enabled"] = not paused
+                saved = store.update(task["id"], **fields)
+        except ValueError as error:
+            record["status"], record["error"] = "failed", str(error)
+            raise ToolFailed(f"{error} {SCHEDULE_HINT}") from None
+        record.update(
+            status="complete", task_id=saved["id"], next_run=saved["next_run"]
+        )
+        book.changed()
+        verb = "Saved" if action == "create" else "Updated"
+        return (
+            f"{verb} the scheduled task “{saved['name']}” ({saved['description']}). "
+            f"{_next_text(saved)} It runs on its own, even when the app is closed, "
+            "and the user can view, edit, pause, or delete it under Scheduled tasks."
+        )
+
+    async def _allowed(self, record: dict, request: ActionRequest) -> bool:
+        record["status"] = "waiting"
         self.notify("approving")
         allowed = False
         if isinstance(self.interaction, Approver):
@@ -512,6 +735,44 @@ class Reply:
                 return False
         record["status"] = "running" if allowed else "denied"
         return allowed
+
+
+def _when(timestamp: float) -> str:
+    from datetime import datetime
+
+    from vikram.schedules import local_zone
+
+    return datetime.fromtimestamp(timestamp, local_zone()).strftime(
+        "%a %-d %b %Y %H:%M"
+    )
+
+
+def _next_text(task: dict) -> str:
+    if not task["enabled"]:
+        return "It is paused."
+    if task["next_run"] is None:
+        return "It has no future run."
+    return f"Next run: {_when(task['next_run'])}."
+
+
+def task_list(tasks: list[dict]) -> str:
+    """Saved tasks for the model, with short IDs it can pass back."""
+    if not tasks:
+        return "There are no scheduled tasks."
+    lines = []
+    for number, task in enumerate(tasks, 1):
+        state = {
+            "paused": "paused",
+            "done": "done (no future run)",
+        }.get(task["state"], f"next run {_when(task['next_run'])}")
+        last = task.get("last_run")
+        lines.append(
+            f"{number}. “{task['name']}” (id {task['id'][:8]}) · {task['description']}"
+            f" · {state}"
+            + (f" · last run {last['status']}" if last else "")
+            + f"\n   Prompt: {bounded(' '.join(task['prompt'].split()), 300)}"
+        )
+    return "Scheduled tasks:\n" + "\n".join(lines)
 
 
 def _lead(action: str, args: dict, target: str | None) -> str:
@@ -600,6 +861,40 @@ def repair_questions(args: dict) -> dict:
     return {"questions": repaired}
 
 
+def repair_task_arguments(args: dict, schema: dict | None = None) -> dict:
+    """Repair the schedule fields, then drop keys the tool does not take.
+
+    Small models add fields such as `timezone` or nulls for unused ones; an
+    unknown key would otherwise spend a retry.
+    """
+    if "task" in args and not isinstance(args["task"], str):
+        if isinstance(args["task"], (int, float)) and not isinstance(
+            args["task"], bool
+        ):
+            args = {**args, "task": str(args["task"])}
+    for key in ("task_id", "id", "task_name"):
+        if key in args and "task" not in args:
+            args = {**args, "task": args[key]}
+    if isinstance(args.get("paused"), str):
+        text = args["paused"].strip().lower()
+        if text in ("true", "yes", "pause", "paused"):
+            args = {**args, "paused": True}
+        elif text in ("false", "no", "resume", "resumed"):
+            args = {**args, "paused": False}
+    for key in ("enabled", "active"):
+        if isinstance(args.get(key), bool) and "paused" not in args:
+            args = {**args, "paused": not args[key]}
+    repaired = repair_schedule(args)
+    known = set((schema or {}).get("properties", {}))
+    if known:
+        repaired = {
+            key: value
+            for key, value in repaired.items()
+            if key in known and value is not None
+        }
+    return repaired
+
+
 def _reply(ctx: RunContext) -> Reply | None:
     return ctx.deps if isinstance(ctx.deps, Reply) else None
 
@@ -612,6 +907,16 @@ def mode_of(ctx: RunContext) -> Mode:
 def has_browser(ctx: RunContext) -> bool:
     reply = _reply(ctx)
     return reply is not None and reply.browser is not None
+
+
+def has_tasks(ctx: RunContext) -> bool:
+    reply = _reply(ctx)
+    return reply is not None and reply.tasks is not None
+
+
+def scheduled_of(ctx: RunContext) -> str | None:
+    reply = _reply(ctx)
+    return reply.scheduled if reply else None
 
 
 async def run_code(
@@ -725,6 +1030,130 @@ BROWSER_FUNCTIONS = (
 )
 
 
+TaskRef = Annotated[
+    str, Field(description="The task's id from list_scheduled_tasks, or its name.")
+]
+Repeat = Annotated[
+    str | None,
+    Field(description="once, daily, weekly, monthly, or interval."),
+]
+Clock = Annotated[
+    str | None, Field(description="Local time of day, 24-hour HH:MM, such as 08:00.")
+]
+Day = Annotated[str | None, Field(description="For once: the date, YYYY-MM-DD.")]
+Days = Annotated[
+    list[str] | None,
+    Field(description="For weekly: days such as mon, tue, wed, thu, fri, sat, sun."),
+]
+DayOfMonth = Annotated[int | None, Field(description="For monthly: 1 to 31.")]
+Every = Annotated[
+    int | None,
+    Field(description="For interval: minutes between runs, at least 15."),
+]
+
+
+async def _tasks(ctx: RunContext[Reply], action: str, args: dict) -> str:
+    reply = _reply(ctx) or Reply()
+    return await reply.manage_tasks(ctx.tool_call_id or "", action, args)
+
+
+async def schedule_task(
+    ctx: RunContext[Reply],
+    name: Annotated[
+        str, Field(description="A short name, such as “Morning tech news”.")
+    ],
+    prompt: Annotated[
+        str,
+        Field(
+            description="What to do at each run, written as a request that makes "
+            "sense on its own later, such as “Summarize today's top technology "
+            "news.” or “Remind me to call the dentist.”"
+        ),
+    ],
+    repeat: Repeat = None,
+    time: Clock = None,
+    date: Day = None,
+    days: Days = None,
+    day_of_month: DayOfMonth = None,
+    every_minutes: Every = None,
+) -> str:
+    """Schedule a prompt that Vikram runs later by itself, even when the app is
+    closed, and shows the result to the user. The user approves it first.
+
+    Examples: every weekday at 8am → repeat weekly, days [mon, tue, wed, thu, fri],
+    time 08:00. Tomorrow at 3pm → repeat once, date (tomorrow's YYYY-MM-DD), time
+    15:00. Every 2 hours → repeat interval, every_minutes 120.
+    """
+    return await _tasks(
+        ctx,
+        "create",
+        {
+            "name": name,
+            "prompt": prompt,
+            "repeat": repeat,
+            "time": time,
+            "date": date,
+            "days": days,
+            "day_of_month": day_of_month,
+            "every_minutes": every_minutes,
+        },
+    )
+
+
+async def list_scheduled_tasks(ctx: RunContext[Reply]) -> str:
+    """List the saved scheduled tasks with their ids, schedules, and next runs."""
+    return await _tasks(ctx, "list", {})
+
+
+async def update_scheduled_task(
+    ctx: RunContext[Reply],
+    task: TaskRef,
+    paused: Annotated[
+        bool | None, Field(description="true pauses the task, false resumes it.")
+    ] = None,
+    name: str | None = None,
+    prompt: str | None = None,
+    repeat: Repeat = None,
+    time: Clock = None,
+    date: Day = None,
+    days: Days = None,
+    day_of_month: DayOfMonth = None,
+    every_minutes: Every = None,
+) -> str:
+    """Pause or resume a scheduled task, or change its name, prompt, or schedule.
+    Pass only what changes. Changes other than pausing wait for the user's
+    approval."""
+    return await _tasks(
+        ctx,
+        "update",
+        {
+            "task": task,
+            "paused": paused,
+            "name": name,
+            "prompt": prompt,
+            "repeat": repeat,
+            "time": time,
+            "date": date,
+            "days": days,
+            "day_of_month": day_of_month,
+            "every_minutes": every_minutes,
+        },
+    )
+
+
+async def delete_scheduled_task(ctx: RunContext[Reply], task: TaskRef) -> str:
+    """Delete a scheduled task and its run history."""
+    return await _tasks(ctx, "delete", {"task": task})
+
+
+TASK_FUNCTIONS = (
+    schedule_task,
+    list_scheduled_tasks,
+    update_scheduled_task,
+    delete_scheduled_task,
+)
+
+
 async def _review_plans(
     ctx: RunContext[Reply], requests: DeferredToolRequests
 ) -> DeferredToolResults:
@@ -775,6 +1204,9 @@ def _available(ctx: RunContext, tool_def) -> bool:
     if tool_def.name in BROWSER_TOOLS:
         # Fixed for the whole reply: offered only where an interface hosts one.
         return has_browser(ctx)
+    if tool_def.name in SCHEDULE_TOOLS:
+        # Also fixed per reply: chats get them, scheduled runs and evals do not.
+        return has_tasks(ctx)
     return True
 
 
@@ -868,7 +1300,11 @@ class ReplyPolicy(AbstractCapability[Reply]):
         return ReplyToolset(toolset)
 
     async def before_tool_validate(self, ctx, *, call, tool_def, args):
-        if call.tool_name != ASK_USER and call.tool_name not in BROWSER_TOOLS:
+        if (
+            call.tool_name != ASK_USER
+            and call.tool_name not in BROWSER_TOOLS
+            and call.tool_name not in SCHEDULE_TOOLS
+        ):
             return args
         if isinstance(args, str):
             try:
@@ -879,6 +1315,8 @@ class ReplyPolicy(AbstractCapability[Reply]):
             return args
         if call.tool_name == ASK_USER:
             return repair_questions(args)
+        if call.tool_name in SCHEDULE_TOOLS:
+            return repair_task_arguments(args, tool_def.parameters_json_schema)
         return repair_arguments(call.tool_name, args)
 
     async def before_model_request(self, ctx, request_context):
@@ -890,11 +1328,13 @@ class ReplyPolicy(AbstractCapability[Reply]):
 
 def toolkit_tools(sandbox: bool) -> list[Tool]:
     """Every local tool; `ReplyToolset` offers the browser ones only to replies
-    with an engine, so the same agent serves interfaces with and without one."""
+    with an engine, and the task ones only to replies with tasks, so the same
+    agent serves every interface."""
     tools = [Tool(submit_plan, requires_approval=True)]
     if sandbox:
         tools.append(Tool(run_code, description=RUN_CODE_DESCRIPTION, sequential=True))
     tools.extend(Tool(function, sequential=True) for function in BROWSER_FUNCTIONS)
+    tools.extend(Tool(function, sequential=True) for function in TASK_FUNCTIONS)
     return tools
 
 
@@ -902,7 +1342,8 @@ def toolkit_capabilities() -> list:
     return [
         lambda ctx: (
             Questions(answerer=reply.ask)
-            if (reply := _reply(ctx)) is not None
+            # Nobody can answer a scheduled run, so it has no questions.
+            if (reply := _reply(ctx)) is not None and not reply.scheduled
             else None
         ),
         HandleDeferredToolCalls(handler=_review_plans),

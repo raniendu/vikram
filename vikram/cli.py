@@ -32,10 +32,13 @@ class ChatSession:
         streamer=stream_reply,
         mode="normal",
         browser=None,
+        tasks=None,
     ):
         self.model, self.thinking, self.streamer = model, thinking, streamer
         self.mode = mode
         self.browser = browser
+        # Scheduled tasks the model may manage; `None` offers no task tools.
+        self.tasks = tasks
         self.turns: list[dict] = []
         self.session_id = uuid4().hex
         self.catalog = ModelCatalog()
@@ -43,6 +46,8 @@ class ChatSession:
     async def close(self) -> None:
         if self.browser is not None and hasattr(self.browser, "close"):
             await self.browser.close()
+        if self.tasks is not None and self.tasks.store is not None:
+            self.tasks.store.close()
 
     async def reply(self, prompt: str, *, interaction=None):
         models = await self.catalog.refresh()
@@ -53,6 +58,9 @@ class ChatSession:
             self.thinking = "on"
         if notice:
             yield {"notice": notice}
+        if self.tasks is not None:
+            # New tasks run with this chat's model and thinking.
+            self.tasks.model, self.tasks.thinking = selected["name"], setting
         turn = {
             "prompt": [prompt],
             "answer": None,
@@ -71,6 +79,7 @@ class ChatSession:
             interaction=interaction,
             browser=self.browser,
             vision=bool(selected.get("vision")),
+            tasks=self.tasks,
         )
         last = None
         try:
@@ -177,6 +186,12 @@ async def _reply(session: ChatSession, message: str) -> None:
                 line = browser_line(record)
                 if line:
                     sys.stderr.write(line + "\n")
+            elif record["kind"] == "schedule":
+                from vikram.terminal import task_line
+
+                line = task_line(record)
+                if line:
+                    sys.stderr.write(line + "\n")
     if last:
         sys.stdout.write(last["text"] + "\n")
         if last.get("sources"):
@@ -212,9 +227,25 @@ def browser_line(record: dict) -> str | None:
 
 
 def _session(model: str, *, thinking="on", mode="normal") -> ChatSession:
-    """A session with the hidden browser when this Mac has the Vikram app."""
+    """A session with the hidden browser when this Mac has the Vikram app, and
+    the scheduled tasks the app shows."""
     engine = browsers.HelperEngine() if browsers.unavailable_reason() is None else None
-    return ChatSession(model, thinking=thinking, mode=mode, browser=engine)
+    return ChatSession(
+        model, thinking=thinking, mode=mode, browser=engine, tasks=_task_book()
+    )
+
+
+def _task_book():
+    """Scheduled tasks for the model; the file opens only when a tool needs it."""
+    from vikram import schedules
+
+    book = schedules.TaskBook(
+        origin="cli", opener=lambda: schedules.ScheduleStore(schedules.data_root())
+    )
+    book.changed = lambda: schedules.ensure_agent(
+        book.store, schedules.installed_agent()
+    )
+    return book
 
 
 def _chat(model: str, prompt: str | None, *, thinking="on", mode="normal") -> None:
@@ -272,15 +303,68 @@ def _loop(runner: asyncio.Runner, session: ChatSession, prompt: str | None) -> N
             return
 
 
+def schedules_main(argv: list[str]) -> int:
+    """List scheduled tasks; `--run-due` runs due ones now, in this terminal."""
+    from vikram import schedules
+    from vikram.toolkit import task_list
+
+    parser = argparse.ArgumentParser(
+        prog="vikram schedules",
+        description="List the scheduled tasks that Vikram runs in the background. Ask Vikram in a chat to create, change, pause, or delete one, or use the app.",
+    )
+    parser.add_argument(
+        "--run-due",
+        action="store_true",
+        help="run tasks that are due (or asked to run now) in the foreground, then exit",
+    )
+    args = parser.parse_args(argv)
+    root = schedules.data_root()
+    store = schedules.ScheduleStore(root)
+    try:
+        if args.run_due:
+            with schedules.runner_lock(root) as lock:
+                if lock is None:
+                    sys.stderr.write("Another scheduled run is in progress.\n")
+                    return 1
+                count = asyncio.run(schedules.run_due(store))
+            print(f"Ran {count} scheduled {'task' if count == 1 else 'tasks'}.")
+            return 0
+        print(task_list(store.tasks()))
+        agent = schedules.installed_agent(root)
+        if agent is None:
+            print(
+                "\nBackground runs need the installed Vikram app; use --run-due here."
+            )
+        else:
+            loaded = schedules.agent_loaded()
+            print(
+                "\nBackground runs: "
+                + (
+                    "on"
+                    if loaded
+                    else (
+                        "off (no enabled tasks)"
+                        if not store.active()
+                        else "not running"
+                    )
+                )
+            )
+        return 0
+    finally:
+        store.close()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["update"]:
         from vikram.releases import update_main
 
         return update_main(argv[1:])
+    if argv[:1] == ["schedules"]:
+        return schedules_main(argv[1:])
     parser = argparse.ArgumentParser(
         description="Chat with local Ollama using the same model/tools as the app. Supported models automatically use Parallel web search, Python in an isolated VM, and clarifying questions when needed; /plan toggles plan mode and /exit ends interactive chat.",
-        epilog="Use `vikram update` to update the CLI and Mac app, or `vikram update --check` to check for a release. Use `vikram -- update` to send 'update' as a prompt.",
+        epilog="Use `vikram update` to update the CLI and Mac app, or `vikram update --check` to check for a release. `vikram schedules` lists scheduled tasks. Use `vikram -- update` to send 'update' as a prompt.",
     )
     parser.add_argument(
         "--version", action="version", version=f"Vikram {cli_version()}"
