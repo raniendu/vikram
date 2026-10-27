@@ -6,8 +6,9 @@ Vikram runs a single agent defined in this repository. Its instructions live in
 `vikram/agent.py`, and it sends model requests to your local Ollama server at
 `http://localhost:11434/v1`. Models that support tool calling can also run
 Python in an isolated local VM, ask you clarifying questions, in plan mode wait
-for your approval before they work, and use a private web browser that you can
-watch, stop, or take over.
+for your approval before they work, use a private web browser that you can
+watch, stop, or take over, and schedule prompts that run later on their own,
+even while the app is closed.
 
 ## Desktop app (Apple Silicon Mac)
 
@@ -228,6 +229,46 @@ see which actions ran and where the browser was left. Clicks and typing use
 script events, which a few sites ignore; take over for those. See the
 [design](docs/superpowers/specs/2026-10-21-agent-browser-design.md).
 
+## Scheduled tasks
+
+Ask in any chat, for example "every weekday at 8am, summarize the top tech
+news" or "remind me tomorrow at 3pm to call the dentist", and Vikram proposes a
+scheduled task: a name, a schedule, and the prompt each run will send. It is
+saved only after you approve it (a card in the app, a `y`/`n` prompt in the
+terminal; piped runs cannot approve). The model can also list, change, pause,
+resume, and delete tasks; pausing, resuming, and deleting need no approval.
+
+**Scheduled** in the app's sidebar lists every task with its schedule and next
+run. Create or edit one there, run it now, pause it, or delete it; open a task
+to see its run history, and open a run to read its answer, thinking, sources,
+and tool activity as a chat turn. **Continue in a chat** copies a finished run
+into a new chat so you can follow up. When Vikram is open, the list updates as
+runs finish. `vikram schedules` lists them in the terminal.
+
+Schedules use this Mac's local time: once (a date and time), every day, chosen
+weekdays, a day of the month (the last day in shorter months), or every N
+minutes (at least 15). Each run is a fresh conversation with the task's model:
+
+- **Unattended.** Nobody can answer, so questions are skipped and Vikram says
+  what it chose. Web search and the Python sandbox work as in a chat; the
+  browser is not used, and a run cannot create other tasks.
+- **Even when Vikram is closed.** The installed app adds one per-user
+  LaunchAgent, `dev.raniendu.vikram.scheduler`, while any task is enabled, and
+  removes it with the last one. Every minute it runs a tiny shell check that
+  starts Vikram's runtime only when a task is due, through the install's
+  `current` link, so updates need nothing else; it removes itself if Vikram is
+  uninstalled. Ollama must be running at the time of the run.
+- **Sleep.** A run missed while the Mac slept or was off runs once on wake if it
+  is less than 12 hours late, otherwise it is recorded as missed. Several
+  missed times never run more than once.
+- **Notifications.** A finished run posts a macOS notification with the task's
+  name only; the answer stays in Vikram.
+
+Tasks and the latest 50 runs per task live in `schedules.sqlite3` beside your
+chats. In a developer checkout no LaunchAgent is installed; run due tasks with
+`uv run vikram schedules --run-due`. See the
+[design](docs/superpowers/specs/2026-10-27-scheduled-tasks-design.md).
+
 ## Run the CLI
 
 The combined Mac installer bundles the CLI's Python runtime. For a developer
@@ -295,7 +336,8 @@ original Ollama ID to `--model`; requests and stored identities retain that ID.
 - `vikram/installation.py` and `releases.py`: shared installer and verified updates.
 - `vikram/bundle.py`: desktop, CLI, document-parser and installer runtime dispatch.
 - `vikram/conversation.py` and `context.py`: shared execution and conversation context.
-- `vikram/toolkit.py`: Python sandbox, clarifying questions, plan mode, and browser tools.
+- `vikram/toolkit.py`: Python sandbox, clarifying questions, plan mode, browser, and scheduled-task tools.
+- `vikram/schedules.py`: scheduled tasks and runs, the background runner, and its LaunchAgent.
 - `vikram/sandbox.py`: the per-reply Python microVM and its pinned image.
 - `vikram/browser.py`: the browser engine contract, page views, and the CLI's helper.
 - `vikram/interaction.py`: the question, plan-review, and approval contract interfaces implement.
@@ -317,9 +359,12 @@ flowchart LR
     Runner <--> Agent[Pydantic AI agent]
     Agent <--> Ollama[Local Ollama model]
     Runner <--> Parallel[Anonymous Parallel search tools]
-    Agent <--> Toolkit[Questions, plan approval, run_code, browser]
+    Agent <--> Toolkit[Questions, plan approval, run_code, browser, scheduled tasks]
     Toolkit <--> VM[Python microVM per reply]
     Toolkit <--> Browser[WebKit browser: app panel or hidden helper]
+    Toolkit <--> Tasks[(Scheduled tasks and runs)]
+    Launchd[LaunchAgent: due tasks, app closed] --> Runner
+    Sidecar <--> Tasks
 ```
 
 The desktop app and CLI share model/tool behavior. Evaluations explicitly use
