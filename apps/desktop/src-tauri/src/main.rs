@@ -30,6 +30,14 @@ const METHODS: &[&str] = &[
     "remove_image",
     "send",
     "respond",
+    "schedules",
+    "schedule",
+    "schedule_run",
+    "create_schedule",
+    "update_schedule",
+    "delete_schedule",
+    "run_schedule",
+    "open_run",
 ];
 
 #[tauri::command]

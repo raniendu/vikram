@@ -86,14 +86,16 @@ function ThinkingDisclosure({ attempt }: { attempt: Attempt }) {
     </div>
   );
 }
-function Answer({
+export function Answer({
   attempt,
   onRespond,
   onHandBack,
+  onOpenTask,
 }: {
   attempt: Attempt;
   onRespond?: Respond;
   onHandBack?: () => void;
+  onOpenTask?: (taskId: string) => void;
 }) {
   return (
     <div className={`answer ${attempt.unsaved ? "unsaved" : ""}`}>
@@ -113,6 +115,7 @@ function Answer({
         attempt={attempt}
         onRespond={onRespond}
         onHandBack={onHandBack}
+        onOpenTask={onOpenTask}
       />
       {attempt.content && (
         <div className="markdown">
@@ -248,12 +251,14 @@ export function Transcript({
   onRetry,
   onRespond,
   onHandBack,
+  onOpenTask,
 }: {
   chat: Chat;
   disabled: boolean;
   onRetry: () => void;
   onRespond?: Respond;
   onHandBack?: () => void;
+  onOpenTask?: (taskId: string) => void;
 }) {
   const end = useRef<HTMLDivElement>(null);
   const viewport = useRef<HTMLDivElement>(null);
@@ -304,7 +309,7 @@ export function Transcript({
                 i < message.attempts.length - 1 ? (
                   <details className="previous-attempt" key={attempt.id}>
                     <summary>Previous attempt · {attempt.status}</summary>
-                    <Answer attempt={attempt} />
+                    <Answer attempt={attempt} onOpenTask={onOpenTask} />
                   </details>
                 ) : (
                   <Answer
@@ -312,6 +317,7 @@ export function Transcript({
                     attempt={attempt}
                     onRespond={onRespond}
                     onHandBack={onHandBack}
+                    onOpenTask={onOpenTask}
                   />
                 ),
               )}

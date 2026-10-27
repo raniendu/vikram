@@ -44,8 +44,83 @@ export interface BrowserRecord {
   error: string | null;
   approval: { summary: string; reason: string } | null;
 }
+/** A scheduled task the model created, changed, or deleted in a reply. */
+export interface ScheduleRecord {
+  kind: "schedule";
+  id: string;
+  action: "create" | "update" | "pause" | "resume" | "delete";
+  status: string;
+  task_id: string | null;
+  name: string | null;
+  description: string | null;
+  prompt: string | null;
+  next_run: number | null;
+  error: string | null;
+}
 export type ActivityRecord =
-  QuestionRecord | PlanRecord | CodeRecord | BrowserRecord;
+  QuestionRecord | PlanRecord | CodeRecord | BrowserRecord | ScheduleRecord;
+export type Repeat = "once" | "daily" | "weekly" | "monthly" | "interval";
+export type Weekday = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
+export interface ScheduleTime {
+  repeat: Repeat;
+  time?: string;
+  date?: string;
+  days?: Weekday[];
+  day_of_month?: number;
+  every_minutes?: number;
+}
+export type RunStatus =
+  "running" | "complete" | "failed" | "stopped" | "interrupted" | "missed";
+export interface RunSummary {
+  id: string;
+  trigger: "schedule" | "catch_up" | "manual";
+  scheduled_for: number | null;
+  started: number;
+  finished: number | null;
+  status: RunStatus;
+  error: string | null;
+  model: string | null;
+  actual_model: string | null;
+  preview?: string;
+}
+export interface ScheduledTask {
+  id: string;
+  name: string;
+  prompt: string;
+  schedule: ScheduleTime;
+  description: string;
+  model: string | null;
+  thinking: Thinking;
+  enabled: boolean;
+  origin: "app" | "chat" | "cli";
+  next_run: number | null;
+  run_requested: boolean;
+  state: "scheduled" | "paused" | "done";
+  created: number;
+  updated: number;
+  last_run?: { id: string; status: RunStatus; started: number } | null;
+}
+export interface TaskDetail extends ScheduledTask {
+  runs: RunSummary[];
+}
+export interface TaskRun extends RunSummary {
+  task_id: string;
+  prompt: string;
+  content: string;
+  reasoning: string;
+  activity: ActivityRecord[];
+  sources: Source[];
+  searches: Search[];
+}
+/** Whether this Mac runs tasks in the background (the installed app only). */
+export type Background = "on" | "off" | "unavailable" | "failed";
+export interface TaskFields {
+  name?: string;
+  prompt?: string;
+  schedule?: ScheduleTime;
+  model?: string;
+  enabled?: boolean;
+}
 /** The browser panel's page, reported by the app. */
 export interface BrowserPage {
   open: boolean;
