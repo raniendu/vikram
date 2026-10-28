@@ -9,12 +9,15 @@ from pydantic_ai.models.ollama import OllamaModel
 from pydantic_ai.providers.ollama import OllamaProvider
 
 from vikram.toolkit import (
+    SCHEDULED_RUN_PROMPT,
     TEXT_PLAN_PROMPT,
     Mode,
     Reply,
     has_browser,
+    has_tasks,
     mode_of,
     plan_prompt,
+    scheduled_of,
     toolkit_capabilities,
     toolkit_prompt,
     toolkit_tools,
@@ -50,11 +53,14 @@ def agent_prompt(
     sandbox: bool = True,
     mode: Mode = "normal",
     browser: bool = False,
+    tasks: bool = False,
+    scheduled: str | None = None,
 ) -> str:
     """Instructions for one combination of web tools, local tools, and mode.
 
-    `sandbox` and `browser` matter only with the toolkit: whether this host can
-    run `run_code`, and whether this reply has a browser.
+    `sandbox`, `browser`, and `tasks` matter only with the toolkit: whether this
+    host can run `run_code`, and whether this reply has a browser and the
+    scheduled-task tools. `scheduled` names the task of an unattended run.
     """
     browser = toolkit and browser
     if toolkit:
@@ -67,9 +73,11 @@ def agent_prompt(
                 else "You have no live internet access. "
             )
         )
-        prompt += toolkit_prompt(sandbox, browser)
+        prompt += toolkit_prompt(sandbox, browser, tasks, scheduled)
     else:
         prompt = WEB_PROMPT if web else SYSTEM_PROMPT
+        if scheduled:
+            prompt += "\n\n" + SCHEDULED_RUN_PROMPT.format(task=scheduled)
     if mode == "plan":
         prompt += "\n\n" + (
             plan_prompt(sandbox, browser) if toolkit else TEXT_PLAN_PROMPT
@@ -103,8 +111,9 @@ def build_agent(
 ) -> Agent[Reply, str]:
     """Build the repository's agent using a model installed in local Ollama.
 
-    `toolkit` adds questions, plan mode, and the browser tools, which are offered
-    only to replies with a browser; `sandbox` adds `run_code`. Run it with
+    `toolkit` adds questions, plan mode, and the browser and scheduled-task
+    tools, which are offered only to replies with a browser or tasks; `sandbox`
+    adds `run_code`. Run it with
     `deps=Reply(...)`, which carries the reply's mode, person, sandbox, browser,
     and activity.
     """
@@ -122,6 +131,8 @@ def build_agent(
                 sandbox=sandbox,
                 mode=mode_of(ctx),
                 browser=has_browser(ctx),
+                tasks=has_tasks(ctx),
+                scheduled=scheduled_of(ctx),
             )
             + "\n\n"
             + system_time_instructions()

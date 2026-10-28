@@ -26,9 +26,14 @@ def emit(payload: dict) -> None:
 
 
 async def serve(root: Path) -> None:
+    from vikram.schedules import installed_agent
+
     store = Store(root)
-    # The app hosts the browser panel that this runtime drives.
-    runtime = Runtime(store, emit, browser=True)
+    # The app hosts the browser panel that this runtime drives, and its replies
+    # may schedule tasks, which the installed app runs in the background.
+    runtime = Runtime(
+        store, emit, browser=True, tasks=True, agent=installed_agent(root)
+    )
     imports = set()
 
     async def respond(raw):
@@ -99,6 +104,7 @@ async def serve(root: Path) -> None:
             task.cancel()
         await asyncio.gather(*imports, return_exceptions=True)
         await runtime.stop()
+        await runtime.close()
         store.close()
 
 

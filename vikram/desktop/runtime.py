@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import contextlib
 import json
 import sqlite3
 from collections.abc import Callable
@@ -18,6 +19,14 @@ from vikram.interaction import (
     check_response,
 )
 from vikram.models import prepare_model
+from vikram.schedules import (
+    Agent,
+    Schedule,
+    ScheduleStore,
+    TaskBook,
+    ensure_agent,
+    start_runner,
+)
 
 from .history import inference_messages
 from .inference import stream_reply
@@ -44,7 +53,8 @@ class DesktopInteraction:
         return await self.runtime.wait_for_person(self.route, "plan", request)
 
     async def approve(self, request, /):
-        return await self.runtime.wait_for_person(self.route, "browser", request)
+        # A browser action, or a scheduled task the model wants to save.
+        return await self.runtime.wait_for_person(self.route, request.kind, request)
 
 
 CLOSED = {
@@ -125,10 +135,17 @@ class DesktopBrowser:
 
 
 class Runtime:
-    """`browser` is true when the app hosts the browser panel (the real app)."""
+    """`browser` is true when the app hosts the browser panel (the real app);
+    `tasks` lets its replies manage scheduled tasks (the real app)."""
 
     def __init__(
-        self, store: Store, emit: Callable, streamer=stream_reply, browser=False
+        self,
+        store: Store,
+        emit: Callable,
+        streamer=stream_reply,
+        browser=False,
+        tasks=False,
+        agent: Agent | None = None,
     ):
         self.store, self.emit, self.streamer = store, emit, streamer
         self.catalog = ModelCatalog()
@@ -139,9 +156,51 @@ class Runtime:
         self.starting = False
         self.waiting: dict[str, tuple] = {}
         self.browser = DesktopBrowser(self) if browser else None
+        # Scheduled tasks live beside the chats, in their own file, because
+        # background runs write to it while this process owns the chats.
+        self._schedules: ScheduleStore | None = None
+        self.tasks, self.agent = tasks, agent
+        self.background = "unavailable"
+        self.watcher: asyncio.Task | None = None
+        self.start_runner = start_runner
 
     def event(self, event: str, **payload) -> None:
         self.emit({"v": 1, "event": event, **payload})
+
+    @property
+    def schedules(self) -> ScheduleStore:
+        if self._schedules is None:
+            self._schedules = ScheduleStore(self.store.root)
+        return self._schedules
+
+    def tasks_changed(self) -> None:
+        """After a change here: match the agent to the tasks, tell the window."""
+        self.background = ensure_agent(self.schedules, self.agent)
+        self.event("schedules")
+
+    async def watch_schedules(self, interval: float = 2.0) -> None:
+        """Tell the window when a background run or the CLI changes tasks."""
+        seen = self.schedules.data_version()
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                version = self.schedules.data_version()
+            except sqlite3.Error:
+                continue
+            if version != seen:
+                seen = version
+                self.event("schedules")
+
+    def schedule_list(self) -> dict:
+        return {"tasks": self.schedules.tasks(), "background": self.background}
+
+    async def close(self) -> None:
+        if self.watcher is not None:
+            self.watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.watcher
+        if self._schedules is not None:
+            self._schedules.close()
 
     async def refresh(self) -> dict:
         try:
@@ -214,7 +273,9 @@ class Runtime:
                 "request_id": request_id,
             }
             self.stopping = False
-            self.task = asyncio.create_task(self._generate(attempt, selected, thinking))
+            self.task = asyncio.create_task(
+                self._generate(attempt, selected, thinking, setting)
+            )
             return {
                 "attempt": attempt,
                 "chat": self.store.chat(chat_id),
@@ -224,7 +285,9 @@ class Runtime:
         finally:
             self.starting = False
 
-    async def _generate(self, attempt: dict, model: dict, thinking) -> None:
+    async def _generate(
+        self, attempt: dict, model: dict, thinking, setting=None
+    ) -> None:
         route = {
             "chat_id": attempt["chat_id"],
             "attempt_id": attempt["id"],
@@ -260,6 +323,17 @@ class Runtime:
                 interaction=DesktopInteraction(self, route),
                 browser=self.browser,
                 vision=bool(model.get("vision")),
+                tasks=(
+                    TaskBook(
+                        store=self.schedules,
+                        model=model["name"],
+                        thinking=setting,
+                        origin="chat",
+                        changed=self.tasks_changed,
+                    )
+                    if self.tasks
+                    else None
+                ),
             )
             async for chunk in iterator:
                 if self.stopping or self.active != route:
@@ -414,9 +488,13 @@ class Runtime:
         ):
             raise ValueError("This reply is no longer waiting for that answer.")
         _, kind, request, future = entry
-        if kind == "browser":
+        if kind in ("browser", "schedule"):
             if p.get("decision") not in ("approve", "dismiss"):
-                raise ValueError("Allow or decline the browser action.")
+                raise ValueError(
+                    "Allow or decline the browser action."
+                    if kind == "browser"
+                    else "Save or decline the scheduled task."
+                )
             future.set_result(p["decision"] == "approve")
             return
         if kind == "question":
@@ -486,6 +564,13 @@ class Runtime:
                     self.event("idle", **route)
 
     async def command(self, method: str, p: dict, request_id: str):
+        if method.endswith("_schedule") or method in {
+            "schedules",
+            "schedule",
+            "schedule_run",
+            "open_run",
+        }:
+            return await self.schedule_command(method, p)
         if method == "hello":
             return {"protocol": 1, **self.snapshot()}
         if method == "refresh":
@@ -567,3 +652,62 @@ class Runtime:
         else:
             raise ValueError("Unknown command.")
         return None
+
+    async def schedule_command(self, method: str, p: dict):
+        """The window's scheduled-task commands; runs happen in the background."""
+        tasks = self.schedules
+        if self.watcher is None:
+            # The window asks for the task list when it opens.
+            self.watcher = asyncio.create_task(self.watch_schedules())
+            # Keep an existing agent current, e.g. after an update.
+            self.background = ensure_agent(tasks, self.agent)
+        if method == "schedules":
+            return self.schedule_list()
+        if method == "schedule":
+            return tasks.task(p["task_id"])
+        if method == "schedule_run":
+            return tasks.run(p["run_id"])
+        if method == "open_run":
+            run = tasks.run(p["run_id"])
+            if run["status"] == "running":
+                raise ValueError("Wait for this run to finish.")
+            task = tasks.task(run["task_id"])
+            chat = self.store.import_run(
+                task["name"],
+                run["prompt"],
+                run,
+                model=run["actual_model"] or run["model"] or task["model"],
+            )
+            return chat
+        if method in {"create_schedule", "update_schedule"}:
+            fields = dict(p.get("fields", p))
+            fields.pop("task_id", None)
+            if "schedule" in fields:
+                fields["schedule"] = Schedule.model_validate(fields["schedule"])
+            if fields.get("model") is not None and not any(
+                m["name"] == fields["model"] and m["available"] for m in self.models
+            ):
+                raise ValueError("Choose an available local model.")
+            if method == "create_schedule":
+                enabled = fields.pop("enabled", True)
+                result = tasks.create(origin="app", **fields)
+                if not enabled:
+                    result = tasks.update(result["id"], enabled=False)
+            else:
+                result = tasks.update(p["task_id"], **fields)
+        elif method == "delete_schedule":
+            tasks.delete(p["task_id"])
+            result = None
+        elif method == "run_schedule":
+            result = tasks.request_run(p["task_id"])
+            try:
+                self.start_runner()
+            except OSError:
+                raise ValueError(
+                    "The background runner could not start. The run will start "
+                    "within a minute if background runs are on."
+                ) from None
+        else:
+            raise ValueError("Unknown command.")
+        self.tasks_changed()
+        return result

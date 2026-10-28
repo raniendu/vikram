@@ -2,6 +2,7 @@ import { useId, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  CalendarClock,
   Globe,
   ListChecks,
   MessageCircleQuestionMark,
@@ -17,6 +18,7 @@ import type {
   PlanRecord,
   QuestionRecord,
   Reply,
+  ScheduleRecord,
 } from "../types";
 import { CopyButton } from "./CopyButton";
 
@@ -408,6 +410,106 @@ function BrowserApproval({
   );
 }
 
+const TASK_DONE: Record<string, string> = {
+  create: "Scheduled",
+  update: "Changed",
+  pause: "Paused",
+  resume: "Resumed",
+  delete: "Deleted",
+};
+const TASK_STATUS: Record<string, string> = {
+  denied: "not saved",
+  timed_out: "not approved in time",
+  failed: "failed",
+  stopped: "stopped",
+  interrupted: "interrupted",
+  running: "saving",
+};
+
+function ScheduleApproval({
+  record,
+  onReply,
+}: {
+  record: ScheduleRecord;
+  onReply: (reply: Reply) => Promise<boolean>;
+}) {
+  const [sending, submit] = useSending(onReply);
+  return (
+    <section
+      className="tool-card waiting"
+      aria-label="Scheduled task for your approval"
+    >
+      <div className="tool-heading">
+        <CalendarClock size={14} />
+        {record.action === "create"
+          ? "Save this scheduled task?"
+          : "Save these changes to the task?"}
+      </div>
+      <p className="approval-summary">
+        {record.name} · {record.description}
+      </p>
+      {record.prompt && <p className="task-prompt">{record.prompt}</p>}
+      <p className="tool-note">
+        Vikram will run this on its own, even when the app is closed.
+      </p>
+      <div className="tool-actions">
+        <button
+          className="primary"
+          disabled={sending}
+          onClick={() => void submit({ decision: "approve" })}
+        >
+          Save task
+        </button>
+        <button
+          className="secondary"
+          disabled={sending}
+          onClick={() => void submit({ decision: "dismiss" })}
+        >
+          Don’t save
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function ScheduleSummary({
+  record,
+  onOpenTask,
+}: {
+  record: ScheduleRecord;
+  onOpenTask?: (taskId: string) => void;
+}) {
+  const done = record.status === "complete";
+  const label = done
+    ? (TASK_DONE[record.action] ?? "Changed")
+    : record.action === "create"
+      ? "Scheduled task"
+      : (TASK_DONE[record.action] ?? "Task");
+  return (
+    <p className="tool-summary schedule-summary">
+      <CalendarClock size={13} />
+      <span>
+        {label} “{record.name ?? "task"}”
+        {record.description &&
+          (record.action === "create" || record.action === "update") &&
+          ` · ${record.description}`}
+        {!done && (
+          <strong> · {TASK_STATUS[record.status] ?? record.status}</strong>
+        )}
+        {record.error && !done && <small> {record.error}</small>}
+      </span>
+      {done && record.task_id && record.action !== "delete" && onOpenTask && (
+        <button
+          className="link-button"
+          onClick={() => onOpenTask(record.task_id!)}
+        >
+          Open
+        </button>
+      )}
+    </p>
+  );
+}
+
 function BrowserPaused({ onHandBack }: { onHandBack?: () => void }) {
   return (
     <section className="tool-card waiting" aria-label="Browser in your control">
@@ -474,10 +576,12 @@ export function Activity({
   attempt,
   onRespond,
   onHandBack,
+  onOpenTask,
 }: {
   attempt: Attempt;
   onRespond?: Respond;
   onHandBack?: () => void;
+  onOpenTask?: (taskId: string) => void;
 }) {
   if (!attempt.activity?.length) return null;
   const running = attempt.status === "running" && !attempt.unsaved;
@@ -534,6 +638,12 @@ export function Activity({
         <PlanCard key={key} record={record} live={live} onReply={onReply} />
       );
     if (record.kind === "code") return <CodeRun key={key} record={record} />;
+    if (record.kind === "schedule")
+      return live ? (
+        <ScheduleApproval key={key} record={record} onReply={onReply} />
+      ) : (
+        <ScheduleSummary key={key} record={record} onOpenTask={onOpenTask} />
+      );
     return null;
   }
 }

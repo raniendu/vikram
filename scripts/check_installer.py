@@ -2,12 +2,14 @@
 
 import argparse
 import os
+import plistlib
 import pty
 import select
 import subprocess
 import tempfile
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from scripts.third_party import check_notices
 from vikram.installation import (
@@ -20,6 +22,7 @@ from vikram.installation import (
     verify_bundle,
 )
 from vikram.releases import extract_release
+from vikram.schedules import Schedule, ScheduleStore, agent_for, ensure_agent
 
 
 def check_terminal(cli: Path, env: dict[str, str]) -> None:
@@ -66,6 +69,59 @@ def check_terminal(cli: Path, env: dict[str, str]) -> None:
             os.close(slave)
 
 
+def check_scheduler(layout: Layout, root: Path, env: dict[str, str]) -> None:
+    """Run a due task through the agent's own command, as launchd would.
+
+    The disposable chat library and a model that is not installed keep it from
+    calling a real model; the run must still finish with a safe failure. The
+    agent is written for the disposable account and never loaded into launchd.
+    """
+    library = root / "Scheduled library"
+    tasks = ScheduleStore(library)
+    try:
+        task = tasks.create(
+            name="Installer check",
+            prompt="Say hello.",
+            schedule=Schedule(repeat="daily", time="08:00"),
+            model="vikram-installer-check:0",
+        )
+        tasks.request_run(task["id"])
+        agent = agent_for(layout.home, library)
+        assert ensure_agent(tasks, agent, run=_launchctl) == "on"
+        definition = plistlib.loads(agent.plist.read_bytes())
+        assert definition["StartInterval"] == 60
+        # launchd's minimal environment, plus the disposable library.
+        subprocess.run(
+            definition["ProgramArguments"],
+            capture_output=True,
+            check=True,
+            timeout=180,
+            env={
+                "HOME": str(layout.home),
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                "VIKRAM_CHAT_DATA_DIR": str(library),
+                "PYINSTALLER_RESET_ENVIRONMENT": "1",
+            },
+        )
+        [run] = tasks.task(task["id"])["runs"]
+        assert run["status"] == "failed" and run["error"], run
+        assert "Traceback" not in run["error"]
+        # "Run now" is done; the daily schedule's next time is due later.
+        due = int((library / "scheduler-next-due").read_text())
+        assert due > time.time(), due
+        # Nothing due: the shell exits without starting Python.
+        started = time.monotonic()
+        subprocess.run(definition["ProgramArguments"], check=True, timeout=10, env=env)
+        assert time.monotonic() - started < 2
+    finally:
+        tasks.close()
+
+
+def _launchctl(*args: str):
+    """Stands in for launchctl: nothing is loaded, and loading succeeds."""
+    return SimpleNamespace(returncode=0 if args[0] == "bootstrap" else 113)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive", type=Path)
@@ -85,7 +141,14 @@ def main() -> None:
         version = install_bundle(source, layout)
         assert installed_version(layout) == version == bundle_version(layout.app)
         assert check_notices(layout.app, version) == sources
-        env = {**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"}
+        # A library path that must stay absent: the CLI opens chats or tasks
+        # only when it needs them.
+        unused = root / "Unused library"
+        env = {
+            **os.environ,
+            "PYINSTALLER_RESET_ENVIRONMENT": "1",
+            "VIKRAM_CHAT_DATA_DIR": str(unused),
+        }
         for arguments in (["--version"], ["--help"], ["update", "--help"]):
             result = subprocess.run(
                 [str(layout.cli), *arguments],
@@ -107,15 +170,24 @@ def main() -> None:
             )
         previous = layout.current.resolve()
         check_terminal(layout.cli, env)
+        assert not unused.exists()
+        check_scheduler(layout, root, env)
         install_bundle(source, layout)
         assert previous != layout.current.resolve()
+        # The reinstall kept the disposable agent, still through `current`.
+        agent = plistlib.loads(
+            (
+                home / "Library/LaunchAgents/dev.raniendu.vikram.scheduler.plist"
+            ).read_bytes()
+        )
+        assert str(layout.current) in agent["ProgramArguments"][5]
         assert (previous / "Vikram.app").is_dir()
         assert not (home / "Library/Application Support/dev.raniendu.vikram").exists()
         print(
             f"Installed and reinstalled Vikram {version} in a disposable account directory."
         )
         print(
-            "CLI startup/version/update help, interactive terminal, Python sandbox, browser, and desktop service startup passed. Owner installation and chats were not touched."
+            "CLI startup/version/update help, interactive terminal, Python sandbox, browser, scheduled-task runner (agent command, as launchd runs it), and desktop service startup passed. Owner installation, chats, and launchd were not touched."
         )
         files = sum(len(component["files"]) for component in sources["components"])
         print(

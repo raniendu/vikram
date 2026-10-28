@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  CalendarClock,
   ChevronDown,
   ChevronRight,
   Folder as FolderIcon,
@@ -21,12 +22,21 @@ export function Sidebar({
   onFolder,
   onClose,
   onDeleteChat,
+  scheduled,
+  taskCount,
+  onScheduled,
+  onChat,
 }: {
   app: ChatController;
   onSettings: () => void;
   onFolder: (folder?: Folder) => void;
   onClose: () => void;
   onDeleteChat: (chat: ChatSummary) => void;
+  /** Whether the main pane shows scheduled tasks instead of a chat. */
+  scheduled?: boolean;
+  taskCount?: number;
+  onScheduled?: () => void;
+  onChat?: () => void;
 }) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "unfiled">("all");
@@ -38,11 +48,12 @@ export function Sidebar({
     chats.map((chat) => (
       <div
         key={chat.id}
-        className={`chat-row ${app.selected === chat.id ? "selected" : ""}`}
+        className={`chat-row ${!scheduled && app.selected === chat.id ? "selected" : ""}`}
       >
         <button
           className="chat-open"
           onClick={() => {
+            onChat?.();
             void app.select(chat.id);
             if (innerWidth < 900) onClose();
           }}
@@ -89,7 +100,10 @@ export function Sidebar({
       </div>
       <button
         className="new-chat"
-        onClick={() => void app.newChat()}
+        onClick={() => {
+          onChat?.();
+          void app.newChat();
+        }}
         disabled={app.offline || app.loading}
       >
         <Plus size={16} />
@@ -106,19 +120,38 @@ export function Sidebar({
       </div>
       <nav className="scope-nav" aria-label="Chat collections">
         <button
-          className={filter === "all" ? "current" : ""}
-          onClick={() => setFilter("all")}
+          className={!scheduled && filter === "all" ? "current" : ""}
+          onClick={() => {
+            onChat?.();
+            setFilter("all");
+          }}
         >
           <MessageSquare size={16} />
           All chats<span>{app.chats.length}</span>
         </button>
         <button
-          className={filter === "unfiled" ? "current" : ""}
-          onClick={() => setFilter("unfiled")}
+          className={!scheduled && filter === "unfiled" ? "current" : ""}
+          onClick={() => {
+            onChat?.();
+            setFilter("unfiled");
+          }}
         >
           <Inbox size={16} />
           Unfiled<span>{app.chats.filter((c) => !c.folder_id).length}</span>
         </button>
+        {onScheduled && (
+          <button
+            className={scheduled ? "current" : ""}
+            aria-current={scheduled ? "page" : undefined}
+            onClick={() => {
+              onScheduled();
+              if (innerWidth < 900) onClose();
+            }}
+          >
+            <CalendarClock size={16} />
+            Scheduled<span>{taskCount ?? 0}</span>
+          </button>
+        )}
       </nav>
       <div className="sidebar-section">
         <span>

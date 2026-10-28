@@ -142,3 +142,15 @@ it("defaults thinking to on and offers off only as an explicit choice", () => {
       .textContent,
   ).toBe("On");
 });
+
+it("switches between a chat and the scheduled tasks", () => {
+  render(<App />);
+  fireEvent.click(screen.getByRole("button", { name: /Scheduled/ }));
+  expect(
+    screen.getByRole("heading", { name: "Scheduled tasks" }),
+  ).toBeTruthy();
+  expect(screen.getByText("Nothing scheduled yet.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Old chat" }));
+  expect(state.app.select).toHaveBeenCalledWith("b");
+  expect(screen.queryByRole("heading", { name: "Scheduled tasks" })).toBeNull();
+});

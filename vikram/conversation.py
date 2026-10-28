@@ -24,6 +24,7 @@ from vikram.errors import ReplyError, reply_error
 from vikram.interaction import Interaction, Unattended
 from vikram.ollama import thinking_request
 from vikram.sandbox import Sandbox, host_sandbox
+from vikram.schedules import TaskBook
 from vikram.toolkit import REQUEST_LIMIT, Mode, Reply
 from vikram.web import WebSession
 
@@ -70,6 +71,8 @@ async def stream_reply(
     sandbox: Callable[[], Sandbox | None] | None = None,
     browser: BrowserEngine | None = None,
     vision: bool = False,
+    tasks: TaskBook | None = None,
+    scheduled: str | None = None,
 ) -> AsyncIterator[dict]:
     """Stream one reply. Tool-capable models (web "auto") also get the toolkit.
 
@@ -79,6 +82,8 @@ async def stream_reply(
     this reply's code sandbox, by default a new microVM when this host can run
     one; the reply deletes it when it ends. `browser` is the interface's browser
     engine, which outlives the reply; `vision` adds screenshots to its pages.
+    `tasks` lets the model manage scheduled tasks. `scheduled` marks an
+    unattended scheduled run of that task: no questions, browser, or task tools.
     """
     queue = asyncio.Queue()
     reported, parts = {}, {}
@@ -121,8 +126,10 @@ async def stream_reply(
         interaction=interaction or Unattended(),
         notify=lambda phase: send(phase=phase),
         # The browser needs tool calling, like the rest of the toolkit.
-        browser=browser if web == "auto" else None,
+        browser=browser if web == "auto" and not scheduled else None,
         vision=vision,
+        tasks=tasks if web == "auto" and not scheduled else None,
+        scheduled=scheduled,
     )
 
     async def observe(response):

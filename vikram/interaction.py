@@ -75,17 +75,20 @@ class PlanReview(BaseModel):
 
 @dataclass(frozen=True, kw_only=True)
 class ActionRequest:
-    """A browser action that waits for the person's approval before it runs.
+    """An action that waits for the person's approval before it runs.
 
     `id` is the tool call ID, so a UI can match its reply. `summary` says what
     would happen ("Click “Place order” on shop.example") and `reason` why it
-    needs approval ("It looks like it buys or pays for something.").
+    needs approval ("It looks like it buys or pays for something."). `kind` is
+    "browser" for a browser action, or "schedule" for saving a scheduled task
+    (then `url` is empty and `reason` holds the task's prompt).
     """
 
     id: str
     summary: str
     reason: str
     url: str
+    kind: Literal["browser", "schedule"] = "browser"
 
 
 class Interaction(Protocol):
@@ -102,17 +105,19 @@ class Interaction(Protocol):
 
 @runtime_checkable
 class Approver(Protocol):
-    """An interaction that can ask the person to allow one browser action.
+    """An interaction that can ask the person to allow one action.
 
     Without it, every action that needs approval is declined: evaluations, piped
-    runs, and tests never approve a form submission, sign-in, or purchase.
+    runs, and tests never approve a form submission, sign-in, purchase, or a
+    new scheduled task.
     """
 
     async def approve(self, request: ActionRequest, /) -> bool: ...
 
 
 class Unattended:
-    """Nobody can answer: decline questions, plans, and browser actions."""
+    """Nobody can answer: decline questions, plans, and approvals. Scheduled
+    runs use it."""
 
     async def ask(self, request: AskUserRequest, /) -> AskUserResponse:
         return AskUserResponse(cancelled=True)

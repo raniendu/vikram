@@ -55,6 +55,17 @@ and one-time-code fields, blocked downloads, uploads, pop-ups, and private or
 local network addresses, and the Tauri capability that excludes the panel.
 Page content is untrusted data. Do not add another browser engine, bundle
 Chromium, or give the sandbox VM network access without owner direction.
+The owner requested scheduled tasks that run while the app is closed and that
+the model can create; the design and the owner's choices are in
+`docs/superpowers/specs/2026-10-27-scheduled-tasks-design.md`. Keep them in the
+shared toolkit with CLI/desktop parity. Model-created or edited tasks wait for
+the person's approval (pause, resume, and delete do not). Runs are unattended:
+questions declined, no browser, no task tools, web search and the sandbox as
+in chat. One per-user LaunchAgent, present only while an enabled task exists,
+starts the installed runtime through `current` only when a task is due; it
+must never run from a development checkout, a test library, or a disposable
+install's home, and updates and uninstalls must not leave a stale agent.
+Notifications name the task only. Never log prompts or answers from runs.
 Evaluations must explicitly use web Off; tool-capable models keep the local
 toolkit with a scripted user, and the browser case uses an offline scripted
 site. Do not revive the discarded software factory or add other agents,
@@ -70,6 +81,9 @@ unrelated tools, hosted inference, or public server surfaces.
 - `vikram/toolkit.py`, `interaction.py`: sandbox, questions, plan mode, browser
   tools, and the answer/review/approval contract each interface implements.
 - `vikram/sandbox.py`: the per-reply Python microVM, its pinned image, and cleanup.
+- `vikram/schedules.py`: scheduled tasks and runs (`schedules.sqlite3` beside the
+  chats), schedule parsing and repair, the unattended runner
+  (`vikram-sidecar --run-schedules`), notifications, and the LaunchAgent.
 - `vikram/browser.py`: the browser engine contract, page views, argument repair,
   and the CLI's hidden helper process.
 - `apps/desktop/src-tauri/src/browser.rs`, `browser.js`: the WebKit browser
@@ -119,6 +133,8 @@ older local state, including historical cloud-judge records.
 - `uv run vikram --model MODEL_NAME "Hello"`: use another local Ollama model.
 - `uv run vikram --plan "Task"`: start in plan mode (`/plan` toggles it in chat).
 - `uv run vikram --help`: check CLI startup without calling Ollama.
+- `uv run vikram schedules`: list scheduled tasks; `--run-due` runs due ones
+  now in a checkout, which installs no LaunchAgent.
 - `uv run vikram-eval run`: benchmark the twelve cases (eight starter, four
   tool cases), five attempts each with thinking on. Add `--thinking all` to
   sweep every level Ollama advertises; repeat `--model` for several models.

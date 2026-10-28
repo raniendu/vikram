@@ -1672,3 +1672,187 @@ dialog select {
     min-width: 300px;
   }
 }
+
+/* Scheduled tasks: a list, one task with its runs, and one run as a turn. */
+.main-pane[hidden] {
+  display: none;
+}
+.schedules-header .header-icon {
+  color: var(--accent);
+  flex: none;
+}
+.schedules-header h1.chat-title {
+  margin: 0;
+}
+.schedules-note {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+  margin: 0 0 20px;
+}
+.schedules-empty {
+  text-align: left;
+  max-width: none;
+}
+.schedules-empty h2 {
+  font-size: 18px;
+  font-weight: 500;
+  margin: 8px 0;
+}
+.schedules-empty p {
+  color: var(--muted);
+  line-height: 1.8;
+}
+.task-list,
+.run-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.task-row,
+.run-row {
+  width: 100%;
+  display: grid;
+  gap: 3px 14px;
+  text-align: left;
+  padding: 13px 15px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 13px;
+}
+.task-row:not(:disabled):hover,
+.run-row:not(:disabled):hover {
+  border-color: var(--accent);
+}
+.task-name {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.task-when,
+.task-state,
+.run-trigger,
+.run-preview {
+  color: var(--muted);
+  font-size: 12px;
+}
+.task-state.paused,
+.task-state.done {
+  color: var(--muted2);
+}
+.task-view .task-when {
+  margin: 0 0 18px;
+}
+.task-actions {
+  margin: 4px 0 30px;
+}
+.task-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.runs-heading {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--muted2);
+  margin: 0 0 12px;
+}
+.run-row {
+  grid-template-columns: 110px 1fr auto;
+  align-items: baseline;
+}
+.run-preview {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.run-preview:empty {
+  display: none;
+}
+.run-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+}
+.run-status.failed,
+.run-status.interrupted {
+  color: var(--danger);
+}
+.run-status.missed,
+.run-status.stopped {
+  color: var(--muted2);
+}
+.task-form textarea {
+  width: 100%;
+  font-size: 13px;
+  resize: vertical;
+}
+.task-form .field-label {
+  margin-top: 16px;
+}
+.task-form .field-label:first-child {
+  margin-top: 0;
+}
+.task-form .tool-note {
+  line-height: 1.7;
+  margin-top: 18px;
+}
+.day-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.day-picker button {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 5px 9px;
+  font-size: 12px;
+}
+.day-picker button.chosen {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--selection);
+}
+.task-time {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+}
+.task-time > div {
+  flex: 1;
+}
+.interval-input {
+  display: flex;
+  gap: 8px;
+}
+.task-prompt {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 6px 0;
+  padding: 8px 10px;
+  background: var(--bg);
+  border-radius: 3px;
+}
+.schedule-summary {
+  font-size: 12px;
+  color: var(--muted);
+}
+.schedule-summary small {
+  color: var(--muted2);
+}
+.link-button {
+  margin-left: auto;
+  color: var(--accent);
+  font-size: 12px;
+  padding: 0 4px;
+}
+.link-button:hover {
+  text-decoration: underline;
+}

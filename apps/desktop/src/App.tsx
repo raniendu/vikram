@@ -16,6 +16,8 @@ import { Dialog } from "./components/Dialog";
 import { Transcript } from "./components/Transcript";
 import { Composer } from "./components/Composer";
 import { BrowserPanel } from "./components/BrowserPanel";
+import { Schedules } from "./components/Schedules";
+import { useSchedules } from "./useSchedules";
 import { useBrowser } from "./useBrowser";
 import { desktop, native, onNative } from "./bridge";
 import { formatModelName } from "./modelNames";
@@ -26,6 +28,10 @@ import { version } from "../package.json";
 export default function App() {
   const app = useChats();
   const browser = useBrowser();
+  const schedules = useSchedules();
+  // The main pane shows a chat, or the scheduled tasks.
+  const [view, setView] = useState<"chat" | "schedules">("chat");
+  const [taskDialog, setTaskDialog] = useState(false);
   const current = useRef(app);
   current.current = app;
   const [sidebar, setSidebar] = useState(true);
@@ -113,7 +119,10 @@ export default function App() {
       if (!e.metaKey) return;
       if (e.key.toLowerCase() === "n" && !modal) {
         e.preventDefault();
-        if (!app.offline) void app.newChat();
+        if (!app.offline) {
+          setView("chat");
+          void app.newChat();
+        }
       }
       if (e.key.toLowerCase() === "b" && !modal) {
         e.preventDefault();
@@ -163,6 +172,13 @@ export default function App() {
           onFolder={editFolder}
           onClose={() => setSidebar(false)}
           onDeleteChat={confirmDelete}
+          scheduled={view === "schedules"}
+          taskCount={schedules.tasks.length}
+          onScheduled={() => {
+            setView("schedules");
+            void schedules.openTask(null);
+          }}
+          onChat={() => setView("chat")}
         />
       )}
       {sidebar && (
@@ -172,7 +188,38 @@ export default function App() {
           onClick={() => setSidebar(false)}
         />
       )}
-      <main className="main-pane">
+      {view === "schedules" && (
+        <main className="main-pane">
+          <Schedules
+            schedules={schedules}
+            models={app.models}
+            defaultModel={
+              app.chat?.model ??
+              (typeof app.preferences.last_model === "string"
+                ? app.preferences.last_model
+                : null)
+            }
+            disabled={app.offline}
+            onDialog={setTaskDialog}
+            onOpenChat={(id) => {
+              setView("chat");
+              void app.select(id);
+            }}
+            sidebarToggle={
+              <button
+                className="icon-button sidebar-toggle"
+                aria-label={sidebar ? "Hide sidebar" : "Show sidebar"}
+                title="Toggle sidebar (⌘B)"
+                onClick={toggleSidebar}
+              >
+                <PanelLeft size={19} />
+              </button>
+            }
+          />
+        </main>
+      )}
+      {/* Hidden, not removed, so the chat keeps its scroll and state. */}
+      <main className="main-pane" hidden={view === "schedules"}>
         <header className="conversation-header">
           <button
             className="icon-button sidebar-toggle"
@@ -382,6 +429,10 @@ export default function App() {
                 onRetry={() => void app.send(true)}
                 onRespond={app.respond}
                 onHandBack={() => void app.controlBrowser("agent")}
+                onOpenTask={(id) => {
+                  setView("schedules");
+                  void schedules.openTask(id);
+                }}
               />
             ) : (
               <div className="empty-state">
@@ -459,7 +510,7 @@ export default function App() {
           control={app.browserControl}
           phase={app.phase}
           running={!!app.active}
-          covered={modal !== null}
+          covered={modal !== null || taskDialog}
           onControl={(control) => void app.controlBrowser(control)}
           onStop={() => void app.stop()}
           onClose={() =>
