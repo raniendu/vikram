@@ -628,6 +628,65 @@ class SourcesTests(unittest.TestCase):
         self.assertEqual(assets[0][0].read_text(), document)
         self.assertFalse(session.is_closed)
 
+    def test_a_packed_sources_archive_is_checked_offline(self):
+        tarball = self.fetch("packed")
+        third_party.check_sources_archive(tarball, self.sources, "0.2.0")
+        prefix = "Vikram-0.2.0-third-party-sources"
+        recipe = f"{prefix}/python-image/busybox-1.37.0-r31/APKBUILD"
+
+        def rewrite(name, change):
+            """A copy of the archive with one member changed, added, or dropped."""
+            copy = self.root / f"{name}.tar"
+            with tarfile.open(tarball) as source, tarfile.open(copy, "w") as output:
+                for member in source.getmembers():
+                    data = source.extractfile(member).read()
+                    for entry, content in change(member.name, data):
+                        info = tarfile.TarInfo(entry)
+                        info.size = len(content)
+                        output.addfile(info, io.BytesIO(content))
+            return copy
+
+        cases = {
+            "pinned digest": lambda n, d: [(n, b"x" * len(d) if n == recipe else d)],
+            "unexpected": lambda n, d: [(n, d)]
+            + ([(f"{prefix}/extra.sh", b"echo")] if n == recipe else []),
+            "missing": lambda n, d: [] if n == recipe else [(n, d)],
+            "match this release": lambda n, d: [
+                (n, d.replace(b"0.2.0", b"0.9.9") if n.endswith("README.md") else d)
+            ],
+        }
+        for message, change in cases.items():
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(SourceError, message):
+                    third_party.check_sources_archive(
+                        rewrite(message.split()[0], change), self.sources, "0.2.0"
+                    )
+        # The archive is for the version it names.
+        with self.assertRaisesRegex(SourceError, "unexpected"):
+            third_party.check_sources_archive(tarball, self.sources, "0.3.0")
+
+    def test_release_assets_use_the_release_macs_sources_without_a_network(self):
+        tarball = self.fetch("from-mac")
+        archive = self.root / "Vikram-0.2.0-macos-arm64.zip"
+        prefix = (
+            f"{releases.ARCHIVE_ROOT}/Contents/Resources/Vikram.app/"
+            f"{third_party.APP_NOTICES}/"
+        )
+        document = f"Vikram 0.2.0 includes\n<{third_party.sources_url('0.2.0')}>\n"
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr(prefix + third_party.NOTICES_FILE, document)
+            output.writestr(prefix + third_party.SOURCES_FILE, json.dumps(self.sources))
+        work = self.root / "work-offline"
+        work.mkdir()
+        self.hosts.requests.clear()
+        with patch.object(third_party, "client", side_effect=AssertionError("network")):
+            assets = third_party.release_assets(
+                archive, "0.2.0", work, sources_archive=tarball
+            )
+        self.assertEqual(self.hosts.requests, [])
+        self.assertEqual(assets[1][0].read_bytes(), tarball.read_bytes())
+        self.assertEqual(assets[1][0].parent, work)
+
     def test_downloads_carry_no_credentials_or_compression(self):
         with third_party.client() as session:
             self.assertNotIn("authorization", session.headers)

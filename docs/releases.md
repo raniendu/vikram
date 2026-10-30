@@ -108,13 +108,16 @@ Pushing a tag such as `v0.2.0` on a commit in `main` runs
    the tag is on `main` and matches every version file and lockfile, runs the
    offline Python and frontend tests, builds with `scripts/build_installer.py`,
    checks the ZIP with `scripts/check_installer.py`, runs the native tests,
-   checks the archive against the updater's rules, and checks that every
-   third-party source the app's notices list is still published. It hands the
-   ZIP and its checksum to the next job, then deletes its build directories.
+   checks the archive against the updater's rules, and downloads every
+   third-party source the app's notices list, checking each against its pinned
+   digest and packing them as `Vikram-X.Y.Z-third-party-sources.tar`. It hands
+   the ZIP, its checksum, and the sources archive to the next job, then deletes
+   its build directories. The sources are downloaded here because Alpine's
+   GitLab refuses GitHub's hosted runners (HTTP 418, since October 2026).
 2. **Publish the release**, on a GitHub-hosted runner: the only job that can
-   write. `scripts/publish_release.py` first downloads the third-party sources
-   that the archive's notices list and checks each against its pinned digest.
-   Then it creates a draft release; uploads `Vikram-X.Y.Z-macos-arm64.zip`, its
+   write. `scripts/publish_release.py --sources` first checks the sources
+   archive offline: exactly the files the archive's notices list, each with its
+   pinned size and digest, and nothing else. Then it creates a draft release; uploads `Vikram-X.Y.Z-macos-arm64.zip`, its
    `.sha256`, `Vikram-X.Y.Z-THIRD-PARTY-NOTICES.md` and
    `Vikram-X.Y.Z-third-party-sources.tar`; compares GitHub's stored copy of each
    (and its SHA-256 `digest`) with the build's; and only then publishes the

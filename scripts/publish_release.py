@@ -8,9 +8,11 @@ reads the latest release back with the updater's own parser, which requires
 GitHub's SHA-256 digest. A published release is never changed; a draft left by a
 failed attempt is reused.
 
-Before anything reaches GitHub, it downloads the third-party sources the
-archive's notices list and checks each against its pinned digest. The release
-carries them, and the notices, beside the archive (see scripts/third_party.py).
+Before anything reaches GitHub, it checks the third-party sources the
+archive's notices list against their pinned digests: the archive of them the
+release Mac downloaded (`--sources`), or, without it, a fresh download. The
+release carries them, and the notices, beside the archive (see
+scripts/third_party.py).
 
     uv run python scripts/publish_release.py --dry-run --tag v0.2.0 ARCHIVE
 """
@@ -309,6 +311,11 @@ def main() -> None:
     parser.add_argument("--commit", help="the commit the release Mac built")
     parser.add_argument("--sha256", help="the archive digest the release Mac built")
     parser.add_argument(
+        "--sources",
+        type=Path,
+        help="the third-party sources archive the release Mac downloaded and checked",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="check the archive and describe the release without contacting GitHub",
@@ -328,9 +335,12 @@ def main() -> None:
         if not token or not args.commit:
             raise PublishError("Publishing needs --commit and GITHUB_TOKEN.")
         with tempfile.TemporaryDirectory(prefix="vikram-release-") as work:
-            # The sources are downloaded and checked before anything reaches GitHub.
+            # The sources are checked before anything reaches GitHub.
             extras = third_party.release_assets(
-                args.archive, release.version, Path(work)
+                args.archive,
+                release.version,
+                Path(work),
+                sources_archive=args.sources,
             )
             with httpx.Client(
                 timeout=httpx.Timeout(60, connect=10),

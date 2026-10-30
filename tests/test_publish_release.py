@@ -417,10 +417,11 @@ class PublishReleaseTests(unittest.TestCase):
 
         prepared = []
 
-        def release_assets(archive, version, destination):
-            # The sources are fetched before anything reaches GitHub.
+        def release_assets(archive, version, destination, sources_archive=None):
+            # The sources are checked before anything reaches GitHub.
             self.assertEqual(self.github.calls, [])
             self.assertEqual((archive, version), (self.archive, "0.2.0"))
+            self.assertEqual(sources_archive, Path("mac/sources.tar"))
             prepared.append(destination)
             assets = []
             for path, kind in self.extras():
@@ -428,6 +429,7 @@ class PublishReleaseTests(unittest.TestCase):
             return assets
 
         argv = ["", "--tag", "v0.2.0", "--commit", COMMIT, str(self.archive)]
+        argv += ["--sources", "mac/sources.tar"]
         with (
             patch.dict(
                 os.environ, {"GITHUB_OUTPUT": str(output), "GITHUB_TOKEN": "secret"}
@@ -490,9 +492,20 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "scripts/build_installer.py",
             "scripts/check_installer.py",
             "scripts/publish_release.py --dry-run",
-            "scripts/third_party.py sources --check",
+            'scripts/third_party.py sources "dist/installers/',
         ):
             self.assertIn(command, commands)
+        # GitHub's runners never download the sources: the Mac hands them over.
+        upload = next(
+            s for s in build["steps"] if "upload-artifact" in s.get("uses", "")
+        )
+        self.assertIn("third-party-sources.tar", upload["with"]["path"])
+        publish = "\n".join(
+            step.get("run", "") for step in self.release["jobs"]["publish"]["steps"]
+        )
+        self.assertIn(
+            '--sources "release/Vikram-$VERSION-third-party-sources.tar"', publish
+        )
         self.assertIs(build["steps"][0]["with"]["persist-credentials"], False)
 
     def test_pull_requests_never_reach_the_release_mac(self):

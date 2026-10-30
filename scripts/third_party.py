@@ -891,18 +891,82 @@ def check_published(session: httpx.Client, sources: dict) -> int:
     return total
 
 
+def check_sources_archive(tarball: Path, sources: dict, version: str) -> None:
+    """Check a packed sources archive against the pinned list, without a network.
+
+    The release Mac downloads the sources (some hosts refuse data-center
+    addresses) and the publish job checks its copy here: exactly the expected
+    regular files, each with its pinned size and digest, plus the README and
+    listing this version renders.
+    """
+    validate_sources(sources)
+    prefix = sources_asset(version).removesuffix(".tar")
+    expected = {
+        f"{prefix}/README.md": render_readme(sources, version).encode(),
+        f"{prefix}/{SOURCES_FILE}": (json.dumps(sources, indent=2) + "\n").encode(),
+    }
+    for component in sources["components"]:
+        for item in component["files"]:
+            expected[f"{prefix}/{component['folder']}/{item['name']}"] = item
+    seen = set()
+    try:
+        with tarfile.open(tarball, "r:") as archive:
+            for member in archive:
+                if member.name in seen or member.name not in expected:
+                    raise SourceError(
+                        f"The sources archive has an unexpected {member.name}."
+                    )
+                if not member.isreg():
+                    raise SourceError(
+                        f"{member.name} in the sources archive is not a file."
+                    )
+                seen.add(member.name)
+                want = expected[member.name]
+                stream = archive.extractfile(member)
+                if isinstance(want, bytes):
+                    if stream.read(len(want) + 1) != want:
+                        raise SourceError(f"{member.name} does not match this release.")
+                    continue
+                algorithm = "sha512" if "sha512" in want else "sha256"
+                digest = hashlib.new(algorithm)
+                if member.size != want["size"]:
+                    raise SourceError(
+                        f"{member.name} does not match its pinned digest."
+                    )
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                if digest.hexdigest() != want[algorithm]:
+                    raise SourceError(
+                        f"{member.name} does not match its pinned digest."
+                    )
+    except (tarfile.TarError, OSError):
+        raise SourceError("The sources archive could not be read.") from None
+    if missing := sorted(set(expected) - seen):
+        raise SourceError(f"The sources archive is missing {missing[0]}.")
+
+
 def release_assets(
     archive: Path,
     version: str,
     destination: Path,
     session: httpx.Client | None = None,
+    sources_archive: Path | None = None,
 ) -> list[tuple[Path, str]]:
-    """The notices and the verified sources a release publishes beside the archive."""
+    """The notices and the verified sources a release publishes beside the archive.
+
+    With `sources_archive` (packed by the release Mac), that copy is checked
+    offline instead of downloading the sources again.
+    """
     document, sources = archive_notices(archive, version)
     notices = destination / notices_asset(version)
     notices.write_text(document, encoding="utf-8")
-    with contextlib.nullcontext(session) if session else client() as downloads:
-        tarball = fetch_sources(downloads, sources, version, destination)
+    if sources_archive is not None:
+        check_sources_archive(sources_archive, sources, version)
+        tarball = destination / sources_asset(version)
+        shutil.copyfile(sources_archive, tarball)
+    else:
+        with contextlib.nullcontext(session) if session else client() as downloads:
+            tarball = fetch_sources(downloads, sources, version, destination)
     return [(notices, "text/markdown; charset=utf-8"), (tarball, "application/x-tar")]
 
 
