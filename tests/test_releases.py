@@ -50,6 +50,12 @@ class ReleaseTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="vikram-update-test-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        # Never the account running the tests: `vikram update` changes the
+        # installation it belongs to. Tests that need a layout patch their own.
+        self.layout = Layout(self.root / "default-account")
+        guard = patch.object(releases, "runtime_layout", return_value=self.layout)
+        guard.start()
+        self.addCleanup(guard.stop)
 
     def client(self, handler):
         client = httpx.Client(transport=httpx.MockTransport(handler))
@@ -274,11 +280,14 @@ class ReleaseTests(unittest.TestCase):
                 patch.object(
                     releases, "make_client", return_value=self.client(handler)
                 ),
+                patch.object(releases, "repair_app") as repair,
                 contextlib.redirect_stdout(io.StringIO()) as output,
             ):
                 self.assertEqual(releases.update_main([]), 0)
                 self.assertIn("up to date", output.getvalue())
                 self.assertEqual(len(requested), 1)
+                # Up to date: only the app folder is brought to the installed version.
+                repair.assert_called_once_with(self.layout)
 
     def test_network_failure_does_not_invoke_install(self):
         with (
