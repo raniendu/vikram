@@ -102,11 +102,12 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: uv run python scripts/publish_release.py --dry-run --tag "v$VERSION" "dist/installers/Vikram-$VERSION-macos-arm64.zip"
 
-      # The publish job downloads these, checks their digests, and attaches them.
-      - name: Check that the third-party sources are still published
+      # Downloaded here, not on GitHub's runners, which some source hosts
+      # refuse. The publish job checks every digest again before attaching them.
+      - name: Download and check the third-party sources
         env:
           VERSION: ${{ steps.version.outputs.version }}
-        run: uv run python scripts/third_party.py sources --check "dist/installers/Vikram-$VERSION-macos-arm64.zip"
+        run: uv run python scripts/third_party.py sources "dist/installers/Vikram-$VERSION-macos-arm64.zip"
 
       - name: Hand the archive to the publish job
         if: github.event_name == 'push'
@@ -116,6 +117,7 @@ jobs:
           path: |
             dist/installers/Vikram-${{ steps.archive.outputs.version }}-macos-arm64.zip
             dist/installers/Vikram-${{ steps.archive.outputs.version }}-macos-arm64.zip.sha256
+            dist/installers/Vikram-${{ steps.archive.outputs.version }}-third-party-sources.tar
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
@@ -181,6 +183,7 @@ jobs:
         run: |
           uv run python scripts/publish_release.py --tag "$GITHUB_REF_NAME" \
             --commit "$GITHUB_SHA" --sha256 "$SHA256" \
+            --sources "release/Vikram-$VERSION-third-party-sources.tar" \
             "release/Vikram-$VERSION-macos-arm64.zip"
 
       - name: Summarize
