@@ -1,6 +1,7 @@
 import contextlib
 import os
 import plistlib
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -64,9 +65,9 @@ class InstallationTests(unittest.TestCase):
         profile.write_bytes(b"export EXISTING=value\n")
         self.assertEqual(self.install(), "0.1.0")
         self.assertEqual(installation.installed_version(self.layout), "0.1.0")
-        self.assertEqual(
-            self.layout.app.resolve(), self.layout.current.resolve() / "Vikram.app"
-        )
+        # A folder of its own, not a link: macOS remembers where a link pointed.
+        self.assertFalse(self.layout.app.is_symlink())
+        self.assertEqual(installation.bundle_version(self.layout.app), "0.1.0")
         self.assertIn(str(self.layout.current), self.layout.cli.read_text())
         self.assertIn('--cli "$@"', self.layout.cli.read_text())
         self.assertTrue(os.access(self.layout.cli, os.X_OK))
@@ -122,6 +123,72 @@ class InstallationTests(unittest.TestCase):
         self.assertEqual(installation.installed_version(self.layout), "0.2.0")
         self.assertTrue((previous / "Vikram.app").is_dir())
         self.assertEqual(self.install(newer), "0.2.0")
+
+    def test_app_folder_stays_in_place_and_follows_updates(self):
+        self.install()
+        folder = self.layout.app.stat().st_ino
+        self.install(app_bundle(self.base / "new", "0.2.0"))
+        # The Dock and Spotlight keep the same folder, now with the new app.
+        self.assertEqual(self.layout.app.stat().st_ino, folder)
+        self.assertEqual(installation.bundle_version(self.layout.app), "0.2.0")
+        self.assertEqual(
+            (self.layout.root / installation.APP_SOURCE).read_text(),
+            os.readlink(self.layout.current),
+        )
+        self.assertFalse(list(self.layout.root.glob(".app-*")))
+        self.assertFalse(installation.publish_app(self.layout))
+
+    def test_replaces_the_link_earlier_versions_made(self):
+        self.install()
+        # As 0.3.0 and earlier left it: a link to `current`, no record.
+        import shutil
+
+        shutil.rmtree(self.layout.app)
+        (self.layout.root / installation.APP_SOURCE).unlink()
+        self.layout.app.symlink_to(self.layout.current / "Vikram.app")
+        self.install(app_bundle(self.base / "new", "0.2.0"))
+        self.assertFalse(self.layout.app.is_symlink())
+        self.assertEqual(installation.bundle_version(self.layout.app), "0.2.0")
+
+    def test_app_left_behind_is_repaired_later(self):
+        self.install()
+        with patch.object(installation, "_swap", side_effect=OSError("busy")):
+            self.assertEqual(
+                self.install(app_bundle(self.base / "new", "0.2.0")), "0.2.0"
+            )
+        self.assertEqual(installation.installed_version(self.layout), "0.2.0")
+        self.assertEqual(installation.bundle_version(self.layout.app), "0.1.0")
+        self.assertFalse(list(self.layout.root.glob(".app-*")))
+        self.assertTrue(installation.publish_app(self.layout))
+        self.assertEqual(installation.bundle_version(self.layout.app), "0.2.0")
+
+    def test_swap_exchanges_folders(self):
+        first, second = self.base / "first", self.base / "second"
+        first.mkdir()
+        second.mkdir()
+        (first / "a").write_text("1")
+        (second / "b").write_text("2")
+        installation._swap(first, second)
+        self.assertEqual((first / "b").read_text(), "2")
+        self.assertEqual((second / "a").read_text(), "1")
+
+    def test_runtime_from_the_app_folder_is_the_installed_runtime(self):
+        self.install()
+        binary = self.layout.app / "Contents/MacOS/vikram-sidecar"
+        with (
+            patch.object(sys, "frozen", True, create=True),
+            patch.object(sys, "executable", str(binary)),
+        ):
+            layout = installation.runtime_layout()
+            self.assertEqual(layout, self.layout)
+            self.assertTrue(installation.installed_runtime(layout))
+        elsewhere = self.base / "Vikram.app/Contents/MacOS/vikram-sidecar"
+        with (
+            patch.object(sys, "frozen", True, create=True),
+            patch.object(sys, "executable", str(elsewhere)),
+        ):
+            self.assertFalse(installation.installed_runtime(self.layout))
+        self.assertFalse(installation.installed_runtime(self.layout))
 
     def test_interrupt_before_atomic_switch_keeps_old_release(self):
         self.install()

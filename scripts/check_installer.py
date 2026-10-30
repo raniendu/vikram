@@ -140,6 +140,10 @@ def main() -> None:
         layout = Layout(home)
         version = install_bundle(source, layout)
         assert installed_version(layout) == version == bundle_version(layout.app)
+        # A folder of its own, so the Dock keeps opening the installed version.
+        assert layout.app.is_dir() and not layout.app.is_symlink()
+        verify_bundle(layout.app)
+        folder = layout.app.stat().st_ino
         assert check_notices(layout.app, version) == sources
         # A library path that must stay absent: the CLI opens chats or tasks
         # only when it needs them.
@@ -174,6 +178,9 @@ def main() -> None:
         check_scheduler(layout, root, env)
         install_bundle(source, layout)
         assert previous != layout.current.resolve()
+        assert layout.app.stat().st_ino == folder
+        assert (layout.root / "app-source").read_text() == os.readlink(layout.current)
+        verify_bundle(layout.app)
         # The reinstall kept the disposable agent, still through `current`.
         agent = plistlib.loads(
             (

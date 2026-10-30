@@ -902,15 +902,16 @@ def agent_plist(agent: Agent) -> bytes:
 def installed_agent(root: Path | None = None) -> Agent | None:
     """The agent for this installed runtime; `None` in development or tests.
 
-    Only the installed app (frozen, under the managed install folder) installs
-    the agent, and never for an overridden test chat library.
+    Only the installed app (frozen, in the managed install folder or the app in
+    ~/Applications) installs the agent, and never for an overridden test chat
+    library.
     """
-    from vikram.installation import runtime_layout
+    from vikram.installation import installed_runtime, runtime_layout
 
     if not getattr(sys, "frozen", False) or "VIKRAM_CHAT_DATA_DIR" in os.environ:
         return None
     layout = runtime_layout()
-    if not Path(sys.executable).resolve().is_relative_to(layout.root.resolve()):
+    if not installed_runtime(layout):
         return None
     return agent_for(layout.home, root or data_root())
 

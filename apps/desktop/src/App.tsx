@@ -18,17 +18,19 @@ import { Composer } from "./components/Composer";
 import { BrowserPanel } from "./components/BrowserPanel";
 import { Schedules } from "./components/Schedules";
 import { useSchedules } from "./useSchedules";
+import { useUpdates } from "./useUpdates";
 import { useBrowser } from "./useBrowser";
 import { desktop, native, onNative } from "./bridge";
 import { formatModelName } from "./modelNames";
 import { thinkingOn } from "./state";
-import type { ChatSummary, Folder, Thinking } from "./types";
+import type { ChatSummary, Folder, Thinking, UpdateStatus } from "./types";
 import { version } from "../package.json";
 
 export default function App() {
   const app = useChats();
   const browser = useBrowser();
   const schedules = useSchedules();
+  const updates = useUpdates();
   // The main pane shows a chat, or the scheduled tasks.
   const [view, setView] = useState<"chat" | "schedules">("chat");
   const [taskDialog, setTaskDialog] = useState(false);
@@ -50,6 +52,8 @@ export default function App() {
   const [name, setName] = useState("");
   const [moveTo, setMoveTo] = useState("");
   const [quitError, setQuitError] = useState(false);
+  // Quitting to restart into an installed update.
+  const [restarting, setRestarting] = useState(false);
   const [working, setWorking] = useState(false);
   const model = app.models.find(
     (m) => m.name === app.chat?.model && m.available,
@@ -78,8 +82,9 @@ export default function App() {
       return !old;
     });
   }
-  async function quit(force = false) {
+  async function quit(force = false, restart = false) {
     const controller = current.current;
+    if (!force) setRestarting(restart);
     if (!force && (controller.active || controller.sending)) {
       setQuitError(false);
       setModal("quit");
@@ -87,7 +92,7 @@ export default function App() {
     }
     try {
       if (!force) await controller.flushDrafts();
-      await native("quit");
+      await native(restart ? "restart" : "quit");
     } catch {
       setQuitError(true);
       setModal("quit");
@@ -393,6 +398,19 @@ export default function App() {
             </button>
           </div>
         )}
+        {updates.offer && (
+          <div className="notice" role="status">
+            <span>Vikram {updates.offer} is installed. Restart to use it.</span>
+            <button onClick={() => void quit(false, true)}>Restart</button>
+            <button
+              className="icon-button"
+              aria-label="Dismiss update notice"
+              onClick={updates.dismiss}
+            >
+              <X size={15} />
+            </button>
+          </div>
+        )}
         {app.connection && !app.offline && (
           <div className="notice">
             <span>{app.connection}</span>
@@ -625,7 +643,33 @@ export default function App() {
             </p>
           </section>
           <div className="settings-footer">
-            Vikram <span>{version}</span>
+            <span>
+              Vikram <span>{version}</span>
+            </span>
+            {updates.status && updates.status.state !== "unavailable" && (
+              <span className="update-line">
+                {updateText(updates.status)}
+                {updates.status.state === "ready" ? (
+                  <button
+                    className="link-button"
+                    onClick={() => void quit(false, true)}
+                  >
+                    Restart
+                  </button>
+                ) : (
+                  !["checking", "installing"].includes(
+                    updates.status.state,
+                  ) && (
+                    <button
+                      className="link-button"
+                      onClick={() => void updates.check()}
+                    >
+                      Check for updates
+                    </button>
+                  )
+                )}
+              </span>
+            )}
           </div>
         </Dialog>
       )}
@@ -811,14 +855,14 @@ export default function App() {
         <Dialog
           title={
             quitError
-              ? "Quit with unsaved changes?"
-              : "Stop the reply and quit?"
+              ? `${restarting ? "Restart" : "Quit"} with unsaved changes?`
+              : `Stop the reply and ${restarting ? "restart" : "quit"}?`
           }
           onClose={() => setModal(null)}
         >
           <p>
             {quitError
-              ? "Your latest draft could not be saved. Copy it before quitting to keep your text."
+              ? `Your latest draft could not be saved. Copy it before ${restarting ? "restarting" : "quitting"} to keep your text.`
               : "The active reply will stop. Saved messages and its last saved partial answer will be here when you return."}
           </p>
           <div className="dialog-actions">
@@ -837,15 +881,34 @@ export default function App() {
                       return;
                     }
                   }
-                  await quit(true);
+                  await quit(true, restarting);
                 })
               }
             >
-              {quitError ? "Quit without saving" : "Stop and quit"}
+              {quitError
+                ? `${restarting ? "Restart" : "Quit"} without saving`
+                : `Stop and ${restarting ? "restart" : "quit"}`}
             </button>
           </div>
         </Dialog>
       )}
     </div>
   );
+}
+
+function updateText(status: UpdateStatus): string {
+  switch (status.state) {
+    case "checking":
+      return "Checking for updates…";
+    case "installing":
+      return `Updating to ${status.version}…`;
+    case "current":
+      return "Up to date.";
+    case "ready":
+      return `${status.version} is installed.`;
+    case "failed":
+      return status.error ?? "Could not check for updates.";
+    default:
+      return "";
+  }
 }

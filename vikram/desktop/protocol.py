@@ -183,6 +183,8 @@ PARAMS = {
     "delete_schedule": Task,
     "run_schedule": Task,
     "open_run": Run,
+    "update_status": Params,
+    "check_update": Params,
     # From the app itself, never the window: results and the panel closing.
     "browser_result": BrowserResult,
     "browser_closed": Params,

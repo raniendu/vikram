@@ -32,6 +32,7 @@ from .history import inference_messages
 from .inference import stream_reply
 from .models import ModelCatalog
 from .store import Store
+from .updates import Updater
 
 
 def _plain(text: str) -> str:
@@ -146,8 +147,11 @@ class Runtime:
         browser=False,
         tasks=False,
         agent: Agent | None = None,
+        updater: Updater | None = None,
     ):
         self.store, self.emit, self.streamer = store, emit, streamer
+        # Only the installed app updates itself; tests and checkouts do not.
+        self.updater = updater or Updater(emit, managed=False)
         self.catalog = ModelCatalog()
         self.models: list[dict] = []
         self.active: dict | None = None
@@ -195,6 +199,7 @@ class Runtime:
         return {"tasks": self.schedules.tasks(), "background": self.background}
 
     async def close(self) -> None:
+        await self.updater.close()
         if self.watcher is not None:
             self.watcher.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -572,7 +577,12 @@ class Runtime:
         }:
             return await self.schedule_command(method, p)
         if method == "hello":
+            self.updater.watch()
             return {"protocol": 1, **self.snapshot()}
+        if method == "update_status":
+            return self.updater.status()
+        if method == "check_update":
+            return self.updater.check()
         if method == "refresh":
             return await self.refresh()
         if method == "snapshot":

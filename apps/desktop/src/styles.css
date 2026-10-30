@@ -1131,8 +1131,15 @@ dialog select {
 .settings-footer {
   display: flex;
   justify-content: space-between;
+  gap: 12px;
   font-size: 11px;
   color: var(--muted2);
+}
+.update-line {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  text-align: right;
 }
 .spinner {
   display: inline-block;

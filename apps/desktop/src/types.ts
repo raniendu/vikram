@@ -261,3 +261,19 @@ export interface RuntimeEvent extends Partial<Active> {
   unsaved?: boolean;
   message?: string;
 }
+
+/** The installed app's updates, as its service reports them. */
+export type UpdateState =
+  | "unavailable"
+  | "idle"
+  | "checking"
+  | "installing"
+  | "current"
+  | "ready"
+  | "failed";
+export interface UpdateStatus {
+  state: UpdateState;
+  running: string;
+  version: string | null;
+  error: string | null;
+}
