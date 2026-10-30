@@ -14,8 +14,10 @@ even while the app is closed.
 
 Install the desktop app and CLI together by opening **Install Vikram.app** from
 the installer ZIP. Then open `~/Applications/Vikram.app` or run `vikram` in a new
-terminal. Use `vikram update` to update both, `vikram update --check` to check
-without installing, and `vikram --version` to see the running CLI version.
+terminal. The app checks for updates when it opens, installs them for both,
+and offers to restart. Use `vikram update` to update both from a terminal,
+`vikram update --check` to check without installing, and `vikram --version` to
+see the running CLI version.
 Updates use stable GitHub Releases, which a version tag builds on the owner's Mac
 and publishes; none is published yet. Releases are ad-hoc signed and not
 notarized, pending Developer ID signing: `vikram update` installs them, but macOS

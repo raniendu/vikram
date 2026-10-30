@@ -38,6 +38,8 @@ const METHODS: &[&str] = &[
     "delete_schedule",
     "run_schedule",
     "open_run",
+    "update_status",
+    "check_update",
 ];
 
 #[tauri::command]
@@ -159,7 +161,15 @@ fn open_link(url: String) -> Result<(), String> {
 async fn browser_bounds(app: AppHandle, x: f64, y: f64, width: f64, height: f64) {
     if [x, y, width, height].iter().all(|v| v.is_finite()) && width >= 1.0 && height >= 1.0 {
         app.state::<Browser>()
-            .set_bounds(&app, Bounds { x, y, width, height })
+            .set_bounds(
+                &app,
+                Bounds {
+                    x,
+                    y,
+                    width,
+                    height,
+                },
+            )
             .await;
     }
 }
@@ -194,6 +204,45 @@ async fn quit(app: AppHandle) {
     app.exit(0);
 }
 
+/// Quit, then open the app again once this process has exited, so the
+/// single-instance check does not hand the launch back to this window.
+#[tauri::command]
+async fn restart(app: AppHandle) {
+    app.state::<Bridge>().exiting.store(true, Ordering::SeqCst);
+    let handle = app.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || handle.state::<Bridge>().shutdown()).await;
+    if let Some(bundle) = relaunch_target() {
+        use std::os::unix::process::CommandExt;
+        let _ = std::process::Command::new("/bin/sh")
+            .args([
+                "-c",
+                "while kill -0 \"$1\" 2>/dev/null; do sleep 0.2; done; exec /usr/bin/open \"$2\"",
+                "sh",
+            ])
+            .arg(std::process::id().to_string())
+            .arg(bundle)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0)
+            .spawn();
+    }
+    app.exit(0);
+}
+
+/// The installed app in ~/Applications, which updates keep current; else
+/// the bundle this process runs from.
+fn relaunch_target() -> Option<PathBuf> {
+    let installed = std::env::var_os("HOME")
+        .map(|home| PathBuf::from(home).join("Applications/Vikram.app"))
+        .filter(|path| path.is_dir());
+    installed.or_else(|| {
+        let exe = std::env::current_exe().ok()?;
+        let bundle = exe.parent()?.parent()?.parent()?;
+        (bundle.extension()? == "app").then(|| bundle.to_path_buf())
+    })
+}
+
 fn main() {
     let context = tauri::generate_context!();
     if std::env::args().nth(1).as_deref() == Some("--browser-helper") {
@@ -221,7 +270,8 @@ fn main() {
             browser_visible,
             browser_state,
             browser_close,
-            quit
+            quit,
+            restart
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {

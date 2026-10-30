@@ -10,15 +10,23 @@ import {
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Chat } from "./types";
 import type { ChatController } from "./useChats";
+import type { useUpdates } from "./useUpdates";
 
-const state = vi.hoisted(() => ({ app: null as unknown as ChatController }));
+type UpdateController = ReturnType<typeof useUpdates>;
+
+const state = vi.hoisted(() => ({
+  app: null as unknown as ChatController,
+  updates: null as unknown as UpdateController,
+}));
 vi.mock("./useChats", () => ({ useChats: () => state.app }));
+vi.mock("./useUpdates", () => ({ useUpdates: () => state.updates }));
 vi.mock("./bridge", () => ({
   desktop: false,
   native: vi.fn(),
   onNative: vi.fn(),
 }));
 import App from "./App";
+import { native } from "./bridge";
 
 beforeEach(() => {
   window.matchMedia = vi
@@ -53,7 +61,15 @@ beforeEach(() => {
     deleteChat: vi.fn().mockResolvedValue(true),
     select: vi.fn(),
     draft: "",
+    flushDrafts: vi.fn().mockResolvedValue(undefined),
   } as unknown as ChatController;
+  state.updates = {
+    status: null,
+    offer: null,
+    dismiss: vi.fn(),
+    check: vi.fn(),
+  };
+  vi.mocked(native).mockReset();
 });
 afterEach(cleanup);
 
@@ -153,4 +169,62 @@ it("switches between a chat and the scheduled tasks", () => {
   fireEvent.click(screen.getByRole("button", { name: "Old chat" }));
   expect(state.app.select).toHaveBeenCalledWith("b");
   expect(screen.queryByRole("heading", { name: "Scheduled tasks" })).toBeNull();
+});
+
+it("offers a restart into an installed update", async () => {
+  state.updates = {
+    ...state.updates,
+    status: { state: "ready", running: "0.3.0", version: "0.4.0", error: null },
+    offer: "0.4.0",
+  };
+  render(<App />);
+  expect(
+    screen.getByText("Vikram 0.4.0 is installed. Restart to use it."),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+  await waitFor(() => expect(native).toHaveBeenCalledWith("restart"));
+  expect(state.app.flushDrafts).toHaveBeenCalled();
+});
+
+it("asks before a restart stops a running reply", async () => {
+  state.app = {
+    ...state.app,
+    active: { chat_id: "a" },
+  } as unknown as ChatController;
+  state.updates = { ...state.updates, offer: "0.4.0" };
+  render(<App />);
+  fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+  const dialog = screen.getByRole("dialog", {
+    name: "Stop the reply and restart?",
+  });
+  expect(native).not.toHaveBeenCalled();
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "Stop and restart" }),
+  );
+  await waitFor(() => expect(native).toHaveBeenCalledWith("restart"));
+});
+
+it("shows update progress in settings", () => {
+  state.updates = {
+    ...state.updates,
+    status: {
+      state: "installing",
+      running: "0.3.0",
+      version: "0.4.0",
+      error: null,
+    },
+  };
+  const view = render(<App />);
+  fireEvent.keyDown(window, { key: ",", metaKey: true });
+  expect(screen.getByText("Updating to 0.4.0…")).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: "Check for updates" }),
+  ).toBeNull();
+  state.updates = {
+    ...state.updates,
+    status: { state: "current", running: "0.3.0", version: null, error: null },
+  };
+  view.rerender(<App />);
+  fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+  expect(state.updates.check).toHaveBeenCalled();
 });

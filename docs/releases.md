@@ -33,12 +33,25 @@ The source checkout also supports the command; install the managed bundle first
 to apply updates. `--check` works before installation and changes no files.
 Use `vikram -- update` to send the literal chat prompt `update`.
 
-A running desktop app continues using its existing files until you quit and
-reopen it. CLI and app launch paths switch together only after checksum,
-signature, version and startup checks pass. Interrupted downloads leave the
-working version intact. Rerun the installer after an interrupted first install.
-No background service, automatic model download, administrator access, or API
-credentials are involved.
+The desktop app checks for a newer release each time it opens. When it finds
+one, it installs it in the background, for the CLI too, then shows **Restart**.
+An update from `vikram update` shows the same offer within about 30 seconds in an
+open app. Until you restart, the open window keeps running its version, and a
+running reply is never stopped without asking. **Settings** shows the version,
+update progress, and **Check for updates**. CLI and app launch paths switch
+together only after checksum, signature, version and startup checks pass.
+Interrupted downloads leave the working version intact. Rerun the installer
+after an interrupted first install. No background update service, automatic
+model download, administrator access, or API credentials are involved.
+
+`~/Applications/Vikram.app` is a folder that stays in place: each update swaps
+in the new app's contents (an APFS clone, so it takes no extra space). The Dock,
+Spotlight, and Finder therefore always open the installed version. Vikram 0.3.0
+and earlier made this path a link instead. macOS records the folder a link
+points to when an app is added to the Dock, so a Dock icon added then keeps
+opening that old version. The first time a newer app opens, it replaces the
+link with the folder; then remove the old icon from the Dock and add
+`~/Applications/Vikram.app` again.
 
 Managed versions live under
 `~/Library/Application Support/dev.raniendu.vikram.install/`. Old versions are

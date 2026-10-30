@@ -28,6 +28,7 @@ from vikram.installation import (
     install_bundle,
     install_lock,
     installed_version,
+    publish_app,
     runtime_layout,
     version_tuple,
 )
@@ -274,6 +275,41 @@ def extract_release(archive: Path, destination: Path) -> Path:
     return app
 
 
+def install_release(
+    client: httpx.Client, layout, release: Release, say=print
+) -> str | None:
+    """Download, verify, and install `release` for the CLI and Mac app.
+
+    Returns the installed version, or `None` if another install already
+    brought this or a newer version while the metadata request was in flight.
+    """
+    with install_lock(layout):
+        current = installed_version(layout)
+        if current and version_tuple(release.version) <= version_tuple(current):
+            publish_app(layout)
+            return None
+        ensure_space(layout.root, release.size + 2 * MAX_EXPANDED)
+        with tempfile.TemporaryDirectory(prefix="download-", dir=layout.root) as work:
+            say(f"Downloading and verifying Vikram {release.version}…")
+            archive = download_release(client, release, Path(work) / "release.zip")
+            ensure_space(layout.root, 2 * MAX_EXPANDED)
+            app = extract_release(archive, Path(work) / "unpacked")
+            if bundle_version(app) != release.version:
+                raise InstallError(
+                    "The downloaded app version does not match the release."
+                )
+            install_bundle(app, layout, _locked=True)
+        # Raise now if the app could not be updated, rather than claim it was.
+        publish_app(layout)
+    return release.version
+
+
+def repair_app(layout) -> None:
+    """Bring the app in ~/Applications to the installed version, if behind."""
+    with install_lock(layout):
+        publish_app(layout)
+
+
 def update_main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="vikram update",
@@ -302,6 +338,8 @@ def update_main(argv: list[str]) -> int:
                     "No stable Vikram releases have been published yet. Nothing changed."
                 )
             elif version_tuple(release.version) <= version_tuple(current):
+                if installed and not args.check:
+                    repair_app(layout)
                 print(
                     f"Vikram {current} is up to date; latest published release is {release.version}."
                 )
@@ -309,34 +347,11 @@ def update_main(argv: list[str]) -> int:
                 print(
                     f"Vikram {release.version} is available for both the CLI and Mac app. Run `vikram update` after installing with Install Vikram.app."
                 )
+            elif install_release(client, layout, release) is None:
+                print(f"Vikram {installed_version(layout)} is already up to date.")
             else:
-                with install_lock(layout):
-                    # A different installer may have activated a release while
-                    # the metadata request was in flight.
-                    current = installed_version(layout)
-                    if current and version_tuple(release.version) <= version_tuple(
-                        current
-                    ):
-                        print(f"Vikram {current} is already up to date.")
-                        return 0
-                    ensure_space(layout.root, release.size + 2 * MAX_EXPANDED)
-                    with tempfile.TemporaryDirectory(
-                        prefix="download-", dir=layout.root
-                    ) as temporary:
-                        work = Path(temporary)
-                        print(f"Downloading and verifying Vikram {release.version}…")
-                        archive = download_release(
-                            client, release, work / "release.zip"
-                        )
-                        ensure_space(layout.root, 2 * MAX_EXPANDED)
-                        app = extract_release(archive, work / "unpacked")
-                        if bundle_version(app) != release.version:
-                            raise InstallError(
-                                "The downloaded app version does not match the release."
-                            )
-                        install_bundle(app, layout, _locked=True)
                 print(
-                    f"Updated CLI and Mac app to Vikram {release.version}. Reopen the Mac app to use the new version; running chats were not interrupted."
+                    f"Updated CLI and Mac app to Vikram {release.version}. An open Mac app offers to restart into it; running chats were not interrupted."
                 )
         return 0
     except (InstallError, httpx.HTTPError, OSError) as error:

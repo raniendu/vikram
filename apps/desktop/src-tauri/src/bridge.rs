@@ -81,6 +81,9 @@ impl Bridge {
                     .join("vikram-sidecar"),
             );
         }
+        // The service may be newer than this window after an update replaced
+        // the app's files; it compares against the version the window runs.
+        command.env("VIKRAM_APP_VERSION", app.package_info().version.to_string());
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -220,7 +223,11 @@ impl Bridge {
 
 /// Run one action on the browser panel and send its result back to the service.
 fn run_browser_action(app: AppHandle, event: Value) {
-    let Some(call_id) = event.get("call_id").and_then(Value::as_str).map(str::to_owned) else {
+    let Some(call_id) = event
+        .get("call_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    else {
         return;
     };
     let call = event.get("call").cloned().unwrap_or(Value::Null);
@@ -232,7 +239,11 @@ fn run_browser_action(app: AppHandle, event: Value) {
         // A reconnected or stopped service no longer waits; it drops the result.
         let _ = app
             .state::<Bridge>()
-            .call(&app, "browser_result", json!({"call_id": call_id, "result": result}))
+            .call(
+                &app,
+                "browser_result",
+                json!({"call_id": call_id, "result": result}),
+            )
             .await;
     });
 }

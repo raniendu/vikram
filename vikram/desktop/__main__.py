@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from .protocol import Command, validate_parameters
 from .runtime import Runtime
 from .store import Store
+from .updates import Updater
 
 MAX_LINE = 15 * 1024 * 1024
 
@@ -32,7 +33,12 @@ async def serve(root: Path) -> None:
     # The app hosts the browser panel that this runtime drives, and its replies
     # may schedule tasks, which the installed app runs in the background.
     runtime = Runtime(
-        store, emit, browser=True, tasks=True, agent=installed_agent(root)
+        store,
+        emit,
+        browser=True,
+        tasks=True,
+        agent=installed_agent(root),
+        updater=Updater(emit),
     )
     imports = set()
 

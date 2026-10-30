@@ -1,6 +1,8 @@
 """Per-user installation of one versioned payload for the CLI and Mac app."""
 
 import contextlib
+import ctypes
+import errno
 import fcntl
 import json
 import os
@@ -26,6 +28,9 @@ RUNTIME_SPACE = 1024**3
 MAX_EXPANDED = 512 * 1024**2
 ROOT_NAME = "dev.raniendu.vikram.install"
 MARKER = b"Vikram installer v1: raniendu/vikram\n"
+# Which version the app in ~/Applications holds, relative to the install root.
+APP_SOURCE = "app-source"
+RENAME_SWAP = 0x2
 PROFILE_BLOCK = b"""# >>> Vikram CLI >>>
 case ":$PATH:" in
   *":$HOME/.local/bin:"*) ;;
@@ -90,7 +95,24 @@ def runtime_layout() -> Layout:
             layout = Layout(binary.parents[8])
             if layout.root == binary.parents[5]:
                 return layout
+        # The app in ~/Applications: .../Vikram.app/Contents/MacOS/vikram-sidecar
+        if len(binary.parents) >= 5 and binary.parents[3].name == "Applications":
+            layout = Layout(binary.parents[4])
+            if layout.app == binary.parents[2] and (layout.root / APP_SOURCE).is_file():
+                return layout
     return Layout(Path.home())
+
+
+def installed_runtime(layout: Layout) -> bool:
+    """Whether this process is the installed, frozen runtime of `layout`."""
+    if not getattr(sys, "frozen", False):
+        return False
+    binary = Path(sys.executable).resolve()
+    return binary.is_relative_to(layout.root.resolve()) or (
+        layout.app.is_dir()
+        and not layout.app.is_symlink()
+        and binary.is_relative_to(layout.app)
+    )
 
 
 def check_platform() -> None:
@@ -319,10 +341,7 @@ exit 1
 def _preflight_links(layout: Layout) -> tuple[bool, Path | None]:
     _directory(layout.app.parent, layout.home)
     _directory(layout.cli.parent, layout.home)
-    app_target = layout.current / "Vikram.app"
-    if os.path.lexists(layout.app) and not (
-        layout.app.is_symlink() and os.readlink(layout.app) == str(app_target)
-    ):
+    if os.path.lexists(layout.app) and not managed_app(layout):
         raise InstallError(
             f"Move the existing {layout.app} aside, then run the installer again."
         )
@@ -368,6 +387,104 @@ def activate(layout: Layout, release: Path) -> None:
         os.replace(temporary, layout.current)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def managed_app(layout: Layout) -> bool:
+    """Whether ~/Applications/Vikram.app is the installer's: the app folder it
+    keeps current, or the link to `current` that earlier versions made."""
+    app = layout.app
+    if app.is_symlink():
+        return os.readlink(app) == str(layout.current / "Vikram.app")
+    if not app.is_dir() or not (layout.root / APP_SOURCE).is_file():
+        return False
+    try:
+        bundle_version(app)
+    except InstallError:
+        return False
+    return True
+
+
+def _clone(source: Path, destination: Path) -> None:
+    """Copy an app; on APFS, a copy-on-write clone that takes no extra space."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.clonefile(os.fsencode(source), os.fsencode(destination), 0x1) == 0:
+        return
+    shutil.rmtree(destination, ignore_errors=True)
+    shutil.copytree(source, destination, copy_function=shutil.copy2, symlinks=True)
+
+
+def _swap(first: Path, second: Path) -> None:
+    """Exchange two folders in one step, so the app is never half-replaced."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.renamex_np(os.fsencode(first), os.fsencode(second), RENAME_SWAP) == 0:
+        return
+    code = ctypes.get_errno()
+    if code not in (errno.ENOTSUP, errno.EINVAL, errno.EXDEV):
+        raise OSError(code, os.strerror(code))
+    # A file system without swaps: two renames, a moment apart.
+    aside = first.with_name(f".{first.name}-{uuid4().hex}")
+    os.rename(second, aside)
+    os.rename(first, second)
+    os.rename(aside, first)
+
+
+def publish_app(layout: Layout) -> bool:
+    """Make ~/Applications/Vikram.app hold the active version; True if it changed.
+
+    The folder stays in place and only its Contents are exchanged, so the Dock,
+    Spotlight, and Finder keep opening it after every update. (macOS records
+    where a link points when the app is added to the Dock, so a link to
+    `current` would keep opening the version that was current then.) A running
+    app keeps the files it has open; it uses the new version once reopened.
+    """
+    target = os.readlink(layout.current)
+    stamp = layout.root / APP_SOURCE
+    app = layout.app
+    if (
+        app.is_dir()
+        and not app.is_symlink()
+        and stamp.is_file()
+        and stamp.read_text() == target
+    ):
+        return False
+    if os.path.lexists(app) and not managed_app(layout):
+        raise InstallError(f"Move the existing {app} aside, then update again.")
+    _directory(app.parent, layout.home)
+    source = layout.root / target / "Vikram.app"
+    staging = Path(tempfile.mkdtemp(prefix=".app-", dir=layout.root))
+    try:
+        staged = staging / "Vikram.app"
+        _clone(source, staged)
+        if bundle_version(staged) != bundle_version(source):
+            raise InstallError("The app copy does not match the installed version.")
+        if app.is_dir() and not app.is_symlink():
+            _swap(staged / "Contents", app / "Contents")
+            os.utime(app)
+            _atomic_write(stamp, target.encode())
+        else:
+            # Recorded first: an interruption must not leave a folder that a
+            # later install would not recognize as its own.
+            _atomic_write(stamp, target.encode())
+            if app.is_symlink():
+                app.unlink()
+            os.rename(staged, app)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    if layout.home != Path.home().resolve():
+        return True  # A disposable test account: leave LaunchServices alone.
+    # Let Finder and Spotlight show the new version; harmless if it fails.
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run(
+            [
+                "/System/Library/Frameworks/CoreServices.framework/Frameworks/"
+                "LaunchServices.framework/Support/lsregister",
+                "-f",
+                str(app),
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+    return True
 
 
 def _refresh_scheduler(layout: Layout) -> None:
@@ -425,9 +542,6 @@ def install_bundle(source: Path, layout: Layout, *, _locked: bool = False) -> st
                 # A backup also provides a working fallback if first install is interrupted.
                 layout.legacy_cli.symlink_to(os.readlink(layout.cli))
                 backup_created = True
-            if not layout.app.is_symlink():
-                layout.app.symlink_to(layout.current / "Vikram.app")
-                changed.append((layout.app, None, None))
             if not layout.cli.exists() or migrate:
                 old = os.readlink(layout.cli) if migrate else None
                 _atomic_write(layout.cli, launcher(layout), 0o755)
@@ -443,6 +557,10 @@ def install_bundle(source: Path, layout: Layout, *, _locked: bool = False) -> st
                     _atomic_write(profile, (old or b"") + b"\n" + PROFILE_BLOCK, mode)
                     changed.append((profile, old, mode))
             activate(layout, release)
+            # After the switch: a failure here leaves the app at the previous
+            # version, and the next install or `vikram update` repairs it.
+            with contextlib.suppress(OSError, InstallError):
+                publish_app(layout)
             _refresh_scheduler(layout)
             return version
         except BaseException:
