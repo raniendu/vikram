@@ -567,6 +567,11 @@ class Runtime:
                     self.active = None
                     self.stopping = False
                     self.event("idle", **route)
+            # The tool waiting for an answer runs in its own task, which the reply
+            # may not have finished cancelling yet: end its wait here.
+            for *_, future in self.waiting.values():
+                future.cancel()
+            self.waiting.clear()
 
     async def command(self, method: str, p: dict, request_id: str):
         if method.endswith("_schedule") or method in {
