@@ -867,7 +867,8 @@ class DesktopBrowserTests(unittest.IsolatedAsyncioTestCase):
         task = await self.send(
             Model(tool_call("browser_click", {"element": 3}, "b2")), wait=False
         )
-        while not self.runtime.waiting:
+        # The card reaches the reply's stream just after the wait begins.
+        while not (self.runtime.waiting and self.attempt()["activity"]):
             await asyncio.sleep(0.01)
         await self.runtime.stop()
         self.assertTrue(task.done())
