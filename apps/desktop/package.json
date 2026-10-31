@@ -22,7 +22,7 @@
     "vitest": "5.0.4"
   },
   "name": "vikram-desktop",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "type": "module",
   "scripts": {
