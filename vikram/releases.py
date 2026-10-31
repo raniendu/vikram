@@ -1,6 +1,7 @@
 """Bounded, anonymous updates from the project's stable GitHub Releases."""
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -28,6 +29,7 @@ from vikram.installation import (
     install_bundle,
     install_lock,
     installed_version,
+    prune_versions,
     publish_app,
     runtime_layout,
     version_tuple,
@@ -305,9 +307,13 @@ def install_release(
 
 
 def repair_app(layout) -> None:
-    """Bring the app in ~/Applications to the installed version, if behind."""
+    """Bring the app in ~/Applications to the installed version, if behind,
+    and remove old versions that an earlier update had to keep."""
     with install_lock(layout):
         publish_app(layout)
+        # Never fail a launch or `vikram update` over this.
+        with contextlib.suppress(InstallError, OSError):
+            prune_versions(layout)
 
 
 def update_main(argv: list[str]) -> int:

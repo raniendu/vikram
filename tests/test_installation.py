@@ -309,3 +309,180 @@ class InstallationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PruneTests(unittest.TestCase):
+    """Old versions are removed only when nothing can still need them."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="vikram-prune-test-")
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name)
+        self.home = self.base / "account"
+        self.home.mkdir()
+        self.layout = installation.Layout(self.home)
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        for name in ("check_platform", "ensure_space", "verify_bundle"):
+            self.stack.enter_context(patch.object(installation, name))
+        self.stack.enter_context(patch.object(installation, "check_runtime"))
+        self.stack.enter_context(
+            patch.object(installation, "login_profile", return_value=None)
+        )
+        self.running, self.count = [], 0
+        self.stack.enter_context(
+            patch.object(
+                installation, "running_executables", side_effect=lambda: self.running
+            )
+        )
+
+    def install(self, version):
+        self.count += 1
+        source = app_bundle(self.base / f"source-{self.count}", version)
+        installation.install_bundle(source, self.layout)
+        return self.layout.current.resolve().name
+
+    def folders(self):
+        if not self.layout.versions.is_dir():
+            return []
+        return sorted(p.name for p in self.layout.versions.iterdir())
+
+    def runtime(self, folder):
+        real = self.layout.versions.resolve() / folder
+        return real / "Vikram.app/Contents/MacOS/vikram-sidecar"
+
+    def test_updates_keep_only_current_and_previous(self):
+        first = self.install("0.1.0")
+        second = self.install("0.2.0")
+        self.assertEqual(self.folders(), sorted([first, second]))
+        third = self.install("0.3.0")
+        fourth = self.install("0.4.0")
+        self.assertEqual(self.folders(), sorted([third, fourth]))
+        self.assertEqual(installation.installed_version(self.layout), "0.4.0")
+        # The launcher and app still work through `current`.
+        self.assertEqual(installation.bundle_version(self.layout.app), "0.4.0")
+        self.assertTrue((self.layout.current / "Vikram.app").is_dir())
+
+    def test_reinstalls_of_one_version_keep_the_latest_two(self):
+        installs = [self.install("0.1.0") for _ in range(4)]
+        self.assertEqual(self.folders(), sorted(installs[-2:]))
+        self.assertEqual(self.layout.current.resolve().name, installs[-1])
+
+    def test_version_in_use_is_kept_until_a_later_repair(self):
+        from vikram import releases
+
+        first = self.install("0.1.0")
+        # A CLI or scheduled run started through `current` while 0.1.0 was active.
+        self.running = [self.runtime(first), Path("/usr/bin/true")]
+        self.install("0.2.0")
+        third = self.install("0.3.0")
+        self.assertIn(first, self.folders())
+        releases.repair_app(self.layout)
+        self.assertIn(first, self.folders())
+        self.running = []  # It finished; the next launch or update removes it.
+        releases.repair_app(self.layout)
+        self.assertNotIn(first, self.folders())
+        self.assertIn(third, self.folders())
+
+    def test_app_source_version_is_kept(self):
+        first = self.install("0.1.0")
+        # The app folder could not be updated since 0.1.0 (it was open, say).
+        with patch.object(installation, "publish_app"):
+            self.install("0.2.0")
+            third = self.install("0.3.0")
+        self.assertEqual(
+            (self.layout.root / installation.APP_SOURCE).read_text(),
+            f"versions/{first}",
+        )
+        self.assertIn(first, self.folders())
+        self.assertIn(third, self.folders())
+
+    def test_unlisted_processes_mean_nothing_is_deleted(self):
+        first = self.install("0.1.0")
+        self.install("0.2.0")
+        with patch.object(
+            installation, "running_executables", side_effect=OSError("denied")
+        ):
+            third = self.install("0.3.0")
+        self.assertEqual(installation.installed_version(self.layout), "0.3.0")
+        self.assertIn(first, self.folders())
+        self.assertEqual(len(self.folders()), 3)
+        with self.assertRaises(OSError):
+            with patch.object(
+                installation, "running_executables", side_effect=OSError("denied")
+            ):
+                installation.prune_versions(self.layout)
+        self.assertEqual(installation.prune_versions(self.layout), [first])
+        self.assertIn(third, self.folders())
+
+    def test_unrecognized_entries_are_untouched_and_leftovers_cleared(self):
+        self.install("0.1.0")
+        versions = self.layout.versions
+        (versions / "notes").mkdir()
+        (versions / "0.0.1-short").mkdir()
+        outside = self.base / "outside"
+        outside.mkdir()
+        (outside / "keep").write_text("mine")
+        (versions / f"0.0.1-{'a' * 32}").symlink_to(outside)
+        leftover = versions / f"{installation.REMOVING}{'b' * 32}"
+        (leftover / "Vikram.app").mkdir(parents=True)
+        self.install("0.2.0")
+        self.install("0.3.0")
+        self.assertFalse(leftover.exists())
+        self.assertTrue((versions / "notes").is_dir())
+        self.assertTrue((versions / "0.0.1-short").is_dir())
+        self.assertEqual((outside / "keep").read_text(), "mine")
+
+    def test_nothing_pruned_without_a_valid_current_link(self):
+        self.assertEqual(installation.prune_versions(self.layout), [])
+        self.install("0.1.0")
+        self.install("0.2.0")
+        self.install("0.3.0")
+        before = self.folders()
+        self.layout.current.unlink()
+        self.assertEqual(installation.prune_versions(self.layout), [])
+        self.layout.current.symlink_to("elsewhere")
+        self.assertEqual(installation.prune_versions(self.layout), [])
+        self.assertEqual(self.folders(), before)
+
+
+@unittest.skipUnless(sys.platform == "darwin", "macOS process listing")
+class RunningExecutablesTests(unittest.TestCase):
+    def test_lists_this_process(self):
+        executables = installation.running_executables()
+        self.assertIn(
+            Path(sys.executable).resolve(), [p.resolve() for p in executables]
+        )
+
+    def test_process_started_through_current_names_its_version(self):
+        import subprocess
+
+        with tempfile.TemporaryDirectory(prefix="vikram-running-test-") as temp:
+            home = Path(temp)
+            layout = installation.Layout(home)
+            folder = layout.versions / f"0.1.0-{'c' * 32}"
+            binary = folder / "Vikram.app/Contents/MacOS/vikram-sidecar"
+            binary.parent.mkdir(parents=True)
+            source = Path(sys.executable).resolve()
+            binary.write_bytes(source.read_bytes())
+            binary.chmod(0o755)
+            layout.current.symlink_to(folder.relative_to(layout.root))
+            # A copied interpreter finds its standard library through PYTHONHOME.
+            child = subprocess.Popen(
+                [
+                    str(layout.current / "Vikram.app/Contents/MacOS/vikram-sidecar"),
+                    "-c",
+                    "import sys, time; print('up', flush=True); time.sleep(30)",
+                ],
+                env={**os.environ, "PYTHONHOME": sys.base_prefix},
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                if child.stdout.readline().strip() != b"up":
+                    self.skipTest("A copied interpreter could not start here.")
+                self.assertIn(binary.resolve(), installation.running_executables())
+            finally:
+                child.kill()
+                child.wait()
+                child.stdout.close()

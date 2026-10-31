@@ -487,6 +487,101 @@ def publish_app(layout: Layout) -> bool:
     return True
 
 
+RELEASE_NAME = re.compile(r"([0-9]+\.[0-9]+\.[0-9]+)-[0-9a-f]{32}")
+REMOVING = ".removing-"
+
+
+def running_executables() -> list[Path]:
+    """Where the executable of each of this account's processes lives.
+
+    macOS reports the resolved file, so a process started through `current`
+    names the version folder it runs from. Raises OSError if the processes
+    cannot be listed, so that callers delete nothing they cannot check.
+    """
+    libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    count = libproc.proc_listallpids(None, 0)
+    if count <= 0:
+        raise OSError(ctypes.get_errno(), "Could not list running processes.")
+    pids = (ctypes.c_int * (count + 256))()
+    count = libproc.proc_listallpids(pids, ctypes.sizeof(pids))
+    if count <= 0:
+        raise OSError(ctypes.get_errno(), "Could not list running processes.")
+    path = ctypes.create_string_buffer(4096)
+    found = []
+    for pid in pids[:count]:
+        # Other accounts' processes are not readable, and cannot use these files.
+        if pid > 0 and libproc.proc_pidpath(pid, path, len(path)) > 0:
+            found.append(Path(os.fsdecode(path.value)))
+    return found
+
+
+def prune_versions(layout: Layout) -> list[str]:
+    """Delete installed versions nothing needs any more; the caller holds the lock.
+
+    Keeps the active version, the one installed before it (for rollback), the
+    one the app folder was copied from, and every version a running process
+    still uses: an open app or CLI, or a scheduled run that started through
+    `current` before an update. Those stay until a later update or launch
+    finds them unused. Returns the folder names removed.
+    """
+    versions = layout.versions
+    if versions.is_symlink() or not versions.is_dir():
+        return []
+    try:
+        target = os.readlink(layout.current)
+    except OSError:
+        return []  # Not installed, or interrupted: nothing is known to be old.
+    if not re.fullmatch(rf"versions/{RELEASE_NAME.pattern}", target):
+        return []
+    # Folders an earlier prune renamed but could not finish deleting.
+    for leftover in versions.glob(f"{REMOVING}*"):
+        if leftover.is_dir() and not leftover.is_symlink():
+            shutil.rmtree(leftover, ignore_errors=True)
+    releases = []
+    for folder in versions.iterdir():
+        match = RELEASE_NAME.fullmatch(folder.name)
+        if not match or folder.is_symlink() or not folder.is_dir():
+            continue  # Not a version this installer made: leave it alone.
+        with contextlib.suppress(InstallError):
+            key = (version_tuple(match[1]), folder.stat().st_mtime_ns, folder.name)
+            releases.append((key, folder))
+    releases.sort()
+    names = [folder.name for _, folder in releases]
+    active = Path(target).name
+    keep = {active}
+    if active in names and names.index(active) > 0:
+        keep.add(names[names.index(active) - 1])
+    stamp = layout.root / APP_SOURCE
+    with contextlib.suppress(OSError, UnicodeDecodeError):
+        if stamp.is_file() and not stamp.is_symlink():
+            keep.add(Path(stamp.read_text()).name)
+    candidates = [folder for _, folder in releases if folder.name not in keep]
+    if not candidates:
+        return []
+    real = versions.resolve()
+    in_use = {
+        path.relative_to(real).parts[0]
+        for path in running_executables()
+        if path.is_relative_to(real) and len(path.relative_to(real).parts) > 1
+    }
+    removed = []
+    for folder in candidates:
+        if folder.name in in_use:
+            continue
+        # Rename first, so a half-deleted folder never looks like a version.
+        doomed = versions / f"{REMOVING}{uuid4().hex}"
+        os.rename(folder, doomed)
+        shutil.rmtree(doomed, ignore_errors=True)
+        removed.append(folder.name)
+    return removed
+
+
+def _prune(layout: Layout) -> None:
+    """Prune after an install or repair, which must never fail because of it."""
+    with contextlib.suppress(OSError, InstallError):
+        prune_versions(layout)
+
+
 def _refresh_scheduler(layout: Layout) -> None:
     """Keep an existing scheduled-task agent's definition current.
 
@@ -562,6 +657,7 @@ def install_bundle(source: Path, layout: Layout, *, _locked: bool = False) -> st
             with contextlib.suppress(OSError, InstallError):
                 publish_app(layout)
             _refresh_scheduler(layout)
+            _prune(layout)
             return version
         except BaseException:
             # The rename is the commit point. A signal immediately after it
