@@ -54,9 +54,24 @@ link with the folder; then remove the old icon from the Dock and add
 `~/Applications/Vikram.app` again.
 
 Managed versions live under
-`~/Library/Application Support/dev.raniendu.vikram.install/`. Old versions are
-retained so running processes can finish safely. They consume roughly one app
-bundle per update; there is no automatic pruning yet. Downloads and installation
+`~/Library/Application Support/dev.raniendu.vikram.install/`, one immutable
+folder under `versions/` per install. After each install, and whenever the app
+opens or `vikram update` finds nothing newer, Vikram removes old version folders
+except:
+
+- the current version and the one installed before it, for rollback;
+- the version `~/Applications/Vikram.app` was last copied from, if that copy
+  could not be updated;
+- any version a running process uses: an open app or CLI, or a scheduled run
+  that started through `current` before the update. Such a version is removed
+  at a later install or launch, once it is no longer running.
+
+Vikram checks running processes by where their executable lives, which macOS
+reports as the version folder even for a process started through `current`. If
+the processes cannot be listed, nothing is removed. Only folders the installer
+created (`MAJOR.MINOR.PATCH-` and 32 hex digits) are considered; a folder is
+renamed before it is deleted, so an interrupted removal never leaves a partial
+version behind, and the next install finishes it. Downloads and installation
 reserve at least 20 GiB plus temporary runtime headroom. Chats remain in the
 separate `~/Library/Application Support/dev.raniendu.vikram/` directory.
 
