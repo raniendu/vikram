@@ -5,7 +5,7 @@ Date: October 21, 2026
 Status: requested by the owner on October 21, 2026 ("give the Vikram desktop app
 its own embedded browser that the agent can control ... while the person watches
 it live in a panel and can stop it or take over"), then implemented on top of the
-[questions, plan mode, and sandbox design](2026-10-20-questions-plan-mode-sandbox-design.md)
+[questions, plan mode, and sandbox design](./2026-10-20-questions-plan-mode-sandbox-design.md)
 with the three decisions below.
 
 ## 1. Outcome
@@ -35,6 +35,11 @@ clicks and typing are script events, which a few sites ignore (section 9).
 
 The live check was specified with `gemma4:26b-a4b-it-qat`, which was no longer
 installed in Ollama; the owner chose to run it through Magnitude (section 10).
+
+**Current setup (November 2, 2026):** Magnitude has been uninstalled. Future
+checks use installed Ollama models at `http://127.0.0.1:11434/v1`. The
+Magnitude checks in section 10 are historical evidence, not runtime setup
+instructions; Vikram's product endpoint remains Ollama.
 
 ## 3. Architecture
 
