@@ -153,7 +153,7 @@ older local state, including historical cloud-judge records.
 Desktop commands:
 
 - `uv run python scripts/build_desktop.py`: build native sidecar and `.app`.
-- `uv run python scripts/build_installer.py`: build combined installer and release ZIP.
+- `uv run python scripts/build_installer.py`: build combined installer, release ZIP, and first-install DMG.
 - `uv run python scripts/check_installer.py dist/installers/Vikram-VERSION-macos-arm64.zip`: isolated packaged-install smoke check.
 - `uv run python scripts/bump_version.py 0.2.0`: set a new release version everywhere.
 - `uv run python scripts/bump_version.py --check`: print the version if every file agrees.

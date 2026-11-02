@@ -162,7 +162,17 @@ class PublishReleaseTests(unittest.TestCase):
         self.directory = Path(temp.name)
         self.archive = self.archive_for("0.2.0", b"installer archive bytes")
         self.release = publish_release.check_archive("v0.2.0", self.archive)
+        self.image = self.disk_image_for("0.2.0", b"disk image bytes")
         self.github = FakeGitHub()
+
+    def disk_image_for(self, version, payload):
+        image = self.directory / f"Vikram-{version}-macos-arm64.dmg"
+        image.write_bytes(payload)
+        digest = hashlib.sha256(payload).hexdigest()
+        (self.directory / f"{image.name}.sha256").write_text(
+            f"{digest}  {image.name}\n"
+        )
+        return image
 
     def archive_for(self, version, payload, directory=None, notices=None):
         """An installer archive whose app carries third-party notices for version."""
@@ -243,6 +253,22 @@ class PublishReleaseTests(unittest.TestCase):
         checksum.write_text("0" * 64 + f"  {self.archive.name}\n")
         with self.assertRaisesRegex(PublishError, "does not match the archive"):
             publish_release.check_archive("v0.2.0", self.archive)
+
+    def test_disk_image_must_sit_beside_the_archive_and_match_its_checksum(self):
+        image, checksum = publish_release.check_disk_image(self.archive, "0.2.0")
+        self.assertEqual(image, (self.image, "application/x-apple-diskimage"))
+        self.assertEqual(checksum[0].name, "Vikram-0.2.0-macos-arm64.dmg.sha256")
+        self.image.write_bytes(b"changed after the build")
+        with self.assertRaisesRegex(PublishError, "does not match the disk image"):
+            publish_release.check_disk_image(self.archive, "0.2.0")
+        self.image.unlink()
+        with self.assertRaisesRegex(PublishError, "dmg is missing"):
+            publish_release.check_disk_image(self.archive, "0.2.0")
+
+    def test_release_notes_offer_the_disk_image_for_first_installs(self):
+        notes = publish_release.release_notes(self.release)
+        self.assertIn("download `Vikram-0.2.0-macos-arm64.dmg`, open it", notes)
+        self.assertIn("`Vikram-0.2.0-macos-arm64.zip` holds the same installer", notes)
 
     def test_archive_must_carry_notices_for_its_version(self):
         for notices, message in (
@@ -402,6 +428,13 @@ class PublishReleaseTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(SystemExit, "needs --commit and GITHUB_TOKEN"):
                 publish_release.main()
+        self.image.unlink()
+        with (
+            patch("sys.argv", ["", "--dry-run", "--tag", "v0.2.0", str(self.archive)]),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            with self.assertRaisesRegex(SystemExit, "dmg is missing"):
+                publish_release.main()
 
     def test_main_publishes_with_the_token_and_reports_the_page(self):
         output = self.directory / "github-output"
@@ -444,7 +477,17 @@ class PublishReleaseTests(unittest.TestCase):
         page = "https://github.com/raniendu/vikram/releases/tag/v0.2.0"
         self.assertEqual(output.read_text(), f"url={page}\n")
         self.assertTrue(self.github.releases[0]["latest"])
-        self.assertEqual(len(self.github.releases[0]["assets"]), 4)
+        self.assertEqual(
+            [asset["name"] for asset in self.github.releases[0]["assets"]],
+            [
+                "Vikram-0.2.0-macos-arm64.zip",
+                "Vikram-0.2.0-macos-arm64.zip.sha256",
+                "Vikram-0.2.0-macos-arm64.dmg",
+                "Vikram-0.2.0-macos-arm64.dmg.sha256",
+                "Vikram-0.2.0-THIRD-PARTY-NOTICES.md",
+                "Vikram-0.2.0-third-party-sources.tar",
+            ],
+        )
         # The downloaded sources lived only in a temporary folder.
         self.assertFalse(prepared[0].exists())
         # The token reaches GitHub's API but never its storage host.
@@ -500,6 +543,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
             s for s in build["steps"] if "upload-artifact" in s.get("uses", "")
         )
         self.assertIn("third-party-sources.tar", upload["with"]["path"])
+        self.assertIn("macos-arm64.dmg\n", upload["with"]["path"])
+        self.assertIn("macos-arm64.dmg.sha256", upload["with"]["path"])
         publish = "\n".join(
             step.get("run", "") for step in self.release["jobs"]["publish"]["steps"]
         )

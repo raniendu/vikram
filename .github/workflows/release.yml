@@ -96,7 +96,7 @@ jobs:
       - name: Run the native tests
         run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
 
-      - name: Check the archive the updater will download
+      - name: Check the archive the updater will download, and the disk image
         id: archive
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -117,6 +117,8 @@ jobs:
           path: |
             dist/installers/Vikram-${{ steps.archive.outputs.version }}-macos-arm64.zip
             dist/installers/Vikram-${{ steps.archive.outputs.version }}-macos-arm64.zip.sha256
+            dist/installers/Vikram-${{ steps.archive.outputs.version }}-macos-arm64.dmg
+            dist/installers/Vikram-${{ steps.archive.outputs.version }}-macos-arm64.dmg.sha256
             dist/installers/Vikram-${{ steps.archive.outputs.version }}-third-party-sources.tar
           if-no-files-found: error
           retention-days: 7

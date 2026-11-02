@@ -12,8 +12,9 @@ even while the app is closed.
 
 ## Desktop app (Apple Silicon Mac)
 
-Install the desktop app and CLI together by opening **Install Vikram.app** from
-the installer ZIP. Then open `~/Applications/Vikram.app` or run `vikram` in a new
+Install the desktop app and CLI together: open the installer disk image
+(`Vikram-VERSION-macos-arm64.dmg`), then open **Install Vikram.app** inside it.
+The installer ZIP holds the same installer. Then open `~/Applications/Vikram.app` or run `vikram` in a new
 terminal. The app checks for updates when it opens, installs them for both,
 and offers to restart. Use `vikram update` to update both from a terminal,
 `vikram update --check` to check without installing, and `vikram --version` to
@@ -53,7 +54,8 @@ uv run python scripts/build_installer.py
 ```
 
 Open `dist/installers/Install Vikram.app` to install both components in one
-action. Packaging also produces `dist/installers/Vikram-VERSION-macos-arm64.zip`.
+action. Packaging also produces `dist/installers/Vikram-VERSION-macos-arm64.dmg`
+and `dist/installers/Vikram-VERSION-macos-arm64.zip`, which hold that installer.
 The installer preserves an existing uv-managed CLI launcher, keeps chats and
 models, and checks the 20 GiB reserve before changing the installed version.
 To publish a release that `vikram update` installs, bump the version with

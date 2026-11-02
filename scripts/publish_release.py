@@ -2,7 +2,8 @@
 
 The release workflow runs this on a GitHub-hosted runner after the release Mac
 built and checked the archive. It creates a draft release for the pushed tag,
-uploads the archive and its checksum file, checks GitHub's stored copy against
+uploads the archive, the disk image holding the same installer, and their
+checksum files, checks GitHub's stored copy against
 the build, and only then publishes the draft as the latest release. Finally it
 reads the latest release back with the updater's own parser, which requires
 GitHub's SHA-256 digest. A published release is never changed; a draft left by a
@@ -46,6 +47,27 @@ class PublishError(Exception):
 
 def asset_name(version: str) -> str:
     return f"Vikram-{version}-macos-arm64.zip"
+
+
+def disk_image_name(version: str) -> str:
+    return f"Vikram-{version}-macos-arm64.dmg"
+
+
+def check_disk_image(archive: Path, version: str) -> list[tuple[Path, str]]:
+    """The disk image built beside the archive, and its checksum file, to upload.
+
+    The release Mac mounts it and checks the installer inside when it builds it
+    (scripts/build_installer.py); here its checksum file must still match.
+    """
+    image = archive.with_name(disk_image_name(version))
+    checksum = image.with_name(f"{image.name}.sha256")
+    if not image.is_file() or image.stat().st_size == 0:
+        raise PublishError(f"{image.name} is missing beside the archive.")
+    with image.open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    if not checksum.is_file() or checksum.read_text() != f"{digest}  {image.name}\n":
+        raise PublishError(f"{checksum.name} does not match the disk image.")
+    return [(image, "application/x-apple-diskimage"), (checksum, "text/plain")]
 
 
 def check_archive(tag: str, archive: Path, expected: str | None = None) -> Release:
@@ -93,13 +115,14 @@ def check_archive(tag: str, archive: Path, expected: str | None = None) -> Relea
 
 def release_notes(release: Release) -> str:
     name = asset_name(release.version)
+    image = disk_image_name(release.version)
     return f"""\
 Vikram {release.version} for Apple Silicon Macs with macOS 13 or newer: the desktop \
 app and CLI in one installer. Vikram uses your local Ollama models.
 
 - Update an installed copy: `vikram update`
-- Install for the first time: download `{name}`, unzip it, and open \
-**Install Vikram.app**.
+- Install for the first time: download `{image}`, open it, and open \
+**Install Vikram.app**. `{name}` holds the same installer.
 
 This build is ad-hoc signed and not notarized. `vikram update` verifies and \
 installs it, but macOS may refuse to open a copy downloaded in a web browser. See \
@@ -306,7 +329,11 @@ def _outputs(**values: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("archive", type=Path, help="Vikram-VERSION-macos-arm64.zip")
+    parser.add_argument(
+        "archive",
+        type=Path,
+        help="Vikram-VERSION-macos-arm64.zip, with the .dmg and checksums beside it",
+    )
     parser.add_argument("--tag", required=True, help="the vMAJOR.MINOR.PATCH tag")
     parser.add_argument("--commit", help="the commit the release Mac built")
     parser.add_argument("--sha256", help="the archive digest the release Mac built")
@@ -323,11 +350,13 @@ def main() -> None:
     args = parser.parse_args()
     try:
         release = check_archive(args.tag, args.archive, args.sha256)
+        disk_image = check_disk_image(args.archive, release.version)
         if args.dry_run:
             print(
                 f"{args.archive.name} ({release.size} bytes, SHA-256 "
                 f"{release.sha256}) passes the updater's checks for {args.tag} and "
-                "carries its third-party notices. Dry run: nothing was published."
+                f"carries its third-party notices; {disk_image[0][0].name} matches "
+                "its checksum. Dry run: nothing was published."
             )
             _outputs(version=release.version, sha256=release.sha256)
             return
@@ -336,7 +365,7 @@ def main() -> None:
             raise PublishError("Publishing needs --commit and GITHUB_TOKEN.")
         with tempfile.TemporaryDirectory(prefix="vikram-release-") as work:
             # The sources are checked before anything reaches GitHub.
-            extras = third_party.release_assets(
+            extras = disk_image + third_party.release_assets(
                 args.archive,
                 release.version,
                 Path(work),

@@ -2,8 +2,11 @@
 
 ## Install both interfaces
 
-Apple Silicon and macOS 13+ are supported. Unzip
-`Vikram-VERSION-macos-arm64.zip`, then open **Install Vikram.app** once. It installs
+Apple Silicon and macOS 13+ are supported. Open
+`Vikram-VERSION-macos-arm64.dmg`, then open **Install Vikram.app** in the window
+that appears; you can eject the disk image when it finishes.
+`Vikram-VERSION-macos-arm64.zip` holds the same installer: unzip it and open
+**Install Vikram.app** instead. Run the installer once. It installs
 the desktop app and CLI together for your account, without administrator access
 or a separate Python/uv/Node/Rust installation. Start Ollama and install a local
 model separately. The installer never changes models or the chat library.
@@ -98,8 +101,11 @@ uv run python scripts/check_installer.py dist/installers/Vikram-VERSION-macos-ar
 
 `VERSION` is the release version, which
 `uv run python scripts/bump_version.py --check` prints. The build produces the
-versioned ZIP, its `.sha256` checksum, and a clickable
-`dist/installers/Install Vikram.app`. `--skip-build` packages a previously built
+versioned ZIP and disk image (`.dmg`), a `.sha256` checksum for each, and a
+clickable `dist/installers/Install Vikram.app`. Both hold the same installer. The
+build mounts the disk image read-only and checks the installer in it, as it does
+for the ZIP: signatures, notices and executable permissions. The ZIP is what
+`vikram update` downloads; the disk image is for first installs. `--skip-build` packages a previously built
 app, checking its version, signature, runtime and notices first. The smoke check
 extracts the actual ZIP, checks the app's third-party notices, and exercises
 installation, reinstallation, bundled CLI startup, the bundled Python sandbox (it
@@ -136,17 +142,19 @@ Pushing a tag such as `v0.2.0` on a commit in `main` runs
    the tag is on `main` and matches every version file and lockfile, runs the
    offline Python and frontend tests, builds with `scripts/build_installer.py`,
    checks the ZIP with `scripts/check_installer.py`, runs the native tests,
-   checks the archive against the updater's rules, and downloads every
+   checks the archive against the updater's rules and the disk image against its
+   checksum, and downloads every
    third-party source the app's notices list, checking each against its pinned
    digest and packing them as `Vikram-X.Y.Z-third-party-sources.tar`. It hands
-   the ZIP, its checksum, and the sources archive to the next job, then deletes
+   the ZIP, the disk image, their checksums, and the sources archive to the next job, then deletes
    its build directories. The sources are downloaded here because Alpine's
    GitLab refuses GitHub's hosted runners (HTTP 418, since October 2026).
 2. **Publish the release**, on a GitHub-hosted runner: the only job that can
    write. `scripts/publish_release.py --sources` first checks the sources
    archive offline: exactly the files the archive's notices list, each with its
-   pinned size and digest, and nothing else. Then it creates a draft release; uploads `Vikram-X.Y.Z-macos-arm64.zip`, its
-   `.sha256`, `Vikram-X.Y.Z-THIRD-PARTY-NOTICES.md` and
+   pinned size and digest, and nothing else. Then it creates a draft release; uploads `Vikram-X.Y.Z-macos-arm64.zip`,
+   `Vikram-X.Y.Z-macos-arm64.dmg`, their `.sha256` files,
+   `Vikram-X.Y.Z-THIRD-PARTY-NOTICES.md` and
    `Vikram-X.Y.Z-third-party-sources.tar`; compares GitHub's stored copy of each
    (and its SHA-256 `digest`) with the build's; and only then publishes the
    draft as the latest release. Finally it reads the latest release back with
@@ -219,12 +227,13 @@ to publish them this way, for updating their own Macs, until Developer ID signin
 is set up. `vikram update` downloads with its own HTTPS client, so macOS does not
 quarantine the archive, and it verifies GitHub's digest, the code signatures and
 the bundled runtime before switching versions. A copy downloaded in a web browser
-is quarantined, and Gatekeeper may refuse to open it. Do not disable Gatekeeper
+is quarantined, and Gatekeeper may refuse to open it; that includes the disk
+image, which exists for first installs. The disk image itself is not signed. Do not disable Gatekeeper
 or strip quarantine attributes.
 
 Before offering releases as a public download, configure Developer ID signing
 for the Tauri app, its embedded Python executable/libraries, the sandbox's VM
-runtime, and the installer; configure and test Hardened Runtime entitlements for
+runtime, the installer and its disk image; configure and test Hardened Runtime entitlements for
 bundled Python; then notarize and staple the distribution using Apple's tools. The VM helper `smol-vmm` needs its
 `com.apple.security.hypervisor` and `com.apple.security.cs.disable-library-validation`
 entitlements: the build ships it unmodified because PyInstaller's re-signing
