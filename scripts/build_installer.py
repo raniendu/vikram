@@ -27,6 +27,8 @@ from vikram.installation import (
     version_tuple,
 )
 
+INSTALLER = "Install Vikram.app"
+
 
 def release_version() -> str:
     desktop = ROOT / "apps/desktop"
@@ -48,6 +50,70 @@ def release_version() -> str:
                 f"Version mismatch: {component} is {actual}, expected {version}."
             )
     return version
+
+
+def check_payload(installer: Path, version: str, where: str) -> None:
+    """Check an installer as people receive it: signatures, notices, executables."""
+    app = installer / "Contents/Resources/Vikram.app"
+    verify_bundle(installer)
+    verify_bundle(app)
+    try:
+        check_notices(app, version)
+    except SourceError as error:
+        raise SystemExit(f"{where}: {error}") from None
+    if not stat.S_IMODE((app / "Contents/MacOS/vikram-sidecar").stat().st_mode) & 0o111:
+        raise SystemExit(f"{where}: the runtime lost executable permissions.")
+
+
+def build_disk_image(payload: Path, image: Path, version: str) -> None:
+    """Pack the folder holding Install Vikram.app into a compressed disk image."""
+    subprocess.run(
+        [
+            "/usr/bin/hdiutil",
+            "create",
+            "-quiet",
+            "-ov",
+            "-volname",
+            f"Install Vikram {version}",
+            "-srcfolder",
+            str(payload),
+            "-fs",
+            "HFS+",
+            "-format",
+            "UDZO",
+            "-imagekey",
+            "zlib-level=9",
+            str(image),
+        ],
+        check=True,
+    )
+
+
+def check_disk_image(image: Path, version: str, mount: Path) -> None:
+    """Mount the image read-only and check the installer exactly as it ships."""
+    subprocess.run(["/usr/bin/hdiutil", "verify", "-quiet", str(image)], check=True)
+    mount.mkdir()
+    subprocess.run(
+        [
+            "/usr/bin/hdiutil",
+            "attach",
+            "-quiet",
+            "-readonly",
+            "-nobrowse",
+            "-noautoopen",
+            "-mountpoint",
+            str(mount),
+            str(image),
+        ],
+        check=True,
+    )
+    try:
+        visible = sorted(path.name for path in mount.iterdir() if path.name[0] != ".")
+        if visible != [INSTALLER]:
+            raise SystemExit(f"The disk image holds {visible}, not only {INSTALLER}.")
+        check_payload(mount / INSTALLER, version, "The packaged disk image")
+    finally:
+        subprocess.run(["/usr/bin/hdiutil", "detach", "-quiet", str(mount)], check=True)
 
 
 def main() -> None:
@@ -84,7 +150,9 @@ def main() -> None:
     with tempfile.TemporaryDirectory(
         prefix="vikram-installer-", dir=ROOT / "build"
     ) as temporary:
-        installer = Path(temporary) / "Install Vikram.app"
+        # The disk image holds exactly this folder's contents.
+        payload = Path(temporary) / "payload"
+        installer = payload / INSTALLER
         contents = installer / "Contents"
         (contents / "MacOS").mkdir(parents=True)
         (contents / "Resources").mkdir()
@@ -139,17 +207,11 @@ def main() -> None:
         from vikram.releases import extract_release
 
         app = extract_release(staged_archive, Path(temporary) / "archive-check")
-        verify_bundle(app.parents[2])
-        verify_bundle(app)
-        try:
-            check_notices(app, version)
-        except SourceError as error:
-            raise SystemExit(f"The packaged archive: {error}") from None
-        if (
-            not stat.S_IMODE((app / "Contents/MacOS/vikram-sidecar").stat().st_mode)
-            & 0o111
-        ):
-            raise SystemExit("The packaged runtime lost executable permissions.")
+        check_payload(app.parents[2], version, "The packaged archive")
+        image = destination / f"Vikram-{version}-macos-arm64.dmg"
+        staged_image = Path(temporary) / image.name
+        build_disk_image(payload, staged_image, version)
+        check_disk_image(staged_image, version, Path(temporary) / "image-check")
         with staged_archive.open("rb") as stream:
             digest = hashlib.file_digest(stream, "sha256").hexdigest()
         check_space()
@@ -157,14 +219,22 @@ def main() -> None:
         (destination / f"{archive.name}.sha256").write_text(
             f"{digest}  {archive.name}\n"
         )
+        with staged_image.open("rb") as stream:
+            image_digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        check_space()
+        os.replace(staged_image, image)
+        (destination / f"{image.name}.sha256").write_text(
+            f"{image_digest}  {image.name}\n"
+        )
         # Also retain the clickable local installer without needing to unzip it.
-        local = destination / "Install Vikram.app"
+        local = destination / INSTALLER
         if local.exists():
             shutil.rmtree(local)
         shutil.copytree(installer, local)
     check_space()
-    print(f"Installer: {destination / 'Install Vikram.app'}")
+    print(f"Installer: {destination / INSTALLER}")
     print(f"Archive: {archive}")
+    print(f"Disk image: {image}")
     print(
         "Local ad-hoc signed build. Developer ID signing and notarization are required before public distribution."
     )
