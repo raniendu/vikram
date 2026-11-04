@@ -17,6 +17,7 @@ struct MarkdownView: View {
             }
         }
         .environment(\.openURL, webLinks)
+        .tint(Theme.link)
         .textSelection(.enabled)
     }
 }
@@ -28,7 +29,7 @@ private struct BlockView: View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             if block.listDepth > 0 {
                 Text(block.marker ?? "")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.muted)
                     .monospacedDigit()
                     .frame(width: 22, alignment: .trailing)
                     .accessibilityHidden(block.marker == nil)
@@ -36,31 +37,34 @@ private struct BlockView: View {
             content
         }
         .padding(.leading, CGFloat(max(block.listDepth - 1, 0)) * 22)
-        .padding(.leading, CGFloat(block.quoteDepth) * 14)
+        .padding(.leading, CGFloat(block.quoteDepth) * 16)
         .overlay(alignment: .leading) {
             if block.quoteDepth > 0 {
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(.tertiary)
-                    .frame(width: 3)
+                Rectangle()
+                    .fill(Theme.accent.opacity(0.6))
+                    .frame(width: 2)
             }
         }
-        .foregroundStyle(block.quoteDepth > 0 ? .secondary : .primary)
+        .foregroundStyle(block.quoteDepth > 0 ? Theme.muted : Theme.ink)
     }
 
     @ViewBuilder private var content: some View {
         switch block.kind {
         case .paragraph:
-            Text(block.text).fixedSize(horizontal: false, vertical: true)
+            Text(block.text).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
         case .heading(let level):
             Text(block.text)
-                .font(level <= 1 ? .title2 : level == 2 ? .title3 : .headline)
-                .bold()
-                .padding(.top, 4)
+                .font(
+                    Theme.display(
+                        level <= 1 ? 26 : level == 2 ? 22 : 17, weight: .medium,
+                        relativeTo: level <= 2 ? .title2 : .headline)
+                )
+                .padding(.top, 6)
                 .accessibilityAddTraits(.isHeader)
         case .code(let language):
             CodeBox(title: language?.isEmpty == false ? language! : "code", text: block.plain)
         case .rule:
-            Divider().padding(.vertical, 4)
+            Rectangle().fill(Theme.rule).frame(height: 1).padding(.vertical, 6)
         case .table(let table):
             TableView(table: table)
         }
@@ -72,14 +76,17 @@ private struct TableView: View {
 
     var body: some View {
         ScrollView(.horizontal) {
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+            Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 9) {
                 if !table.header.isEmpty {
                     GridRow {
                         ForEach(table.header.indices, id: \.self) { column in
-                            cell(table.header[column], column).bold()
+                            cell(table.header[column], column)
+                                .font(.system(size: 10, weight: .semibold))
+                                .tracking(1.2)
+                                .textCase(.uppercase)
                         }
                     }
-                    Divider()
+                    Rectangle().fill(Theme.ink).frame(height: 1).gridCellUnsizedAxes(.horizontal)
                 }
                 ForEach(table.rows.indices, id: \.self) { row in
                     GridRow {
@@ -87,11 +94,11 @@ private struct TableView: View {
                             cell(table.rows[row][column], column)
                         }
                     }
+                    Rectangle().fill(Theme.rule).frame(height: 1).gridCellUnsizedAxes(.horizontal)
                 }
             }
-            .padding(10)
+            .padding(.vertical, 4)
         }
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func cell(_ text: AttributedString, _ column: Int) -> some View {

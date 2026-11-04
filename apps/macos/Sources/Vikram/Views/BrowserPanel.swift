@@ -37,13 +37,13 @@ struct BrowserPanel: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: browser.url.hasPrefix("https:") ? "lock.fill" : "globe")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.muted)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(browser.title.isEmpty ? (address.isEmpty ? "Browser" : address) : browser.title)
-                        .font(.headline).lineLimit(1)
+                        .font(Theme.display(15, weight: .medium, relativeTo: .headline)).lineLimit(1)
                     if !address.isEmpty && !browser.title.isEmpty {
-                        Text(address).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text(address).font(.caption).foregroundStyle(Theme.muted).lineLimit(1)
                             .truncationMode(.middle)
                             .help(browser.url)
                     }
@@ -63,28 +63,30 @@ struct BrowserPanel: View {
             .padding(.vertical, 8)
             Divider()
             HStack(spacing: 8) {
-                Text(status).font(.callout).foregroundStyle(.secondary)
+                Text(status).font(.callout).foregroundStyle(chats.browserControl == .person ? Theme.link : Theme.muted)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if chats.browserControl == .person {
                     Button("Hand Back", systemImage: "arrow.uturn.backward") {
                         Task { await chats.controlBrowser(.agent) }
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.primary)
                 } else {
                     Button("Take Over", systemImage: "hand.raised") {
                         Task { await chats.controlBrowser(.person) }
                     }
+                    .buttonStyle(.secondary)
                     .help("Use the page yourself; Vikram’s browser actions wait until you hand it back")
                 }
                 if chats.active != nil {
                     Button("Stop", systemImage: "stop.fill") { Task { await chats.stop() } }
+                        .buttonStyle(.secondary)
                         .help("Stop the reply")
                 }
             }
             .controlSize(.small)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(chats.browserControl == .person ? Color.accentColor.opacity(0.12) : .clear)
+            .background(chats.browserControl == .person ? Theme.accent.opacity(0.1) : .clear)
             .accessibilityElement(children: .contain)
             Divider()
             WebViewHost(webView: browser.webView)
@@ -92,11 +94,12 @@ struct BrowserPanel: View {
                     // While Vikram drives, a thin tint marks the page as busy.
                     if chats.active != nil && chats.browserControl == .agent {
                         RoundedRectangle(cornerRadius: 0)
-                            .strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 2)
+                            .strokeBorder(Theme.accent.opacity(0.7), lineWidth: 2)
                             .allowsHitTesting(false)
                     }
                 }
         }
+        .background(Theme.surface)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Vikram’s browser")
     }

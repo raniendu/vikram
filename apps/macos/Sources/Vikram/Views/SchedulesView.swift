@@ -75,26 +75,24 @@ private struct TaskList: View {
     var body: some View {
         Group {
             if schedules.tasks.isEmpty {
-                ContentUnavailableView {
-                    Label("Nothing Scheduled Yet", systemImage: "calendar.badge.clock")
-                } description: {
-                    Text(
+                Welcome(
+                    title: "Nothing scheduled yet.",
+                    text:
                         "Ask in any chat, for example “every weekday at 8am, summarize the tech news” or “remind me tomorrow at 3pm to call the dentist”, or create a task here."
-                    )
-                } actions: {
-                    Button("New Task", action: new).disabled(chats.offline)
+                ) {
+                    Button("New Task", action: new).buttonStyle(.primary).disabled(chats.offline)
                 }
             } else {
                 List {
                     if let note = backgroundNote {
-                        Section { Text(note).font(.callout).foregroundStyle(.secondary) }
+                        Section { Text(note).font(.callout).foregroundStyle(Theme.muted) }
                     }
                     Section {
                         ForEach(schedules.tasks) { task in
                             NavigationLink(value: ScheduleRoute.task(task.id)) {
                                 VStack(alignment: .leading, spacing: 3) {
-                                    Text(task.name).font(.headline)
-                                    Text(task.description).foregroundStyle(.secondary)
+                                    Text(task.name).font(Theme.display(16, weight: .medium, relativeTo: .headline))
+                                    Text(task.description).foregroundStyle(Theme.muted)
                                     Text(
                                         stateText(task)
                                             + (task.lastRun.map {
@@ -102,7 +100,7 @@ private struct TaskList: View {
                                             } ?? "")
                                     )
                                     .font(.caption)
-                                    .foregroundStyle(task.state == "paused" ? .orange : .secondary)
+                                    .foregroundStyle(task.state == "paused" ? Theme.accent : Theme.muted)
                                 }
                                 .padding(.vertical, 3)
                             }
@@ -111,6 +109,7 @@ private struct TaskList: View {
                 }
             }
         }
+        .scrollContentBackground(.hidden)
         .navigationTitle("Scheduled Tasks")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -156,10 +155,14 @@ private struct TaskDetail: View {
                         value: task.origin == "chat"
                             ? "In a chat" : task.origin == "cli" ? "In the terminal" : "In the app")
                 }
-                Section("Each Run Asks") {
-                    Text(task.prompt).textSelection(.enabled)
+                Section {
+                    Text(task.prompt)
+                        .font(Theme.display(16, weight: .regular, relativeTo: .body))
+                        .textSelection(.enabled)
+                } header: {
+                    Eyebrow("Each run asks")
                 }
-                Section("Runs") {
+                Section {
                     if let runs = task.runs, !runs.isEmpty {
                         ForEach(runs) { run in
                             NavigationLink(value: ScheduleRoute.run(run.id)) {
@@ -168,10 +171,13 @@ private struct TaskDetail: View {
                             .disabled(run.status == "missed")
                         }
                     } else {
-                        Text("No runs yet.").foregroundStyle(.secondary)
+                        Text("No runs yet.").foregroundStyle(Theme.muted)
                     }
+                } header: {
+                    Eyebrow("Runs")
                 }
             }
+            .scrollContentBackground(.hidden)
             .navigationTitle(task.name)
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
@@ -220,11 +226,11 @@ private struct RunRow: View {
                 Text(runStatus[run.status] ?? run.status)
             }
             .frame(width: 100, alignment: .leading)
-            .foregroundStyle(run.status == "failed" || run.status == "missed" ? .red : .primary)
+            .foregroundStyle(run.status == "failed" || run.status == "missed" ? Theme.danger : Theme.ink)
             Text(when(run.started)).monospacedDigit()
-            Text(triggers[run.trigger] ?? "").foregroundStyle(.secondary)
+            Text(triggers[run.trigger] ?? "").foregroundStyle(Theme.muted)
             Text(run.status == "missed" ? run.error ?? "" : run.preview ?? run.error ?? "")
-                .foregroundStyle(.secondary).lineLimit(1)
+                .foregroundStyle(Theme.muted).lineLimit(1)
         }
     }
 }
@@ -238,16 +244,12 @@ private struct RunDetail: View {
         if let run = schedules.run {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text(
-                        "\((triggers[run.summary.trigger] ?? "Run").uppercased()) · \(when(run.summary.started))"
-                    )
-                    .font(.caption).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    Eyebrow("\(triggers[run.summary.trigger] ?? "Run") · \(when(run.summary.started))")
                     UserMessage(text: run.prompt, attachments: [], label: "Task prompt")
                     AnswerView(attempt: run.attempt, openTask: { state.openTask($0) })
                 }
-                .frame(maxWidth: 760)
-                .padding(24)
+                .frame(maxWidth: 700)
+                .padding(28)
                 .frame(maxWidth: .infinity)
             }
             .navigationTitle("\(schedules.task?.name ?? "Run") · \(when(run.summary.started))")
@@ -374,7 +376,7 @@ struct TaskEditor: View {
                         }
                     }
                     if minutes < 15 {
-                        Text("Run at most every 15 minutes.").font(.caption).foregroundStyle(.orange)
+                        Text("Run at most every 15 minutes.").font(.caption).foregroundStyle(Theme.danger)
                     }
                 } else {
                     DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute)
@@ -391,13 +393,15 @@ struct TaskEditor: View {
                         "Runs happen on this Mac, even when Vikram is closed. Nobody is there to answer questions, so Vikram decides and says what it chose. Web search and the Python sandbox work; the browser is not used."
                     )
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.muted)
                 }
             }
             .formStyle(.grouped)
+            .tint(Theme.accent)
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
+                    .buttonStyle(.secondary)
                     .keyboardShortcut(.cancelAction)
                 Button(task == nil ? "Create Task" : "Save") {
                     Task {
@@ -408,6 +412,7 @@ struct TaskEditor: View {
                         if saved { dismiss() }
                     }
                 }
+                .buttonStyle(.primary)
                 .keyboardShortcut(.defaultAction)
                 .disabled(!valid || schedules.working)
             }
