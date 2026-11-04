@@ -323,14 +323,14 @@ public final class BrowserEngine: NSObject {
         let configuration = WKSnapshotConfiguration()
         let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         configuration.snapshotWidth = NSNumber(value: Double(Self.shotWidth / max(scale, 1)))
-        guard
-            let image = try? await deadline(5, ServiceError("Snapshot timed out."), {
-                try await view.takeSnapshot(configuration: configuration)
-            }),
-            let tiff = image.tiffRepresentation,
-            let bitmap = NSBitmapImageRep(data: tiff)
-        else { return nil }
-        return bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.6])
+        // Only the JPEG bytes leave the closure: older SDKs do not mark NSImage Sendable.
+        let jpeg = try? await deadline(5, ServiceError("Snapshot timed out.")) { () -> Data? in
+            let image = try await view.takeSnapshot(configuration: configuration)
+            guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff)
+            else { return nil }
+            return bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.6])
+        }
+        return jpeg ?? nil
     }
 }
 
