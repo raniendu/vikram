@@ -8,7 +8,7 @@ that appears; you can eject the disk image when it finishes.
 `Vikram-VERSION-macos-arm64.zip` holds the same installer: unzip it and open
 **Install Vikram.app** instead. Run the installer once. It installs
 the desktop app and CLI together for your account, without administrator access
-or a separate Python/uv/Node/Rust installation. Start Ollama and install a local
+or a separate Python or uv installation. Start Ollama and install a local
 model separately. The installer never changes models or the chat library.
 
 Open `~/Applications/Vikram.app`, or open a new terminal and run:
@@ -114,13 +114,12 @@ window, without the network), and the desktop protocol in a disposable
 directory. It does not install into the owner's account or contact
 Ollama/Parallel.
 
-All four versions must agree: `pyproject.toml`,
-`apps/desktop/package.json`, `apps/desktop/src-tauri/Cargo.toml`, and
-`apps/desktop/src-tauri/tauri.conf.json`, and so must the uv, npm and Cargo
-lockfiles. `uv run python scripts/bump_version.py X.Y.Z` sets a new version in all
-seven files. It changes only the version strings, keeps every dependency pin, and
-refuses a version that is not newer. The Settings dialog shows the version from
-`package.json`. The build also checks the installed Python metadata; run
+All versions must agree: `pyproject.toml`, the uv lockfile, and the app's
+`apps/macos/Resources/Info.plist` (`CFBundleShortVersionString` and
+`CFBundleVersion`). `uv run python scripts/bump_version.py X.Y.Z` sets a new version
+in all three files. It changes only the version strings, keeps every dependency pin, and
+refuses a version that is not newer. Settings shows the version from the app's
+`Info.plist`. The build also checks the installed Python metadata; run
 `uv sync --locked` after a version change. Each published stable version is
 unique: use a new version for every changed release rather than replacing assets
 on an existing tag. Updates never downgrade or replace an already current version.
@@ -140,10 +139,9 @@ Pushing a tag such as `v0.2.0` on a commit in `main` runs
 
 1. **Build and check on the release Mac**, with a read-only token. It checks that
    the tag is on `main` and matches every version file and lockfile, runs the
-   offline Python and frontend tests, builds with `scripts/build_installer.py`,
-   checks the ZIP with `scripts/check_installer.py`, runs the native tests,
-   checks the archive against the updater's rules and the disk image against its
-   checksum, and downloads every
+   offline Python and Swift tests, builds with `scripts/build_installer.py`,
+   checks the ZIP with `scripts/check_installer.py`, checks the archive against
+   the updater's rules and the disk image against its checksum, and downloads every
    third-party source the app's notices list, checking each against its pinned
    digest and packing them as `Vikram-X.Y.Z-third-party-sources.tar`. It hands
    the ZIP, the disk image, their checksums, and the sources archive to the next job, then deletes
@@ -182,8 +180,8 @@ is on `main`.
    publish waits for your approval, and allow only tags matching `v*`.
 
 The runner runs jobs as your macOS account, with the `PATH` of the terminal that
-starts it. That terminal needs the README's build tools: uv, Node 22.12 or newer,
-Rust, and the Xcode command-line tools. Stay logged in, because the browser check
+starts it. That terminal needs the README's build tools: uv and Xcode 16 or
+later (Swift 6). Stay logged in, because the browser check
 opens a hidden WebKit window. A build needs 24 GiB free to keep the 20 GiB
 reserve. Start the runner only while releasing, so nothing else can use it.
 
@@ -232,7 +230,7 @@ image, which exists for first installs. The disk image itself is not signed. Do 
 or strip quarantine attributes.
 
 Before offering releases as a public download, configure Developer ID signing
-for the Tauri app, its embedded Python executable/libraries, the sandbox's VM
+for the native app, its embedded Python executable/libraries, the sandbox's VM
 runtime, the installer and its disk image; configure and test Hardened Runtime entitlements for
 bundled Python; then notarize and staple the distribution using Apple's tools. The VM helper `smol-vmm` needs its
 `com.apple.security.hypervisor` and `com.apple.security.cs.disable-library-validation`

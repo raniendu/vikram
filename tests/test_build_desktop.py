@@ -7,14 +7,12 @@ from scripts import build_desktop
 
 class BuildTests(unittest.TestCase):
     def test_build_rejects_running_output_before_changing_files(self):
-        desktop = build_desktop.ROOT / "apps/desktop/src-tauri"
-        bundle = desktop / "target/release/bundle/macos/Vikram.app/Contents/MacOS"
+        bundle = build_desktop.APP / "Contents/MacOS"
         for executable in (
             bundle / "vikram-desktop",
             bundle / "vikram-sidecar",
-            desktop / "target/release/vikram-desktop",
-            desktop / "target/release/vikram-sidecar",
-            desktop / "binaries/vikram-sidecar-aarch64-apple-darwin",
+            build_desktop.SIDECAR_DIST / build_desktop.SIDECAR,
+            build_desktop.PACKAGE / ".build/out/Products/Release/vikram-desktop",
         ):
             with self.subTest(executable=executable):
                 processes = str(executable) + "\n"

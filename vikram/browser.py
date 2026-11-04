@@ -251,16 +251,20 @@ def repair_arguments(tool: str, args: dict) -> dict:
 def helper_path() -> Path | None:
     """The app binary that hosts the hidden browser for the CLI.
 
-    In an installed app it sits beside the CLI's runtime; in a checkout it is a
-    built desktop app (release first).
+    In an installed app it sits beside the CLI's runtime; in a checkout it is the
+    built Vikram.app, or the Swift package's own build of the app.
     """
     if getattr(sys, "frozen", False):
         path = Path(sys.executable).with_name(HELPER_NAME)
         return path if path.is_file() and os.access(path, os.X_OK) else None
-    target = Path(__file__).resolve().parents[1] / "apps/desktop/src-tauri/target"
+    package = Path(__file__).resolve().parents[1] / "apps/macos"
     built = [
         path
-        for path in (target / "release" / HELPER_NAME, target / "debug" / HELPER_NAME)
+        for path in (
+            package / "build/Vikram.app/Contents/MacOS" / HELPER_NAME,
+            package / ".build/out/Products/Release" / HELPER_NAME,
+            package / ".build/out/Products/Debug" / HELPER_NAME,
+        )
         if path.is_file() and os.access(path, os.X_OK)
     ]
     # The newest build: an older one may predate the helper mode.

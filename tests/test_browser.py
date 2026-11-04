@@ -674,7 +674,7 @@ if __name__ == "__main__":
 
 class DesktopBrowserTests(unittest.IsolatedAsyncioTestCase):
     """The runtime asks the app to act and the app answers with `browser_result`,
-    as the Tauri host does for its WebKit panel."""
+    as the native app does for its WebKit panel."""
 
     async def asyncSetUp(self):
         from test_desktop_runtime import ENTRY, TOOL_SHOW

@@ -2,7 +2,6 @@
 
 import argparse
 import hashlib
-import json
 import os
 import plistlib
 import shutil
@@ -14,7 +13,7 @@ import tomllib
 import zipfile
 from pathlib import Path
 
-from build_desktop import ROOT, check_space
+from build_desktop import APP, ROOT, check_space
 
 from scripts.third_party import SourceError, check_notices
 from vikram.installation import (
@@ -31,18 +30,14 @@ INSTALLER = "Install Vikram.app"
 
 
 def release_version() -> str:
-    desktop = ROOT / "apps/desktop"
     version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
     version_tuple(version)
+    with (ROOT / "apps/macos/Resources/Info.plist").open("rb") as stream:
+        app = plistlib.load(stream)
     versions = {
         "installed Python package": cli_version(),
-        "Tauri": json.loads((desktop / "src-tauri/tauri.conf.json").read_text())[
-            "version"
-        ],
-        "frontend": json.loads((desktop / "package.json").read_text())["version"],
-        "Rust": tomllib.loads((desktop / "src-tauri/Cargo.toml").read_text())[
-            "package"
-        ]["version"],
+        "app (short version)": app["CFBundleShortVersionString"],
+        "app (bundle version)": app["CFBundleVersion"],
     }
     for component, actual in versions.items():
         if actual != version:
@@ -131,7 +126,7 @@ def main() -> None:
         subprocess.run(
             [sys.executable, str(ROOT / "scripts/build_desktop.py")], check=True
         )
-    source = ROOT / "apps/desktop/src-tauri/target/release/bundle/macos/Vikram.app"
+    source = APP
     if bundle_version(source) != version:
         raise SystemExit(
             "The app is stale. Rebuild it with the current release version."
@@ -158,7 +153,8 @@ def main() -> None:
         (contents / "Resources").mkdir()
         shutil.copytree(source, contents / "Resources/Vikram.app")
         shutil.copy2(
-            source / "Contents/Resources/icon.icns", contents / "Resources/icon.icns"
+            source / "Contents/Resources/AppIcon.icns",
+            contents / "Resources/AppIcon.icns",
         )
         plist = {
             "CFBundleIdentifier": "dev.raniendu.vikram.installer",
@@ -168,8 +164,8 @@ def main() -> None:
             "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": version,
             "CFBundleVersion": version,
-            "CFBundleIconFile": "icon.icns",
-            "LSMinimumSystemVersion": "13.0",
+            "CFBundleIconFile": "AppIcon",
+            "LSMinimumSystemVersion": "14.0",
             "NSHighResolutionCapable": True,
         }
         with (contents / "Info.plist").open("wb") as stream:
@@ -182,7 +178,7 @@ def main() -> None:
                 "5",
                 "-O",
                 "-target",
-                "arm64-apple-macosx13.0",
+                "arm64-apple-macosx14.0",
                 "-module-cache-path",
                 str(cache),
                 str(ROOT / "scripts/installer.swift"),

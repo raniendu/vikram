@@ -1,6 +1,6 @@
 # Vikram
 
-A private desktop chat app and CLI, built with Tauri, Pydantic AI, and Ollama.
+A private Mac chat app and CLI, built with SwiftUI, Pydantic AI, and Ollama.
 
 Vikram runs a single agent defined in this repository. Its instructions live in
 `vikram/agent.py`, and it sends model requests to your local Ollama server at
@@ -29,21 +29,21 @@ for its Python sandbox's third-party software, and each release attaches the
 source code of the sandbox's GPL, LGPL and MPL components.
 [Installation and release details](docs/releases.md).
 
-The Tauri app supports saved chats and flat folders, per-chat local models and
-advertised thinking settings (on by default), streamed replies, stop/retry, Markdown/code copy,
-and image, PDF, Word, text/code, CSV, and Excel attachments. Its light and dark themes follow
-[raniendu.dev](https://raniendu.dev). Fonts ship with the app.
+The app is a native SwiftUI Mac app: a sidebar of saved chats and flat folders,
+per-chat local models and advertised thinking settings (on by default) in the
+toolbar, streamed replies, stop/retry, natively rendered Markdown with code and
+reply copy, and image, PDF, Word, text/code, CSV, and Excel attachments. It uses
+the system's fonts, colors, light and dark appearance, accent color, and
+accessibility settings; Settings (⌘,) can force light or dark.
 
 Use your existing Ollama installation and installed models. The picker rejects
 remote/cloud-backed and non-chat models. No model downloads happen automatically.
 One reply runs at a time; other chats keep independent drafts and histories.
 
-Build with native ARM64 Python 3.13+, Node 22.12+ and Rust (Xcode command-line
-tools must be installed):
+Build with native ARM64 Python 3.13+ and Xcode 16 or later (Swift 6):
 
 ```bash
 uv sync --locked
-npm --prefix apps/desktop ci
 uv run python scripts/build_desktop.py
 ```
 
@@ -62,37 +62,37 @@ To publish a release that `vikram update` installs, bump the version with
 `uv run python scripts/bump_version.py X.Y.Z` and follow
 [Publish a release](docs/releases.md#publish-a-release).
 
-Open `apps/desktop/src-tauri/target/release/bundle/macos/Vikram.app`.
+Open `apps/macos/build/Vikram.app`.
 The bundled app includes its Python service; it needs no separate Python runtime.
-This is an ad-hoc signed local build, not a notarized distribution release.
-Local signing leaves Hardened Runtime off so the bundled Python libraries can
-load. Distribution would require Developer ID signing and notarization. The
-build boots the bundled Python sandbox VM once, then verifies the bundle signature,
-starts the bundled browser once on a blank page (no network), and checks sidecar
-startup in an empty test library.
+This is an ad-hoc signed local build, not a notarized distribution release. The
+app's own executable is signed with the Hardened Runtime; the bundled Python
+service is not, so its libraries can load. Distribution would require Developer
+ID signing and notarization. The build boots the bundled Python sandbox VM once,
+then verifies the bundle signature, starts the bundled browser once on a blank
+page (no network), and checks service startup in an empty test library.
 The build script requires 24 GiB free to protect the owner's 20 GiB reserve.
 
 For development:
 
 ```bash
-uv run python scripts/build_desktop.py --sidecar-only
-npm --prefix apps/desktop run desktop
+uv sync --locked
+swift run --package-path apps/macos vikram-desktop
 ```
 
-The browser-only Vite preview shows the layout. Chat operations require the Tauri
-shell; there is no chat HTTP server. The renderer talks to a constrained Rust
-bridge and a versioned private stdio service.
+A development build of the app runs the checkout's Python service
+(`.venv/bin/python -m vikram.desktop`) instead of a bundled one, so Python changes
+need no rebuild. You can also open `apps/macos/Package.swift` in Xcode. There is
+no chat HTTP server: the app talks to a versioned private stdio service.
 
 Chats, drafts, settings and imported file copies live in
 `~/Library/Application Support/dev.raniendu.vikram/`, separately from evaluation
 history. SQLite and attachments are private to the current account. There is no
 additional app password/encryption layer or cloud sync. Deleting a folder keeps
 its chats. Deleting a chat removes only its app-owned attachments, never source files.
-Use the trash button beside a conversation in the sidebar, then confirm its name
-in the deletion dialog. The header's three-dot menu also includes Delete chat.
-Stop a running reply before deleting its conversation.
+Delete a chat from its context menu in the sidebar or the toolbar's chat actions
+menu, then confirm. Stop a running reply before deleting its conversation.
 The developer-only `VIKRAM_CHAT_DATA_DIR` environment variable selects an isolated
-test library; it is not available to the renderer.
+test library.
 
 Attach up to four files per message, 10 MiB each. Images retain the 24-megapixel limit. Images in
 saved history are omitted with a marker when a text-only model is selected.
@@ -106,11 +106,14 @@ Failed/stopped/interrupted
 partials remain copyable and are excluded from subsequent inference context.
 Only the latest unsuccessful user turn can be retried.
 
-Keyboard: **⌘N** new chat, **⌘B** sidebar, **⌘,** settings, **Enter** send,
-**Shift+Enter** newline. Closing during a reply asks before stopping it.
+Keyboard: **⌘N** new chat, **⌃⌘S** sidebar, **⌃⌘I** browser panel, **⌘,**
+settings, **Return** or **⌘Return** send, **Shift-Return** new line, **⌘.** stop
+the reply, **⇧⌘P** plan mode, **⇧⌘A** attach files. Closing the window keeps
+Vikram running, as Mac apps do; quitting during a reply asks before stopping it.
 
-See the [approved spec](docs/superpowers/specs/2026-10-14-local-chat-design.md)
-and [implementation/validation record](docs/superpowers/plans/2026-10-14-local-chat.md).
+See the [approved spec](docs/superpowers/specs/2026-10-14-local-chat-design.md),
+the [implementation/validation record](docs/superpowers/plans/2026-10-14-local-chat.md),
+and the [native app design](docs/superpowers/specs/2026-11-03-native-macos-app-design.md).
 
 ## Documents and automatic web search
 
@@ -123,7 +126,7 @@ formulas and macros never run. Scanned PDFs need OCR, which is not included.
 Imports run in a disposable parser process with a 15-second timeout. File
 imports and builds preserve at least 20 GiB free space.
 
-CLI and Tauri use the same conversation runner, agent instructions, model
+CLI and app use the same conversation runner, agent instructions, model
 capability checks, web tools, limits, and completed-turn context policy.
 Compatible local models always have `web_search` and `web_fetch` available and
 decide when to use them. This applies to interactive and one-shot CLI calls and
@@ -353,14 +356,16 @@ original Ollama ID to `--model`; requests and stored identities retain that ID.
 - `vikram/__main__.py`: entry point for `python -m vikram`.
 - `vikram/evals/`: starter cases, evaluation runner, metrics history, and HTML report.
 - `vikram/desktop/`: private stdio adapter, SQLite, and attachments.
-- `apps/desktop/`: React interface and Tauri Rust shell; `src-tauri/src/browser.rs`
-  and `browser.js` are the WebKit browser and its page script.
+- `apps/macos/`: the native SwiftUI app (a Swift package). `VikramKit` holds the
+  service connection, chat/schedule/update state, the WebKit browser engine and
+  its policy, and Markdown parsing; `Vikram` holds the app and its views;
+  `Resources/browser.js` is the browser's page script.
 - `vikram/ollama.py`: shared validation/mapping for advertised thinking settings.
 
 ```mermaid
 flowchart LR
     CLI[Terminal CLI] <--> Runner[Shared conversation runner]
-    App[Tauri app] <--> Sidecar[Private Python sidecar]
+    App[SwiftUI app] <--> Sidecar[Private Python sidecar]
     Sidecar <--> Runner
     Runner <--> Agent[Pydantic AI agent]
     Agent <--> Ollama[Local Ollama model]
@@ -382,9 +387,7 @@ Offline verification (no model inference):
 
 ```bash
 uv run python -m unittest discover -s tests -v
-npm --prefix apps/desktop test
-npm --prefix apps/desktop run build
-cargo test --offline --manifest-path apps/desktop/src-tauri/Cargo.toml
+swift test --package-path apps/macos
 uv run vikram --help
 uv run vikram-eval --help
 uv run black --check vikram tests scripts

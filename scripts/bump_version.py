@@ -7,8 +7,8 @@ A bump edits only the version strings, so lockfiles keep every dependency pin.
 """
 
 import argparse
-import json
 import os
+import plistlib
 import re
 import sys
 import tomllib
@@ -61,36 +61,16 @@ PLACES = (
         _locked("vikram", editable=True),
     ),
     Place(
-        "apps/desktop/package.json",
-        r'^  "version": "([^"]*)",$',
-        lambda text: json.loads(text)["version"],
+        "apps/macos/Resources/Info.plist",
+        r"^\t<key>CFBundleShortVersionString</key>\n\t<string>([^<]*)</string>$",
+        lambda text: plistlib.loads(text.encode())["CFBundleShortVersionString"],
+        "(short version)",
     ),
     Place(
-        "apps/desktop/package-lock.json",
-        r'^  "name": "vikram-desktop",\n  "version": "([^"]*)",$',
-        lambda text: json.loads(text)["version"],
-        "(top level)",
-    ),
-    Place(
-        "apps/desktop/package-lock.json",
-        r'^      "name": "vikram-desktop",\n      "version": "([^"]*)",$',
-        lambda text: json.loads(text)["packages"][""]["version"],
-        "(root package)",
-    ),
-    Place(
-        "apps/desktop/src-tauri/Cargo.toml",
-        r'^version = "([^"]*)"$',
-        lambda text: tomllib.loads(text)["package"]["version"],
-    ),
-    Place(
-        "apps/desktop/src-tauri/Cargo.lock",
-        r'^name = "vikram-desktop"\nversion = "([^"]*)"$',
-        _locked("vikram-desktop", editable=False),
-    ),
-    Place(
-        "apps/desktop/src-tauri/tauri.conf.json",
-        r'^  "version": "([^"]*)",$',
-        lambda text: json.loads(text)["version"],
+        "apps/macos/Resources/Info.plist",
+        r"^\t<key>CFBundleVersion</key>\n\t<string>([^<]*)</string>$",
+        lambda text: plistlib.loads(text.encode())["CFBundleVersion"],
+        "(bundle version)",
     ),
 )
 
