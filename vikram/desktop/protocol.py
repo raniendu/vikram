@@ -1,4 +1,4 @@
-"""Versioned JSON-lines input validation for the private Rust/Python channel."""
+"""Versioned JSON-lines input validation for the private app/Python channel."""
 
 from typing import Annotated, Any, Literal
 

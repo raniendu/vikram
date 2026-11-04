@@ -44,9 +44,9 @@ from vikram.sandbox import IMAGE_MANIFEST, IMAGE_REPOSITORY, IMAGE_TAG  # noqa: 
 DATA = ROOT / "scripts/third-party"
 SOURCES = DATA / "sources.json"
 LICENSES = DATA / "licenses"
-# The desktop build writes the notices here, and Tauri bundles the folder into
-# Vikram.app (`bundle.resources` in tauri.conf.json).
-NOTICES = ROOT / "apps/desktop/src-tauri/notices"
+# The desktop build writes the notices here, then copies the folder into
+# Vikram.app (`scripts/build_desktop.py`).
+NOTICES = ROOT / "build/notices"
 APP_NOTICES = "Contents/Resources/notices"
 NOTICES_FILE = "THIRD-PARTY-NOTICES.md"
 SOURCES_FILE = "third-party-sources.json"

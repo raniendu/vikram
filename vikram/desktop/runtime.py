@@ -68,7 +68,7 @@ CLOSED = {
 
 
 class DesktopBrowser:
-    """The app's browser panel, driven through the Tauri host.
+    """The app's browser panel, driven through the native app.
 
     Each action is a `browser` event that the host runs on its WebKit panel; the
     result returns with `browser_result`. The person can take the panel over

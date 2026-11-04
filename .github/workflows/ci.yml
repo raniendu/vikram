@@ -21,3 +21,13 @@ jobs:
         run: uv run black --check vikram
       - name: Check import ordering
         run: uv run isort --check-only vikram
+
+  app:
+    name: Native app
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the app
+        run: xcrun swift build --package-path apps/macos
+      - name: Run the app's offline tests
+        run: xcrun swift test --package-path apps/macos

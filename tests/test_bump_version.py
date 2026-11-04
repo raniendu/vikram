@@ -32,7 +32,7 @@ class BumpVersionTests(unittest.TestCase):
     def test_bump_changes_only_the_version_strings(self):
         before = self.snapshot()
         changed = bump_version.bump(self.next, self.root)
-        self.assertEqual(len(changed), 7)
+        self.assertEqual(len(changed), 3)
         self.assertEqual(
             set(bump_version.current_versions(self.root).values()), {self.next}
         )
@@ -56,19 +56,25 @@ class BumpVersionTests(unittest.TestCase):
         self.assertEqual(self.snapshot(), before)
 
     def test_disagreeing_or_missing_versions_change_nothing(self):
-        config = self.root / "apps/desktop/src-tauri/tauri.conf.json"
-        config.write_text(config.read_text().replace(self.current, "9.9.9"))
+        plist = self.root / "apps/macos/Resources/Info.plist"
+        text = plist.read_text()
+        marker = "<key>CFBundleVersion</key>\n\t<string>"
+        plist.write_text(text.replace(marker + self.current, marker + "9.9.9"))
         before = self.snapshot()
         with self.assertRaisesRegex(
-            SystemExit, "disagree(.|\n)*tauri.conf.json: 9.9.9"
+            SystemExit, "disagree(.|\n)*Info.plist \\(bundle version\\): 9.9.9"
         ):
             bump_version.bump(self.next, self.root)
-        config.write_text(config.read_text().replace('"version": "9.9.9",\n', ""))
-        with self.assertRaisesRegex(SystemExit, "Cannot find.*tauri.conf.json"):
+        plist.write_text(
+            plist.read_text().replace(
+                "\t<key>CFBundleVersion</key>\n\t<string>9.9.9</string>\n", ""
+            )
+        )
+        with self.assertRaisesRegex(SystemExit, "Cannot find.*Info.plist"):
             bump_version.bump(self.next, self.root)
         self.assertEqual(
-            {k: v for k, v in self.snapshot().items() if "tauri.conf" not in k},
-            {k: v for k, v in before.items() if "tauri.conf" not in k},
+            {k: v for k, v in self.snapshot().items() if "Info.plist" not in k},
+            {k: v for k, v in before.items() if "Info.plist" not in k},
         )
 
     def test_check_prints_the_agreed_version_or_names_the_mismatch(self):
