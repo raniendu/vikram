@@ -54,7 +54,7 @@ struct CopyButton: View {
         }
         .buttonStyle(.borderless)
         .controlSize(.small)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Theme.muted)
         .help(label)
         .accessibilityLabel(copied ? "Copied" : label)
     }
@@ -66,12 +66,14 @@ struct CardStyle: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .padding(12)
+            .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
+            .background(
+                highlighted ? Theme.accent.opacity(0.1) : Theme.raised,
+                in: RoundedRectangle(cornerRadius: 12))
             .overlay {
-                RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(highlighted ? Color.accentColor.opacity(0.6) : Color.secondary.opacity(0.2))
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(highlighted ? Theme.accent.opacity(0.5) : Theme.rule)
             }
     }
 }
@@ -86,7 +88,7 @@ extension View {
 struct Banner<Actions: View>: View {
     let text: String
     var systemImage = "exclamationmark.triangle.fill"
-    var tint: Color = .orange
+    var tint: Color = Theme.accent
     @ViewBuilder var actions: Actions
 
     var body: some View {
@@ -97,9 +99,11 @@ struct Banner<Actions: View>: View {
             actions
         }
         .font(.callout)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(tint.opacity(0.12))
+        .foregroundStyle(Theme.ink)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .background(tint.opacity(0.1))
+        .overlay(alignment: .bottom) { Rectangle().fill(tint.opacity(0.3)).frame(height: 1) }
         .accessibilityElement(children: .contain)
     }
 }
@@ -121,22 +125,25 @@ struct CodeBox: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text(title).font(.caption.monospaced()).foregroundStyle(.secondary)
+                Text(title).font(.caption.monospaced()).foregroundStyle(Theme.muted)
                 Spacer()
                 if let copyLabel { CopyButton(text: text, label: copyLabel) }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            Divider()
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            Rectangle().fill(Theme.rule).frame(height: 1)
             ScrollView(.horizontal) {
                 Text(text.isEmpty ? " " : text)
                     .font(.system(.callout, design: .monospaced))
+                    .lineSpacing(3)
+                    .foregroundStyle(Theme.ink)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: true, vertical: false)
-                    .padding(10)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
             }
         }
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
-        .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(.separator) }
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
+        .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.rule) }
     }
 }

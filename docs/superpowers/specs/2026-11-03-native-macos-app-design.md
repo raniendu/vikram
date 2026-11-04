@@ -56,10 +56,15 @@ adapters").
   structured concurrency for the service connection and the browser engine.
   The package builds in the Swift 6 language mode with complete concurrency
   checking.
-- **System typography, colors, and SF Symbols**, so Dynamic Type sizes,
-  light/dark appearance, increased contrast, and accent color follow the system.
-  The appearance preference (System, Light, Dark) maps to `NSApp.appearance`.
-  Bundled web fonts are no longer needed.
+- **The raniendu.dev theme** (the owner's choice on 2026-11-04, after comparing
+  it with a GitHub-style theme): paper `#FBFAF8`, surface `#F4F2EC`, ink
+  `#14130F`, rules `#E3E0D8`, and a rust accent `#A0552D` in light appearance;
+  espresso `#14130F`, parchment text, and an amber accent `#D6995F` in dark.
+  Space Grotesk, bundled with its SIL Open Font License, sets titles and the
+  person's own words; the system font sets everything else, so Dynamic Type and
+  accessibility settings keep working. Colors are dynamic `NSColor`s, so they
+  follow the system appearance or the Settings choice (`NSApp.appearance`).
+  SF Symbols supply the icons.
 - **Accessibility.** Native controls carry labels, help tags, and keyboard
   focus; activity cards are grouped elements with clear labels; status text is
   read by VoiceOver.

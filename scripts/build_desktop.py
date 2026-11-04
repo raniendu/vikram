@@ -174,6 +174,8 @@ def build_app(version: str, notices: Path) -> None:
     shutil.copy2(SIDECAR_DIST / SIDECAR, contents / "MacOS/vikram-sidecar")
     for name in ("AppIcon.icns", "browser.js"):
         shutil.copy2(PACKAGE / "Resources" / name, contents / "Resources" / name)
+    # The display face (Space Grotesk) and its SIL Open Font License.
+    shutil.copytree(PACKAGE / "Resources/Fonts", contents / "Resources/Fonts")
     shutil.copytree(notices, contents / "Resources/notices")
     # Nested code first, then the bundle. The Python service keeps plain ad-hoc
     # signing: its unpacked libraries are not signed by one team (docs/releases.md).

@@ -8,10 +8,19 @@ struct AnswerView: View {
     var handBack: (() -> Void)?
     var openTask: ((String) -> Void)?
 
+    private var hasChips: Bool {
+        attempt.reasoning?.isEmpty == false || !(attempt.searches ?? []).isEmpty
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 14) {
             byline
-            ThinkingDisclosure(attempt: attempt)
+            if hasChips {
+                HStack(alignment: .top, spacing: 6) {
+                    ThinkingChip(attempt: attempt)
+                    WebActivityChip(searches: attempt.searches ?? [])
+                }
+            }
             if attempt.activity?.isEmpty == false {
                 ActivityList(
                     attempt: attempt, respond: respond, handBack: handBack, openTask: openTask)
@@ -24,12 +33,17 @@ struct AnswerView: View {
             {
                 HStack(spacing: 8) {
                     ActivityDot()
-                    Text(phaseText).foregroundStyle(.secondary)
+                    Text(phaseText).foregroundStyle(Theme.muted)
                 }
                 .font(.callout)
                 .accessibilityElement(children: .combine)
             }
-            WebActivity(attempt: attempt)
+            if (attempt.searches ?? []).contains(where: { $0.status == "failed" }) {
+                Text(
+                    "Web search was unavailable or rate limited. Some current information could not be verified."
+                )
+                .font(.callout).foregroundStyle(Theme.muted)
+            }
             if !(attempt.sources ?? []).isEmpty { SourceList(sources: attempt.sources ?? []) }
             if attempt.status != "running" && attempt.status != "complete" {
                 VStack(alignment: .leading, spacing: 4) {
@@ -38,7 +52,7 @@ struct AnswerView: View {
                     if let error = attempt.error { Text(error) }
                 }
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.muted)
                 .textSelection(.enabled)
             }
             if attempt.unsaved == true {
@@ -47,7 +61,7 @@ struct AnswerView: View {
                     systemImage: "exclamationmark.triangle.fill"
                 )
                 .font(.callout)
-                .foregroundStyle(.orange)
+                .foregroundStyle(Theme.danger)
             }
             if !attempt.content.isEmpty {
                 CopyButton(text: attempt.content, label: "Copy reply")
@@ -57,17 +71,17 @@ struct AnswerView: View {
     }
 
     private var byline: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "sparkle").foregroundStyle(.tint)
-            Text("Vikram").fontWeight(.semibold)
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            BrandMark()
+            Text("Vikram").font(.callout.weight(.semibold))
             Text(
                 formatModelName(attempt.actualModel ?? attempt.requestedModel)
                     + (attempt.actualModel == nil ? " · requested" : "")
             )
-            .foregroundStyle(.secondary)
+            .font(.caption)
+            .foregroundStyle(Theme.muted)
             .help(attempt.actualModel ?? attempt.requestedModel)
         }
-        .font(.callout)
         .accessibilityElement(children: .combine)
     }
 
@@ -91,20 +105,25 @@ struct AnswerView: View {
 }
 
 /// The model's thinking, collapsed until the person opens it.
-private struct ThinkingDisclosure: View {
+private struct ThinkingChip: View {
     let attempt: Attempt
     @State private var open = false
 
     var body: some View {
         if let reasoning = attempt.reasoning, !reasoning.isEmpty {
             let active = attempt.status == "running" && attempt.phase == "thinking"
-            DisclosureGroup(isExpanded: $open) {
+            ChipDisclosure(isExpanded: $open) {
+                HStack(spacing: 5) {
+                    if active { ActivityDot() }
+                    Text(active ? "Thinking…" : "Thinking")
+                }
+            } content: {
                 VStack(alignment: .leading, spacing: 6) {
                     ScrollViewReader { proxy in
                         ScrollView {
                             Text(reasoning)
                                 .font(.callout)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Theme.muted)
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             Color.clear.frame(height: 1).id("end")
@@ -115,57 +134,47 @@ private struct ThinkingDisclosure: View {
                     .accessibilityLabel("Model thinking")
                     if attempt.reasoningTruncated == true {
                         Text("Thinking reached the display limit; the answer is unaffected.")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(Theme.muted)
                     }
                     CopyButton(text: reasoning, label: "Copy thinking")
                 }
-                .padding(.top, 4)
-            } label: {
-                HStack(spacing: 6) {
-                    if active { ActivityDot() }
-                    Text(active ? "Thinking…" : "Thinking")
-                }
-                .foregroundStyle(.secondary)
+                .padding(12)
+                .frame(minWidth: 320, maxWidth: 640, alignment: .leading)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
             }
-            .font(.callout)
         }
     }
 }
 
-private struct WebActivity: View {
-    let attempt: Attempt
+private struct WebActivityChip: View {
+    let searches: [Search]
+    @State private var open = false
 
     var body: some View {
-        let searches = attempt.searches ?? []
         if !searches.isEmpty {
-            DisclosureGroup {
-                VStack(alignment: .leading, spacing: 6) {
+            ChipDisclosure(isExpanded: $open) {
+                Text(
+                    "Web activity · \(searches.count) \(searches.count == 1 ? "request" : "requests")")
+            } content: {
+                VStack(alignment: .leading, spacing: 8) {
                     ForEach(Array(searches.enumerated()), id: \.offset) { _, search in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("\(search.tool == "web_search" ? "Search" : "Read") · \(search.status)")
-                                .fontWeight(.medium)
+                            Eyebrow("\(search.tool == "web_search" ? "Search" : "Read") · \(search.status)")
                             Text(
                                 (search.arguments.searchQueries ?? search.arguments.urls ?? [])
                                     .joined(separator: " · ")
                             )
-                            .foregroundStyle(.secondary)
-                            if let error = search.error { Text(error).foregroundStyle(.secondary) }
+                            if let error = search.error {
+                                Text(error).foregroundStyle(Theme.muted)
+                            }
                         }
                     }
                 }
+                .font(.callout)
                 .textSelection(.enabled)
-                .padding(.top, 4)
-            } label: {
-                Label(
-                    "Web activity · \(searches.count) \(searches.count == 1 ? "request" : "requests")",
-                    systemImage: "magnifyingglass")
-            }
-            .font(.callout)
-            if searches.contains(where: { $0.status == "failed" }) {
-                Text(
-                    "Web search was unavailable or rate limited. Some current information could not be verified."
-                )
-                .font(.callout).foregroundStyle(.secondary)
+                .padding(12)
+                .frame(minWidth: 280, maxWidth: 560, alignment: .leading)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
             }
         }
     }
@@ -175,20 +184,21 @@ private struct SourceList: View {
     let sources: [Source]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Retrieved sources").font(.caption).foregroundStyle(.secondary)
-                .textCase(.uppercase)
+        VStack(alignment: .leading, spacing: 6) {
+            Eyebrow("Retrieved sources")
             ForEach(sources) { source in
                 Button {
                     if let url = URL(string: source.url) { openWeb(url) }
                 } label: {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(source.id).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(source.id).font(.caption.monospacedDigit()).foregroundStyle(Theme.muted)
                         Text(source.title.isEmpty ? source.url : source.title)
+                            .foregroundStyle(Theme.link)
                             .lineLimit(1)
                     }
+                    .font(.callout)
                 }
-                .buttonStyle(.link)
+                .buttonStyle(.plain)
                 .help("\(source.url) · retrieved \(source.retrievedAt ?? "")")
             }
         }
@@ -212,19 +222,20 @@ struct TranscriptView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 28) {
+                LazyVStack(alignment: .leading, spacing: 30) {
                     ForEach(Array(chat.messages.enumerated()), id: \.element.id) { index, message in
                         TurnView(
-                            chat: chat, message: message, isLast: index == chat.messages.count - 1,
+                            chat: chat, message: message, isFirst: index == 0,
+                            isLast: index == chat.messages.count - 1,
                             respond: respond, handBack: handBack, openTask: openTask,
                             canRetry: canRetry, retry: retry)
                     }
                     Color.clear.frame(height: 1).id("end")
                 }
                 .scrollTargetLayout()
-                .frame(maxWidth: 760)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 20)
+                .frame(maxWidth: 700)
+                .padding(.horizontal, 28)
+                .padding(.vertical, 24)
                 .frame(maxWidth: .infinity)
             }
             .scrollPosition(id: $bottom, anchor: .bottom)
@@ -246,8 +257,8 @@ struct TranscriptView: View {
                         following = true
                         withAnimation { proxy.scrollTo("end", anchor: .bottom) }
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(.secondary)
+                    .background(Theme.raised, in: Capsule())
                     .padding(8)
                 }
             }
@@ -258,6 +269,7 @@ struct TranscriptView: View {
 private struct TurnView: View {
     let chat: Chat
     let message: Message
+    let isFirst: Bool
     let isLast: Bool
     let respond: Respond
     let handBack: () -> Void
@@ -266,17 +278,14 @@ private struct TurnView: View {
     let retry: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 22) {
+            if !isFirst { Rectangle().fill(Theme.rule).frame(height: 1) }
             UserMessage(
                 text: message.text,
                 attachments: chat.attachments.filter { $0.messageId == message.id })
             ForEach(Array(message.attempts.enumerated()), id: \.element.id) { index, attempt in
                 if index < message.attempts.count - 1 {
-                    DisclosureGroup("Previous attempt · \(attempt.status)") {
-                        AnswerView(attempt: attempt, openTask: openTask).padding(.top, 6)
-                    }
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                    PreviousAttempt(attempt: attempt, openTask: openTask)
                 } else {
                     AnswerView(
                         attempt: attempt,
@@ -288,6 +297,7 @@ private struct TurnView: View {
                 && !message.attempts.contains(where: { ["running", "complete"].contains($0.status) })
             {
                 Button("Retry with Selected Model", systemImage: "arrow.counterclockwise", action: retry)
+                    .buttonStyle(.secondary)
                     .disabled(!canRetry)
             }
         }
@@ -295,26 +305,45 @@ private struct TurnView: View {
     }
 }
 
+private struct PreviousAttempt: View {
+    let attempt: Attempt
+    let openTask: (String) -> Void
+    @State private var open = false
+
+    var body: some View {
+        ChipDisclosure(isExpanded: $open) {
+            Text("Previous attempt · \(attempt.status)")
+        } content: {
+            AnswerView(attempt: attempt, openTask: openTask)
+                .padding(.leading, 12)
+                .overlay(alignment: .leading) { Rectangle().fill(Theme.rule).frame(width: 2) }
+        }
+    }
+}
+
+/// What the person wrote, in the display face under a small label.
 struct UserMessage: View {
     let text: String
     let attachments: [Attachment]
     var label = "You"
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
+            Eyebrow(label)
+            if !text.isEmpty {
+                Text(text)
+                    .font(Theme.display(19, weight: .regular, relativeTo: .title3))
+                    .lineSpacing(4)
+                    .foregroundStyle(Theme.ink)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if !attachments.isEmpty {
                 AttachmentStrip(attachments: attachments)
             }
-            if !text.isEmpty {
-                Text(text)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
-                    .background(.tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 14))
-                    .accessibilityLabel("\(label): \(text)")
-            }
         }
-        .frame(maxWidth: .infinity, alignment: .trailing)
-        .padding(.leading, 60)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label): \(text)")
     }
 }

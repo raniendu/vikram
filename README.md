@@ -32,9 +32,12 @@ source code of the sandbox's GPL, LGPL and MPL components.
 The app is a native SwiftUI Mac app: a sidebar of saved chats and flat folders,
 per-chat local models and advertised thinking settings (on by default) in the
 toolbar, streamed replies, stop/retry, natively rendered Markdown with code and
-reply copy, and image, PDF, Word, text/code, CSV, and Excel attachments. It uses
-the system's fonts, colors, light and dark appearance, accent color, and
-accessibility settings; Settings (⌘,) can force light or dark.
+reply copy, and image, PDF, Word, text/code, CSV, and Excel attachments. Its
+look follows [raniendu.dev](https://raniendu.dev): warm paper, ink and a rust
+accent in light appearance, espresso, parchment and amber in dark, with Space
+Grotesk (bundled, SIL Open Font License) for titles and your messages and the
+system font for everything else. It follows the system's light or dark
+appearance and accessibility settings; Settings (⌘,) can force light or dark.
 
 Use your existing Ollama installation and installed models. The picker rejects
 remote/cloud-backed and non-chat models. No model downloads happen automatically.

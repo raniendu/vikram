@@ -39,23 +39,31 @@ struct SidebarView: View {
         @Bindable var state = state
         List(selection: $state.selection) {
             Section {
-                Label("Scheduled", systemImage: "calendar.badge.clock")
-                    .badge(schedules.tasks.count)
+                Label {
+                    Text("Scheduled")
+                } icon: {
+                    Image(systemName: "calendar.badge.clock").foregroundStyle(Theme.accent)
+                }
+                .badge(schedules.tasks.count)
                     .tag(SidebarItem.scheduled)
             }
             if !search.isEmpty {
-                Section("Results") {
+                Section {
                     ForEach(matching) { row($0) }
                     if matching.isEmpty {
-                        Text("No matching chats.").foregroundStyle(.secondary)
+                        Text("No matching chats.").foregroundStyle(Theme.muted)
                     }
+                } header: {
+                    Eyebrow("Results")
                 }
             } else {
-                Section("Chats") {
+                Section {
                     ForEach(matching.filter { $0.folderId == nil }) { row($0) }
                     if chats.chats.isEmpty && !chats.loading {
-                        Text("A little room for your thoughts.").foregroundStyle(.secondary)
+                        Text("A little room for your thoughts.").foregroundStyle(Theme.muted)
                     }
+                } header: {
+                    Eyebrow("Conversations")
                 }
                 ForEach(chats.folders) { folder in
                     Section(
@@ -68,10 +76,14 @@ struct SidebarView: View {
                         let inside = matching.filter { $0.folderId == folder.id }
                         ForEach(inside) { row($0) }
                         if inside.isEmpty {
-                            Text("No chats yet").foregroundStyle(.secondary)
+                            Text("No chats yet").foregroundStyle(Theme.muted)
                         }
                     } header: {
-                        Label(folder.name, systemImage: "folder")
+                        Label {
+                            Eyebrow(folder.name)
+                        } icon: {
+                            Image(systemName: "folder").foregroundStyle(Theme.muted)
+                        }
                             .contextMenu {
                                 Button("New Chat in Folder") { state.newChat(folder: folder.id) }
                                 Button("Rename Folder…") { sheet = .renameFolder(folder) }
@@ -83,6 +95,21 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .background(Theme.surface)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                BrandMark(size: 22)
+                Text("Vikram").font(Theme.display(17, weight: .medium))
+                Eyebrow("Local")
+                Spacer()
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 4)
+            .padding(.bottom, 6)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Vikram, local")
+        }
         .searchable(text: $search, placement: .sidebar, prompt: "Search chats")
         .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 380)
         .safeAreaInset(edge: .bottom) {
@@ -96,7 +123,7 @@ struct SidebarView: View {
                 .disabled(chats.offline)
                 Spacer()
                 Image(systemName: "lock.fill")
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.muted)
                     .help("Conversations stay on this Mac")
                     .accessibilityLabel("Conversations stay on this Mac")
             }
@@ -167,7 +194,7 @@ struct SidebarSheetView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(title).font(.headline)
+            Text(title).font(Theme.display(17, weight: .medium, relativeTo: .headline))
             switch sheet {
             case .moveChat:
                 Picker("Folder", selection: $folder) {
@@ -181,14 +208,18 @@ struct SidebarSheetView: View {
             }
             HStack {
                 Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .buttonStyle(.secondary)
+                    .keyboardShortcut(.cancelAction)
                 Button(action: save) { Text(actionTitle) }
+                    .buttonStyle(.primary)
                     .keyboardShortcut(.defaultAction)
                     .disabled(working || (needsName && name.trimmingCharacters(in: .whitespaces).isEmpty))
             }
         }
         .padding(20)
         .frame(width: 380)
+        .tint(Theme.accent)
         .onAppear {
             switch sheet {
             case .renameFolder(let value): name = value.name

@@ -3,7 +3,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 import VikramKit
 
-/// Where the person writes: the draft, its attachments, plan mode, and send or stop.
+/// Where the person writes: the draft, its attachments, plan mode, and send or
+/// stop. It floats over the end of the transcript.
 struct ComposerView: View {
     @Environment(AppState.self) private var state
     @Environment(ChatController.self) private var chats
@@ -20,21 +21,21 @@ struct ComposerView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             if invalidImages {
                 notice("Choose an image-capable model or remove the draft images to send.")
             }
             if planning {
                 notice(
                     "Plan mode · Vikram proposes a plan for your approval before it runs code or does the work.",
-                    systemImage: "list.bullet.clipboard", tint: .accentColor)
+                    systemImage: "list.bullet.clipboard")
             }
             if busyElsewhere {
                 let title =
                     chats.chats.first { $0.id == chats.active?.chatId }?.title ?? "another chat"
                 notice("A reply is running in “\(title)”. Your draft stays here.")
             }
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
                 if !pending.isEmpty {
                     AttachmentStrip(
                         attachments: pending,
@@ -43,8 +44,8 @@ struct ComposerView: View {
                 }
                 ZStack(alignment: .topLeading) {
                     if chats.draft.isEmpty {
-                        Text(planning ? "Describe what you want planned…" : "Message Vikram")
-                            .foregroundStyle(.tertiary)
+                        Text(planning ? "Describe what you want planned…" : "Write a message…")
+                            .foregroundStyle(Theme.muted)
                             .padding(.leading, 5)
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)
@@ -62,65 +63,74 @@ struct ComposerView: View {
                     )
                     .frame(height: min(max(height, 22), 200))
                 }
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     Button {
                         state.pickAttachments()
                     } label: {
                         Image(systemName: "paperclip")
+                            .font(.system(size: 15))
+                            .frame(width: 30, height: 30)
+                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.muted)
                     .help("Attach images, PDF, Word, text or code, CSV, or Excel")
                     .accessibilityLabel("Attach files")
                     .disabled(chats.offline || chats.sending || chats.importing)
-                    Toggle(isOn: Binding(
-                        get: { planning },
-                        set: { on in Task { await chats.setMode(on ? .plan : .normal) } })
-                    ) {
+                    Button {
+                        Task { await chats.setMode(planning ? .normal : .plan) }
+                    } label: {
                         Label("Plan", systemImage: "list.bullet.clipboard")
+                            .font(.caption.weight(.medium))
+                            .padding(.horizontal, 11)
+                            .frame(minHeight: 28)
+                            .foregroundStyle(planning ? Theme.accent : Theme.muted)
+                            .background(planning ? Theme.accent.opacity(0.12) : .clear, in: Capsule())
+                            .overlay {
+                                Capsule().strokeBorder(planning ? Theme.accent.opacity(0.5) : Theme.rule)
+                            }
+                            .contentShape(Capsule())
                     }
-                    .toggleStyle(.button)
-                    .controlSize(.small)
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(planning ? .isSelected : [])
                     .help(
                         planning
                             ? "Plan mode is on: approve a plan before Vikram works"
                             : "Plan mode: approve a plan before Vikram works")
                     .disabled(chats.offline)
-                    Text(chats.importing ? "Importing files…" : "Shift-Return for a new line")
-                        .font(.caption).foregroundStyle(.tertiary)
+                    Text(chats.importing ? "Importing files…" : "Shift + Return for a new line")
+                        .font(.caption).foregroundStyle(Theme.muted)
                     Spacer()
                     if runningHere {
-                        Button {
+                        roundButton(systemImage: "stop.fill", fill: Theme.ink, foreground: Theme.paper) {
                             Task { await chats.stop() }
-                        } label: {
-                            Image(systemName: "stop.fill")
                         }
-                        .buttonStyle(.borderedProminent)
-                        .clipShape(Circle())
                         .help("Stop reply (⌘.)")
                         .accessibilityLabel("Stop reply")
                     } else if chats.sending {
-                        ProgressView().controlSize(.small)
+                        ProgressView().controlSize(.small).frame(width: 34, height: 34)
                     } else {
-                        Button {
+                        roundButton(
+                            systemImage: "arrow.up",
+                            fill: chats.canSend ? Theme.accent : Theme.rule,
+                            foreground: chats.canSend ? Theme.onAccent : Theme.muted
+                        ) {
                             Task { await chats.send() }
-                        } label: {
-                            Image(systemName: "arrow.up")
                         }
-                        .buttonStyle(.borderedProminent)
-                        .clipShape(Circle())
                         .disabled(!chats.canSend)
                         .help(busyElsewhere ? "Wait for the active reply to finish" : "Send message")
                         .accessibilityLabel("Send message")
                     }
                 }
             }
-            .padding(10)
-            .background(.background, in: RoundedRectangle(cornerRadius: 14))
+            .padding(.leading, 16)
+            .padding([.trailing, .top, .bottom], 12)
+            .background(Theme.raised, in: RoundedRectangle(cornerRadius: 18))
             .overlay {
-                RoundedRectangle(cornerRadius: 14)
-                    .strokeBorder(targeted ? Color.accentColor : Color.secondary.opacity(0.3),
-                                  lineWidth: targeted ? 2 : 1)
+                RoundedRectangle(cornerRadius: 18)
+                    .strokeBorder(targeted ? Theme.accent : Theme.rule, lineWidth: targeted ? 2 : 1)
             }
+            .shadow(color: .black.opacity(0.08), radius: 16, y: 8)
             .dropDestination(for: URL.self) { urls, _ in
                 Task { await chats.importFiles(urls) }
                 return true
@@ -133,38 +143,49 @@ struct ComposerView: View {
                 Spacer()
                 Text(
                     chats.model?.contextLength.map {
-                        "\($0.formatted()) token context allocated"
+                        "\($0.formatted()) token context"
                     } ?? "Saved history · finite model context")
             }
             .font(.caption)
-            .foregroundStyle(.tertiary)
-            .padding(.horizontal, 4)
+            .foregroundStyle(Theme.muted)
+            .padding(.horizontal, 6)
         }
-        .frame(maxWidth: 760)
-        .padding(.horizontal, 24)
+        .frame(maxWidth: 720)
+        .padding(.horizontal, 28)
         .padding(.bottom, 14)
-        .padding(.top, 6)
+        .padding(.top, 28)
         .frame(maxWidth: .infinity)
+        .background {
+            LinearGradient(
+                stops: [.init(color: Theme.paper.opacity(0), location: 0), .init(color: Theme.paper, location: 0.35)],
+                startPoint: .top, endPoint: .bottom)
+        }
     }
 
-    private func notice(_ text: String, systemImage: String = "exclamationmark.triangle", tint: Color = .orange)
+    private func roundButton(
+        systemImage: String, fill: Color, foreground: Color, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(foreground)
+                .frame(width: 34, height: 34)
+                .background(fill, in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func notice(_ text: String, systemImage: String = "exclamationmark.triangle")
         -> some View
     {
-        Label(text, systemImage: systemImage)
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .symbolRenderingMode(.multicolor)
-            .labelStyle(TintedIconLabel(tint: tint))
-    }
-}
-
-private struct TintedIconLabel: LabelStyle {
-    let tint: Color
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            configuration.icon.foregroundStyle(tint)
-            configuration.title
+        Label {
+            Text(text).foregroundStyle(Theme.muted)
+        } icon: {
+            Image(systemName: systemImage).foregroundStyle(Theme.accent)
         }
+        .font(.callout)
+        .padding(.horizontal, 6)
     }
 }
 

@@ -141,7 +141,7 @@ private struct QuestionCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Label("Vikram needs your answer", systemImage: "questionmark.bubble")
-                .font(.headline)
+                .font(Theme.display(16, weight: .medium, relativeTo: .headline))
             ForEach(record.questions, id: \.header) { question in
                 VStack(alignment: .leading, spacing: 6) {
                     Text(question.question).fontWeight(.medium)
@@ -164,15 +164,17 @@ private struct QuestionCard: View {
             }
             HStack {
                 Button("Send Answer") { submit() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.primary)
                     .disabled(!ready || sending)
                 Button("Skip") {
                     send(.skip)
                 }
+                .buttonStyle(.secondary)
                 .disabled(sending)
             }
         }
         .card(highlighted: true)
+        .tint(Theme.accent)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Vikram's question")
     }
@@ -198,11 +200,11 @@ private struct QuestionCard: View {
                         ? (chosen ? "checkmark.square.fill" : "square")
                         : (chosen ? "largecircle.fill.circle" : "circle")
                 )
-                .foregroundStyle(chosen ? Color.accentColor : .secondary)
+                .foregroundStyle(chosen ? Theme.accent : Theme.muted)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(option.label)
                     if let description = option.description, !description.isEmpty {
-                        Text(description).font(.caption).foregroundStyle(.secondary)
+                        Text(description).font(.caption).foregroundStyle(Theme.muted)
                     }
                 }
                 Spacer(minLength: 0)
@@ -243,7 +245,7 @@ private struct QuestionSummary: View {
             ForEach(record.questions, id: \.header) { question in
                 let answer = record.answers?[question.header] ?? []
                 Label {
-                    Text(question.question) + Text("  →  ").foregroundStyle(.secondary)
+                    Text(question.question) + Text("  →  ").foregroundStyle(Theme.muted)
                         + Text(
                             answer.isEmpty
                                 ? questionStatus[record.status] ?? "Not answered"
@@ -255,7 +257,7 @@ private struct QuestionSummary: View {
                 .font(.callout)
             }
         }
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Theme.muted)
     }
 }
 
@@ -271,7 +273,7 @@ private struct PlanCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Plan for your approval", systemImage: "list.bullet.clipboard")
-                .font(.headline)
+                .font(Theme.display(16, weight: .medium, relativeTo: .headline))
             MarkdownView(record.plan)
             if changing {
                 TextEditor(text: $feedback)
@@ -286,22 +288,23 @@ private struct PlanCard: View {
                     Button("Send Changes") {
                         send(.revise(feedback: String(feedback.prefix(2000))))
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.primary)
                     .disabled(
                         feedback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || sending)
-                    Button("Back") { changing = false }.disabled(sending)
+                    Button("Back") { changing = false }.buttonStyle(.secondary).disabled(sending)
                 }
             } else {
                 HStack {
                     Button("Approve Plan") { send(.approve) }
-                        .buttonStyle(.borderedProminent)
-                    Button("Request Changes…") { changing = true }
-                    Button("Not Now") { send(.dismiss) }
+                        .buttonStyle(.primary)
+                    Button("Request Changes…") { changing = true }.buttonStyle(.secondary)
+                    Button("Not Now") { send(.dismiss) }.buttonStyle(.secondary)
                 }
                 .disabled(sending)
             }
         }
         .card(highlighted: true)
+        .tint(Theme.accent)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Plan for your approval")
     }
@@ -317,22 +320,22 @@ private struct PlanCard: View {
 
 private struct PlanSummary: View {
     let record: PlanRecord
+    @State private var open = false
 
     var body: some View {
-        DisclosureGroup {
+        ChipDisclosure(isExpanded: $open) {
+            Text("Plan · \(planStatus[record.status] ?? "Not reviewed")")
+        } content: {
             VStack(alignment: .leading, spacing: 8) {
                 MarkdownView(record.plan)
                 if let feedback = record.feedback {
-                    Text("Your changes: \(feedback)").font(.callout).foregroundStyle(.secondary)
+                    Text("Your changes: \(feedback)").font(.callout).foregroundStyle(Theme.muted)
                 }
             }
-            .padding(.top, 6)
-        } label: {
-            Label(
-                "Plan · \(planStatus[record.status] ?? "Not reviewed")",
-                systemImage: "list.bullet.clipboard")
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
         }
-        .font(.callout)
     }
 }
 
@@ -340,10 +343,20 @@ private struct PlanSummary: View {
 
 private struct CodeRun: View {
     let record: CodeRecord
+    @State private var open = false
 
     var body: some View {
         let running = record.status == "running"
-        DisclosureGroup {
+        ChipDisclosure(isExpanded: $open) {
+            HStack(spacing: 5) {
+                if running { ActivityDot() }
+                Text(
+                    running
+                        ? "Running Python in the sandbox…"
+                        : "Ran Python · \(record.status == "complete" ? "Complete" : record.status == "failed" ? "Failed" : "Stopped")"
+                )
+            }
+        } content: {
             VStack(alignment: .leading, spacing: 8) {
                 CodeBox(title: "python · sandbox", text: record.code)
                 if !running {
@@ -353,18 +366,7 @@ private struct CodeRun: View {
                         text: result.isEmpty ? "(no output)" : result, copyLabel: nil)
                 }
             }
-            .padding(.top, 6)
-        } label: {
-            HStack(spacing: 6) {
-                if running { ActivityDot() } else { Image(systemName: "terminal") }
-                Text(
-                    running
-                        ? "Running Python in the sandbox…"
-                        : "Ran Python · \(record.status == "complete" ? "Complete" : record.status == "failed" ? "Failed" : "Stopped")"
-                )
-            }
         }
-        .font(.callout)
     }
 }
 
@@ -378,38 +380,38 @@ private struct BrowserLog: View {
     var body: some View {
         let last = steps.last!
         let place = host(steps.last { $0.url != nil }?.url)
-        DisclosureGroup(
+        ChipDisclosure(
             isExpanded: Binding(get: { expanded ?? running }, set: { expanded = $0 })
         ) {
-            VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                if running && last.status == "running" { ActivityDot() }
+                Text(
+                    "Browser · \(steps.count) \(steps.count == 1 ? "action" : "actions")"
+                        + (place.isEmpty ? "" : " · \(place)"))
+            }
+        } content: {
+            VStack(alignment: .leading, spacing: 5) {
                 ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text("\(index + 1).").foregroundStyle(.secondary).monospacedDigit()
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("\(index + 1).").foregroundStyle(Theme.muted).monospacedDigit()
                         VStack(alignment: .leading, spacing: 2) {
                             (Text(browserStep(step))
                                 + (["complete", "running"].contains(step.status)
                                     ? Text("")
                                     : Text(" · \(browserStatus[step.status] ?? step.status)").bold()))
                             if let error = step.error {
-                                Text(error).font(.caption).foregroundStyle(.secondary)
+                                Text(error).font(.caption).foregroundStyle(Theme.muted)
                             }
                         }
                     }
                 }
             }
-            .padding(.top, 6)
+            .font(.callout)
             .textSelection(.enabled)
-        } label: {
-            HStack(spacing: 6) {
-                if running && last.status == "running" { ActivityDot() } else {
-                    Image(systemName: "globe")
-                }
-                Text(
-                    "Browser · \(steps.count) \(steps.count == 1 ? "action" : "actions")"
-                        + (place.isEmpty ? "" : " · \(place)"))
-            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
         }
-        .font(.callout)
     }
 }
 
@@ -421,18 +423,19 @@ private struct BrowserApproval: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Allow this browser action?", systemImage: "exclamationmark.shield")
-                .font(.headline)
+                .font(Theme.display(16, weight: .medium, relativeTo: .headline))
             Text(record.approval?.summary ?? browserStep(record)).fontWeight(.medium)
             let place = host(record.url)
             Text((record.approval?.reason ?? "") + (place.isEmpty ? "" : " · \(place)"))
-                .font(.callout).foregroundStyle(.secondary)
+                .font(.callout).foregroundStyle(Theme.muted)
             HStack {
-                Button("Allow") { send(.approve) }.buttonStyle(.borderedProminent)
-                Button("Don’t Allow") { send(.dismiss) }
+                Button("Allow") { send(.approve) }.buttonStyle(.primary)
+                Button("Don’t Allow") { send(.dismiss) }.buttonStyle(.secondary)
             }
             .disabled(sending)
         }
         .card(highlighted: true)
+        .tint(Theme.accent)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Browser action for your approval")
     }
@@ -451,15 +454,16 @@ private struct BrowserPaused: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("Vikram is waiting for the browser", systemImage: "globe").font(.headline)
+            Label("Vikram is waiting for the browser", systemImage: "globe").font(Theme.display(16, weight: .medium, relativeTo: .headline))
             Text("You took the browser over. Vikram continues when you hand it back.")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(.callout).foregroundStyle(Theme.muted)
             if let handBack {
                 Button("Hand Back", systemImage: "arrow.uturn.backward", action: handBack)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.primary)
             }
         }
         .card(highlighted: true)
+        .tint(Theme.accent)
         .accessibilityElement(children: .contain)
     }
 }
@@ -478,20 +482,21 @@ private struct ScheduleApproval: View {
                     ? "Save this scheduled task?" : "Save these changes to the task?",
                 systemImage: "calendar.badge.clock"
             )
-            .font(.headline)
+            .font(Theme.display(16, weight: .medium, relativeTo: .headline))
             Text("\(record.name ?? "Task") · \(record.description ?? "")").fontWeight(.medium)
             if let prompt = record.prompt {
                 Text(prompt).font(.callout).textSelection(.enabled)
             }
             Text("Vikram will run this on its own, even when the app is closed.")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(.callout).foregroundStyle(Theme.muted)
             HStack {
-                Button("Save Task") { send(.approve) }.buttonStyle(.borderedProminent)
-                Button("Don’t Save") { send(.dismiss) }
+                Button("Save Task") { send(.approve) }.buttonStyle(.primary)
+                Button("Don’t Save") { send(.dismiss) }.buttonStyle(.secondary)
             }
             .disabled(sending)
         }
         .card(highlighted: true)
+        .tint(Theme.accent)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Scheduled task for your approval")
     }
@@ -525,7 +530,7 @@ private struct ScheduleSummary: View {
                         + (done
                             ? Text("") : Text(" · \(taskStatus[record.status] ?? record.status)").bold())
                     if let error = record.error, !done {
-                        Text(error).font(.caption).foregroundStyle(.secondary)
+                        Text(error).font(.caption).foregroundStyle(Theme.muted)
                     }
                 }
             } icon: {

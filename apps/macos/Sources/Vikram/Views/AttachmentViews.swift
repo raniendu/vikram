@@ -40,7 +40,7 @@ private struct AttachmentThumbnail: View {
                             attachment.extractionNotice?.contains("Partial:") == true
                                 ? "Partial text" : "Text ready"
                         )
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.caption2).foregroundStyle(Theme.muted)
                     }
                     .padding(6)
                 } else if let image {
@@ -52,9 +52,9 @@ private struct AttachmentThumbnail: View {
                 }
             }
             .frame(width: attachment.isDocument ? 120 : 76, height: 76)
-            .background(.background.secondary)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(.separator) }
+            .background(Theme.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.rule) }
         }
         .buttonStyle(.plain)
         .help(attachment.name)
@@ -98,7 +98,7 @@ private struct AttachmentPreview: View {
             Text(attachment.name).font(.headline)
             if attachment.isDocument {
                 Text("Extracted text available to the model. \(attachment.extractionNotice ?? "")")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(.callout).foregroundStyle(Theme.muted)
                 ScrollView {
                     Text(attachment.extractedText ?? "")
                         .font(.system(.callout, design: .monospaced))
@@ -116,9 +116,9 @@ private struct AttachmentPreview: View {
                         + ByteCountFormatter.string(
                             fromByteCount: Int64(attachment.size), countStyle: .file)
                 )
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(Theme.muted)
                 Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+                Button("Done") { dismiss() }.buttonStyle(.primary).keyboardShortcut(.defaultAction)
             }
         }
         .padding(20)
