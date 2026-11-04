@@ -422,7 +422,13 @@ class InteractionRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.respond = hold
         task = await self.send(model)
-        while not self.runtime.waiting:
+        # The card reaches the reply's stream just after the wait begins.
+        while not (
+            self.runtime.waiting
+            and self.store.chat(self.chat["id"])["messages"][0]["attempts"][0][
+                "activity"
+            ]
+        ):
             await asyncio.sleep(0.01)
         await self.runtime.stop()
         attempt = self.store.chat(self.chat["id"])["messages"][0]["attempts"][0]
