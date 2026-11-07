@@ -304,3 +304,15 @@ changes to `scripts/third-party/`. To check a built archive's sources without
 publishing anything, run
 `uv run python scripts/third_party.py sources --check ARCHIVE`; without
 `--check`, it downloads them (about 190 MiB) next to the archive.
+
+## Extension interpreter
+
+The combined bundle also contains the pinned standalone CPython interpreter and
+versioned worker SDK used for native Python extensions. `build_desktop.py`
+verifies its archive digest, licenses and nested signatures; installer checks
+exercise the interpreter and SDK from the extracted payload. Frozen apps never
+fall back to system Python. Exact vendored Python sources, including MPL
+components, are inventoried and included in the existing release-source
+attachment. `scripts/third-party/extension-python.json` pins the runtime;
+`docs/extensions.md` describes its environment and update behavior. These build
+steps do not install user extensions or modify the user's chat library.

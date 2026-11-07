@@ -8,6 +8,7 @@ import VikramKit
 struct ComposerView: View {
     @Environment(AppState.self) private var state
     @Environment(ChatController.self) private var chats
+    @Environment(WorkbenchController.self) private var workbench
     let chat: Chat
     @State private var height: CGFloat = 22
     @State private var targeted = false
@@ -19,9 +20,25 @@ struct ComposerView: View {
     private var invalidImages: Bool {
         pending.contains { !$0.isDocument } && chats.model?.vision != true
     }
+    private var canQueue: Bool {
+        runningHere && !chats.offline && !workbench.working
+            && !chats.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let error = workbench.error, runningHere { notice(error) }
+            if let queued = workbench.status?.queue, !queued.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(queued.prefix(3))) { item in QueueEntryView(item: item) }
+                    if queued.count > 3 {
+                        Button("View all \(queued.count) queued messages") { state.showsWorkbench = true }
+                            .buttonStyle(.borderless)
+                    }
+                }
+                .padding(10)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
+            }
             if invalidImages {
                 notice("Choose an image-capable model or remove the draft images to send.")
             }
@@ -55,7 +72,12 @@ struct ComposerView: View {
                         height: $height,
                         focusKey: chat.id,
                         editable: !chats.sending,
-                        submit: { if chats.canSend { Task { await chats.send() } } },
+                        submit: {
+                            if canQueue { Task { await workbench.queueDraft(kind: .steer) } }
+                            else if chats.canSend { Task { await chats.send() } }
+                        },
+                        followup: { if canQueue { Task { await workbench.queueDraft(kind: .followup) } } },
+                        stop: runningHere ? { Task { await chats.stop() } } : nil,
                         importFiles: { urls in Task { await chats.importFiles(urls) } },
                         importImage: { data in
                             Task { await chats.importData(data, name: "Pasted image.png") }
@@ -98,10 +120,16 @@ struct ComposerView: View {
                             ? "Plan mode is on: approve a plan before Vikram works"
                             : "Plan mode: approve a plan before Vikram works")
                     .disabled(chats.offline)
-                    Text(chats.importing ? "Importing files…" : "Shift + Return for a new line")
+                    Text(chats.importing ? "Importing files…" : runningHere ? "Return steers · Option + Return queues" : "Shift + Return for a new line")
                         .font(.caption).foregroundStyle(Theme.muted)
                     Spacer()
                     if runningHere {
+                        Button("Steer") { Task { await workbench.queueDraft(kind: .steer) } }
+                            .buttonStyle(.borderless).disabled(!canQueue)
+                            .help("Send at the next request boundary after tools finish")
+                        Button("Queue") { Task { await workbench.queueDraft(kind: .followup) } }
+                            .buttonStyle(.borderless).disabled(!canQueue)
+                            .help("Send as a follow-up when this reply finishes")
                         roundButton(systemImage: "stop.fill", fill: Theme.ink, foreground: Theme.paper) {
                             Task { await chats.stop() }
                         }
@@ -138,7 +166,7 @@ struct ComposerView: View {
             HStack {
                 let tools = chats.model?.tools == true
                 Text(
-                    "Local model · Web \(tools ? "available" : "unavailable")"
+                    "\(chats.model?.providerLabel ?? "No model") · Web \(tools ? "available" : "unavailable")"
                         + (tools ? " · Python sandbox · Browser" : ""))
                 Spacer()
                 Text(
@@ -160,6 +188,7 @@ struct ComposerView: View {
                 stops: [.init(color: Theme.paper.opacity(0), location: 0), .init(color: Theme.paper, location: 0.35)],
                 startPoint: .top, endPoint: .bottom)
         }
+        .task(id: runningHere) { await workbench.refresh(chatId: chat.id) }
     }
 
     private func roundButton(
@@ -197,6 +226,8 @@ struct ComposerTextView: NSViewRepresentable {
     let focusKey: String
     let editable: Bool
     let submit: () -> Void
+    let followup: (() -> Void)?
+    let stop: (() -> Void)?
     let importFiles: ([URL]) -> Void
     let importImage: (Data) -> Void
 
@@ -233,6 +264,7 @@ struct ComposerTextView: NSViewRepresentable {
         context.coordinator.parent = self
         guard let view = scroll.documentView as? DraftTextView else { return }
         view.submit = submit
+        view.followup = followup
         view.importFiles = importFiles
         view.importImage = importImage
         view.isEditable = editable
@@ -269,9 +301,16 @@ struct ComposerTextView: NSViewRepresentable {
         }
 
         func textView(_ view: NSTextView, doCommandBy selector: Selector) -> Bool {
+            if selector == #selector(NSResponder.cancelOperation(_:)), let stop = parent.stop {
+                stop()
+                return true
+            }
             guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
-            if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+            let modifiers = NSApp.currentEvent?.modifierFlags ?? []
+            if modifiers.contains(.shift) || modifiers.contains(.control) {
                 view.insertNewlineIgnoringFieldEditor(nil)
+            } else if modifiers.contains(.option), let followup = parent.followup {
+                followup()
             } else {
                 parent.submit()
             }
@@ -283,8 +322,19 @@ struct ComposerTextView: NSViewRepresentable {
 /// A text view that turns pasted or dropped files and images into attachments.
 final class DraftTextView: NSTextView {
     var submit: (() -> Void)?
+    var followup: (() -> Void)?
     var importFiles: (([URL]) -> Void)?
     var importImage: ((Data) -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        if (event.keyCode == 36 || event.keyCode == 76), event.modifierFlags.contains(.option),
+            !event.modifierFlags.contains(.shift), !hasMarkedText(), let followup
+        {
+            followup()
+            return
+        }
+        super.keyDown(with: event)
+    }
 
     override func paste(_ sender: Any?) {
         let board = NSPasteboard.general

@@ -5,6 +5,7 @@ import os
 import plistlib
 import pty
 import select
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -31,7 +32,7 @@ def check_terminal(cli: Path, env: dict[str, str]) -> None:
     process = None
     try:
         process = subprocess.Popen(
-            [str(cli)],
+            [str(cli), "--model", "vikram-installer-check:0"],
             stdin=slave,
             stdout=slave,
             stderr=slave,
@@ -55,9 +56,11 @@ def check_terminal(cli: Path, env: dict[str, str]) -> None:
                     break
             raise AssertionError("The packaged interactive terminal did not respond.")
 
-        wait_for(b"Ctrl+T thinking")
-        os.write(master, b"/trace\r")
-        wait_for(b"No thinking was returned")
+        wait_for(b"Vikram")
+        wait_for(b"Choose a model")
+        # Ctrl+D dismisses the automatic picker without selecting or calling a model.
+        os.write(master, b"\x04/plan\r")
+        wait_for(b"PLAN")
         os.write(master, b"/exit\r")
         assert process.wait(timeout=10) == 0
     finally:
@@ -173,8 +176,12 @@ def main() -> None:
                 env=env,
             )
         previous = layout.current.resolve()
-        check_terminal(layout.cli, env)
         assert not unused.exists()
+        check_terminal(layout.cli, env)
+        # Interactive CLI sessions now use the shared library by default.
+        with sqlite3.connect(unused / "chats.sqlite3") as chats:
+            assert chats.execute("SELECT count(*) FROM chats").fetchone()[0] == 1
+            assert chats.execute("SELECT count(*) FROM attempts").fetchone()[0] == 0
         check_scheduler(layout, root, env)
         install_bundle(source, layout)
         assert previous != layout.current.resolve()

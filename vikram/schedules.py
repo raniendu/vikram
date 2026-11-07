@@ -1175,6 +1175,8 @@ def start_runner() -> None:
     It outlives the app; if a runner is already working, this one exits and
     that runner picks the request up.
     """
+    from vikram.providers import CredentialStore
+
     if getattr(sys, "frozen", False):
         command = [sys.executable, "--run-schedules"]
     else:
@@ -1186,7 +1188,10 @@ def start_runner() -> None:
         stderr=subprocess.DEVNULL,
         start_new_session=True,
         close_fds=True,
-        env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"},
+        env={
+            **CredentialStore().child_environment(),
+            "PYINSTALLER_RESET_ENVIRONMENT": "1",
+        },
     )
 
 

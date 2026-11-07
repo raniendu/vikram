@@ -7,6 +7,7 @@ struct ContentView: View {
     @Environment(AppState.self) private var state
     @Environment(ChatController.self) private var chats
     @Environment(UpdateController.self) private var updates
+    @Environment(WorkbenchController.self) private var workbench
     @State private var sheet: SidebarSheet?
     @State private var deletingChat: ChatSummary?
 
@@ -32,6 +33,22 @@ struct ContentView: View {
         .tint(Theme.accent)
         .foregroundStyle(Theme.ink)
         .sheet(item: $sheet) { SidebarSheetView(sheet: $0) }
+        .sheet(isPresented: Binding(get: { state.showsWorkbench }, set: { state.showsWorkbench = $0 })) {
+            WorkbenchView()
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { state.showsWorkbench = true } label: {
+                    Label(workbench.status?.workspace.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "Workbench",
+                          systemImage: workbench.status?.trusted == true ? "folder.badge.checkmark" : "hammer")
+                }
+                .help("Workspace, providers, branches, queues, and integrations")
+                .disabled(chats.offline)
+            }
+        }
+        .task(id: chats.selected) {
+            if !chats.offline { await workbench.refresh(chatId: chats.selected) }
+        }
         .confirmationDialog(
             "Delete “\(deletingChat?.title ?? "")”?",
             isPresented: Binding(get: { deletingChat != nil }, set: { if !$0 { deletingChat = nil } }),
@@ -130,7 +147,7 @@ private struct ChatDetail: View {
                     }
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) { ComposerView(chat: chat) }
-                .displayTitle(chat.title, subtitle: chats.model.map { formatModelName($0.name) })
+                .displayTitle(chat.title, subtitle: chats.model.map { "\($0.displayName) · \($0.providerLabel)" })
                 .toolbar { ChatToolbar(chat: chat, sheet: $sheet, deletingChat: $deletingChat) }
             } else {
                 Welcome(
@@ -186,7 +203,7 @@ private struct EmptyChat: View {
                 HStack(spacing: 6) {
                     Circle().fill(Theme.success).frame(width: 7, height: 7)
                     Text(
-                        "\(formatModelName(model.name)) · \(model.vision ? "text & images" : "text")")
+                        "\(model.displayName) · \(model.providerLabel) · \(model.vision ? "text & images" : "text")")
                 }
                 .font(.callout)
                 .foregroundStyle(Theme.muted)
@@ -199,7 +216,7 @@ private struct EmptyChat: View {
         if !chats.models.contains(where: \.available) {
             return chats.connection != nil
                 ? "Open Ollama to see your local models."
-                : "Install a chat model in Ollama, then refresh. Cloud models are unavailable here."
+                : "Install a chat model in Ollama, or connect OpenRouter in Workbench, then refresh."
         }
         return "Choose a model in the toolbar to start a conversation."
     }
@@ -251,6 +268,7 @@ private struct LabeledMenuTitle: View {
 
 /// The open chat's model and thinking menus and its actions.
 private struct ChatToolbar: ToolbarContent {
+    @Environment(AppState.self) private var state
     @Environment(ChatController.self) private var chats
     let chat: Chat
     @Binding var sheet: SidebarSheet?
@@ -264,15 +282,15 @@ private struct ChatToolbar: ToolbarContent {
                 Picker(
                     "Model",
                     selection: Binding(
-                        get: { chat.model ?? "" },
-                        set: { name in Task { await chats.setModel(name) } })
+                        get: { chats.model?.name ?? chat.model ?? "" },
+                        set: { name in Task { await state.chooseModel(name) } })
                 ) {
-                    if let current = chat.model, !chats.models.contains(where: { $0.name == current }) {
+                    if let current = chat.model, !chats.models.contains(where: { $0.matches(current) }) {
                         Text("\(formatModelName(current)) · unavailable").tag(current)
                     }
                     ForEach(chats.models) { model in
                         Text(
-                            formatModelName(model.name) + (model.vision ? " · images" : "")
+                            model.displayName + " · " + model.providerLabel + (model.vision ? " · images" : "")
                                 + (model.available ? "" : " · unavailable")
                         )
                         .tag(model.name)
@@ -284,9 +302,9 @@ private struct ChatToolbar: ToolbarContent {
             } label: {
                 LabeledMenuTitle(
                     caption: "Model",
-                    value: chat.model.map(formatModelName) ?? "Select a local model")
+                    value: model?.displayName ?? chat.model.map(formatModelName) ?? "Select a model")
             }
-            .help(chat.model ?? "Choose a local model")
+            .help(chat.model ?? "Choose a model")
             .accessibilityLabel("Model: \(chat.model.map(formatModelName) ?? "none")")
             .disabled(chats.offline || chats.loading || chats.sending)
             if let model, model.thinking.contains(where: { $0 != thinkingOn(model) }) {
@@ -295,6 +313,7 @@ private struct ChatToolbar: ToolbarContent {
             Menu {
                 Button("Rename…") { sheet = .renameChat(chat.summary) }
                 Button("Move to Folder…") { sheet = .moveChat(chat.summary) }
+                Button("Branches, Context, and Export…") { state.showsWorkbench = true }
                 Divider()
                 Button("Delete Chat…", role: .destructive) { deletingChat = chat.summary }
                     .disabled(

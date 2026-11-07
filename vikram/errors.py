@@ -9,9 +9,26 @@ class ReplyError(Exception):
     """A conversation failure containing only a safe user-facing description."""
 
 
-def reply_error(error: Exception) -> str:
+def reply_error(error: Exception, *, provider: str = "ollama") -> str:
     if isinstance(error, ReplyError):
         return str(error)
+    if provider == "openrouter":
+        if isinstance(error, ModelHTTPError):
+            if error.status_code in (401, 403):
+                return "OpenRouter authentication failed. Check your connection credentials."
+            if error.status_code == 402:
+                return "OpenRouter has insufficient credit for this request."
+            if error.status_code in (429, 503):
+                return "OpenRouter is busy or rate-limited. Retry later; local inference remains available."
+            return f"OpenRouter rejected this request (HTTP {error.status_code}). Select another model or retry."
+        if isinstance(error, (TimeoutError, httpx.TimeoutException, APITimeoutError)):
+            return (
+                "OpenRouter timed out. Retry later or explicitly select a local model."
+            )
+        if isinstance(error, (httpx.ConnectError, APIConnectionError)):
+            return "Could not connect to OpenRouter. Check your network connection."
+        if isinstance(error, AgentRunError):
+            return "OpenRouter could not complete this reply. Retry or select another model."
     causes, seen = [], set()
     current = error
     while current is not None and id(current) not in seen:

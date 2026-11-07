@@ -6,6 +6,7 @@ import csv
 import io
 import json
 import shutil
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -227,7 +228,7 @@ def extract_document(name: str, data: bytes) -> dict:
     }
 
 
-async def extract_in_worker(name: str, data: bytes) -> dict:
+def _worker_request(name: str, data: bytes) -> tuple[list[str], bytes]:
     if len(data) > MAX_BYTES:
         raise ValueError("Attachments must be no larger than 10 MiB.")
     command = (
@@ -235,27 +236,65 @@ async def extract_in_worker(name: str, data: bytes) -> dict:
         if getattr(sys, "frozen", False)
         else [sys.executable, "-m", "vikram.document_worker"]
     )
+    payload = json.dumps(
+        {"name": name, "data": base64.b64encode(data).decode()}
+    ).encode()
+    return command, payload
+
+
+def _worker_result(out: bytes, returncode: int) -> dict:
+    if returncode != 0 or len(out) > 512 * 1024:
+        raise ValueError(
+            "This document could not be extracted within its resource limits."
+        )
+    try:
+        value = json.loads(out)
+    except (ValueError, RecursionError):
+        raise ValueError("This document could not be read.") from None
+    if not isinstance(value, dict):
+        raise ValueError("This document could not be read.")
+    if "error" in value:
+        raise ValueError(value["error"])
+    return value
+
+
+def extract_in_worker_sync(name: str, data: bytes) -> dict:
+    """Bounded parser isolation for synchronous callers, including active loops."""
+    from vikram.providers import CredentialStore
+
+    command, payload = _worker_request(name, data)
+    try:
+        result = subprocess.run(
+            command,
+            input=payload,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=CredentialStore().child_environment(),
+            timeout=EXTRACT_TIMEOUT,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise ValueError(
+            "Document extraction took too long (15-second limit)."
+        ) from None
+    return _worker_result(result.stdout, result.returncode)
+
+
+async def extract_in_worker(name: str, data: bytes) -> dict:
+    from vikram.providers import CredentialStore
+
+    command, payload = _worker_request(name, data)
     process = await asyncio.create_subprocess_exec(
         *command,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
+        env=CredentialStore().child_environment(),
     )
     try:
         async with asyncio.timeout(EXTRACT_TIMEOUT):
-            out, _ = await process.communicate(
-                json.dumps(
-                    {"name": name, "data": base64.b64encode(data).decode()}
-                ).encode()
-            )
-        if process.returncode != 0 or len(out) > 512 * 1024:
-            raise ValueError(
-                "This document could not be extracted within its resource limits."
-            )
-        value = json.loads(out)
-        if "error" in value:
-            raise ValueError(value["error"])
-        return value
+            out, _ = await process.communicate(payload)
+        return _worker_result(out, process.returncode)
     except TimeoutError:
         raise ValueError(
             "Document extraction took too long (15-second limit)."

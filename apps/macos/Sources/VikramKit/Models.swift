@@ -84,6 +84,7 @@ public struct CodeRecord: Sendable, Hashable, Codable {
 }
 
 public struct BrowserApprovalInfo: Sendable, Hashable, Codable {
+    public var details: String?
     public var summary: String
     public var reason: String
 }
@@ -129,6 +130,7 @@ public enum ActivityRecord: Sendable, Hashable, Codable, Identifiable {
     case code(CodeRecord)
     case browser(BrowserRecord)
     case schedule(ScheduleRecord)
+    case tool(ToolRecord)
     /// A kind this app does not know yet; kept so the reply still shows.
     case other(kind: String, id: String, status: String)
 
@@ -143,6 +145,7 @@ public enum ActivityRecord: Sendable, Hashable, Codable, Identifiable {
         case "code": self = .code(try CodeRecord(from: decoder))
         case "browser": self = .browser(try BrowserRecord(from: decoder))
         case "schedule": self = .schedule(try ScheduleRecord(from: decoder))
+        case "coding", "mcp", "extension", "composition": self = .tool(try ToolRecord(from: decoder))
         default:
             self = .other(
                 kind: kind,
@@ -160,6 +163,7 @@ public enum ActivityRecord: Sendable, Hashable, Codable, Identifiable {
         case .code(let record): try record.encode(to: encoder)
         case .browser(let record): try record.encode(to: encoder)
         case .schedule(let record): try record.encode(to: encoder)
+        case .tool(let record): try record.encode(to: encoder)
         case .other(_, let id, let status):
             try keys.encode(id, forKey: .id)
             try keys.encode(status, forKey: .status)
@@ -173,6 +177,7 @@ public enum ActivityRecord: Sendable, Hashable, Codable, Identifiable {
         case .code: "code"
         case .browser: "browser"
         case .schedule: "schedule"
+        case .tool(let record): record.kind
         case .other(let kind, _, _): kind
         }
     }
@@ -184,6 +189,7 @@ public enum ActivityRecord: Sendable, Hashable, Codable, Identifiable {
         case .code(let r): r.id
         case .browser(let r): r.id
         case .schedule(let r): r.id
+        case .tool(let r): r.id
         case .other(_, let id, _): id
         }
     }
@@ -195,6 +201,7 @@ public enum ActivityRecord: Sendable, Hashable, Codable, Identifiable {
         case .code(let r): r.status
         case .browser(let r): r.status
         case .schedule(let r): r.status
+        case .tool(let r): r.status
         case .other(_, _, let status): status
         }
     }
@@ -457,8 +464,23 @@ public struct LocalModel: Sendable, Hashable, Codable, Identifiable {
     public var thinkingDefault: Thinking?
     public var size: Double?
     public var contextLength: Int?
+    public var provider: String?
+    public var advertisedName: String?
 
     public var id: String { name }
+    public var isCloud: Bool { provider == "openrouter" || name.hasPrefix("openrouter:") }
+    public var providerLabel: String { isCloud ? "OpenRouter" : "Local Ollama" }
+    public var displayName: String {
+        if let advertisedName { return advertisedName }
+        if isCloud { return name.hasPrefix("openrouter:") ? String(name.dropFirst("openrouter:".count)) : name }
+        return formatModelName(name.replacingOccurrences(of: "^ollama:", with: "", options: .regularExpression))
+    }
+
+    public func matches(_ selection: String) -> Bool {
+        if isCloud { return name == selection }
+        return name.replacingOccurrences(of: "^ollama:", with: "", options: .regularExpression)
+            == selection.replacingOccurrences(of: "^ollama:", with: "", options: .regularExpression)
+    }
 
     public init(
         name: String, available: Bool = true, reason: String? = nil, vision: Bool = false,
@@ -475,13 +497,16 @@ public struct LocalModel: Sendable, Hashable, Codable, Identifiable {
         self.thinkingDefault = thinkingDefault
         self.size = size
         self.contextLength = contextLength
+        self.provider = nil
+        self.advertisedName = nil
     }
 
     enum CodingKeys: String, CodingKey {
-        case name, available, reason, vision, tools, thinking, size
+        case name, available, reason, vision, tools, thinking, size, provider
         case canThink = "can_think"
         case thinkingDefault = "thinking_default"
         case contextLength = "context_length"
+        case advertisedName = "display_name"
     }
 
     public init(from decoder: Decoder) throws {
@@ -496,6 +521,8 @@ public struct LocalModel: Sendable, Hashable, Codable, Identifiable {
         thinkingDefault = try? c.decodeIfPresent(Thinking.self, forKey: .thinkingDefault)
         size = try c.decodeIfPresent(Double.self, forKey: .size)
         contextLength = try c.decodeIfPresent(Int.self, forKey: .contextLength)
+        provider = try c.decodeIfPresent(String.self, forKey: .provider)
+        advertisedName = try c.decodeIfPresent(String.self, forKey: .advertisedName)
     }
 }
 

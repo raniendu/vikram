@@ -226,6 +226,7 @@ class VmSandbox:
         self._backend = None
         self._workspace = None
         self._broken: str | None = None
+        self._boot: asyncio.Task | None = None
         # One snippet at a time: each run rewrites the same file in the VM.
         self._lock = asyncio.Lock()
 
@@ -254,14 +255,25 @@ class VmSandbox:
         )
         self._backend = backend
         workspace = Workspace(backend)
-        boot = asyncio.ensure_future(workspace.working_dir())
-        await asyncio.sleep(0)  # The ref exists once the boot has started.
-        self._mark()
+        boot = self._boot = asyncio.ensure_future(workspace.working_dir())
+        marked = False
         try:
+            await asyncio.sleep(0)  # The ref exists once the boot has started.
+            self._mark()
+            marked = True
             await boot
-        except Exception as error:
+        except BaseException as error:
+            boot.cancel()
+            await asyncio.gather(boot, return_exceptions=True)
+            self._boot = None
+            if not marked or isinstance(error, asyncio.CancelledError):
+                await self.close()
+            if isinstance(error, asyncio.CancelledError):
+                raise
             self._broken = f"The Python sandbox could not start ({_describe(error)})."
             raise SandboxUnavailable(self._broken) from None
+        finally:
+            self._boot = None
         self._workspace = workspace
         return workspace
 
@@ -300,16 +312,125 @@ class VmSandbox:
         return CodeRun(result.exit_code, result.stdout, result.stderr)
 
     async def close(self) -> None:
+        boot, self._boot = self._boot, None
+        if boot is not None and not boot.done():
+            boot.cancel()
+            await asyncio.gather(boot, return_exceptions=True)
         backend, self._backend, self._workspace = self._backend, None, None
         if backend is None or backend.ref is None:
             return
+        ref = backend.ref
         from pydantic_ai_harness.smol_sandbox import SmolSandbox
 
         try:
-            await SmolSandbox().destroy(backend.ref)
+            await SmolSandbox().destroy(ref)
         except Exception:
             return  # Keep the marker: the next process sweeps it.
-        (_markers() / f"{backend.ref.id}.json").unlink(missing_ok=True)
+        try:
+            (_markers() / f"{ref.id}.json").unlink(missing_ok=True)
+        except OSError:
+            pass  # A startup failure may mean the marker directory is inaccessible.
+
+
+COMPOSITION_FRAME_LIMIT = 1024 * 1024
+# This control program runs in the guest through the existing VM control API.
+# It never evaluates request contents and never reads more than one bounded batch.
+_POLL_COMPOSITION = r"""
+import json, os, re, stat, sys
+root, maximum = sys.argv[1], int(sys.argv[2])
+frames, total = [], 2
+with os.scandir(root) as scan:
+    for entry in scan:
+        if len(frames) >= 5:
+            break
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,100}\.request", entry.name):
+            continue
+        fd = os.open(entry.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as source:
+            if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                raise ValueError("Invalid broker frame")
+            data = source.read(maximum + 1)
+        if len(data) > maximum:
+            raise ValueError("Broker frame exceeds limit")
+        if frames and total + len(data) > maximum - 100:
+            break
+        frame = json.loads(data)
+        if not isinstance(frame, dict) or frame.get("id") != entry.name[:-8]:
+            raise ValueError("Invalid broker frame identity")
+        frames.append(frame)
+        total += len(data) + 2
+        os.replace(entry.path, entry.path + ".claimed")
+print(json.dumps(frames, separators=(",", ":")))
+"""
+
+
+class CompositionSandbox(VmSandbox):
+    """Separate per-composition VM with bounded JSON control files, never mounts."""
+
+    async def prepare(self, code: str, tools: list[dict], execution_id: str) -> None:
+        from vikram.composition import GUEST_RUNNER
+
+        if not execution_id.isalnum() or len(execution_id) > 64:
+            raise ValueError("Invalid composition identifier.")
+        reason = unavailable_reason()
+        if reason:
+            raise SandboxUnavailable(reason)
+        workspace = self._workspace or await self._start()
+        self._control = f"composition/{execution_id}"
+        await workspace.write_text(f"{self._control}/code.py", code)
+        await workspace.write_text(f"{self._control}/tools.json", json.dumps(tools))
+        await workspace.write_text(f"{self._control}/runner.py", GUEST_RUNNER)
+
+    async def run_composition(self) -> CodeRun:
+        from pydantic_ai.workspaces import (
+            WorkspaceOutputLimitError,
+            WorkspaceTimeoutError,
+        )
+
+        try:
+            result = await self._workspace.run(
+                ["python", f"{self._control}/runner.py", self._control], timeout=30 * 60
+            )
+        except WorkspaceTimeoutError:
+            return CodeRun(None, "", "Composition exceeded its overall deadline.", True)
+        except WorkspaceOutputLimitError:
+            return CodeRun(None, "", "Composition exceeded the VM output limit.")
+        return CodeRun(result.exit_code, result.stdout, result.stderr)
+
+    async def poll_requests(self) -> list[dict]:
+        result = await self._workspace.run(
+            [
+                "python",
+                "-c",
+                _POLL_COMPOSITION,
+                self._control,
+                str(COMPOSITION_FRAME_LIMIT),
+            ],
+            timeout=5,
+        )
+        if result.exit_code or len(result.stdout.encode()) > COMPOSITION_FRAME_LIMIT:
+            raise ValueError(
+                "The composition broker received an invalid or oversized frame."
+            )
+        frames = json.loads(result.stdout)
+        if not isinstance(frames, list) or len(frames) > 5:
+            raise ValueError("The composition broker received an invalid batch.")
+        return frames
+
+    async def write_response(self, identifier: str, result: dict) -> None:
+        if (
+            not identifier
+            or len(identifier) > 100
+            or any(not (c.isascii() and (c.isalnum() or c in "_-")) for c in identifier)
+        ):
+            raise ValueError("Invalid composition call identifier.")
+        encoded = json.dumps(result, allow_nan=False)
+        if len(encoded.encode()) > COMPOSITION_FRAME_LIMIT:
+            raise ValueError("The composition result exceeds the frame limit.")
+        # Workspace writes publish atomically through its guest filesystem API.
+        await self._workspace.write_text(
+            f"{self._control}/{identifier}.response", encoded
+        )
 
 
 def host_sandbox() -> Sandbox | None:

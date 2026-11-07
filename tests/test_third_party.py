@@ -495,6 +495,63 @@ class NoticesTests(unittest.TestCase):
 
 
 class SourcesTests(unittest.TestCase):
+    def test_extension_sources_are_embedded_verified_and_in_release_attachment(self):
+        runtime = self.root / "runtime"
+        code = runtime / "licenses/sources/python-packages/pip/_vendor/certifi"
+        code.mkdir(parents=True)
+        (code / "__init__.py").write_text('__version__ = "2026.8.8"\n')
+        (code / "LICENSE").write_text("Mozilla Public License 2.0\n")
+        pin = {"sha256": "a" * 64, "url": "https://example.test/pinned-python.tar.zst"}
+        (runtime / "manifest.json").write_text(json.dumps(pin))
+        inventory = {
+            "runtime_sha256": pin["sha256"],
+            "files": [
+                {
+                    "path": str(
+                        file.relative_to(runtime / "licenses/sources/python-packages")
+                    ),
+                    "sha256": third_party._file_sha256(file),
+                }
+                for file in code.iterdir()
+            ],
+        }
+        (runtime / "licenses/sources.json").write_text(json.dumps(inventory))
+        notices = self.root / "notices"
+        notices.mkdir()
+        (notices / third_party.SOURCES_FILE).write_text(json.dumps(self.sources))
+        (notices / third_party.NOTICES_FILE).write_text(
+            "Vikram 0.2.0 includes sources.\n" + third_party.sources_url("0.2.0")
+        )
+        third_party.add_extension_sources(notices, runtime, "0.2.0")
+        source_list = third_party.check_folder(notices, "0.2.0")
+        extra = source_list["components"][-1]
+        self.assertEqual(extra["licenses"], ["MPL-2.0"])
+        installer = self.root / "Vikram-0.2.0-macos-arm64.zip"
+        prefix = f"{third_party.ARCHIVE_ROOT}/Contents/Resources/Vikram.app/{third_party.APP_NOTICES}/"
+        with zipfile.ZipFile(installer, "w") as output:
+            for file in notices.rglob("*"):
+                if file.is_file():
+                    output.write(file, prefix + str(file.relative_to(notices)))
+        destination = self.root / "release"
+        destination.mkdir()
+        assets = third_party.release_assets(
+            installer, "0.2.0", destination, self.hosts.client(self)
+        )
+        third_party.check_sources_archive(assets[1][0], source_list, "0.2.0")
+        with tarfile.open(assets[1][0]) as archive:
+            entry = (
+                "Vikram-0.2.0-third-party-sources/"
+                + extra["folder"]
+                + "/python-package-sources.tar"
+            )
+            self.assertEqual(
+                archive.extractfile(entry).read(),
+                (notices / extra["files"][0]["bundled"]).read_bytes(),
+            )
+        (notices / extra["files"][0]["bundled"]).write_bytes(b"changed")
+        with self.assertRaises(third_party.SourceError):
+            third_party.check_folder(notices, "0.2.0")
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="vikram-sources-test-")
         self.addCleanup(temporary.cleanup)

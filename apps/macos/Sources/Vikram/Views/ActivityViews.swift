@@ -105,6 +105,8 @@ struct ActivityList: View {
             if live { ScheduleApproval(record: task, reply: reply) } else {
                 ScheduleSummary(record: task, openTask: openTask)
             }
+        case .tool(let tool):
+            ToolActivityView(record: tool, live: live, reply: reply)
         case .browser, .other:
             EmptyView()
         }

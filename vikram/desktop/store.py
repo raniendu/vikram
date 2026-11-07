@@ -1,10 +1,13 @@
 """Transactional desktop records and private attachment ownership."""
 
+import fcntl
 import json
 import os
 import re
 import sqlite3
 import time
+from contextlib import ExitStack, contextmanager
+from functools import wraps
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -25,21 +28,72 @@ def now() -> float:
     return time.time()
 
 
+def session_mutation(method):
+    """Serialize session edits with active replies, including other processes."""
+
+    @wraps(method)
+    def guarded(self, chat_id, *args, **kwargs):
+        with self.mutation(chat_id):
+            return method(self, chat_id, *args, **kwargs)
+
+    return guarded
+
+
+def file_mutation(method):
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        with self.file_lock():
+            return method(self, *args, **kwargs)
+
+    return guarded
+
+
+def attempt_mutation(method):
+    @wraps(method)
+    def guarded(self, attempt_id, *args, **kwargs):
+        chat_id = self._one("SELECT chat_id FROM attempts WHERE id=?", (attempt_id,))[
+            "chat_id"
+        ]
+        with self.mutation(chat_id):
+            return method(self, attempt_id, *args, **kwargs)
+
+    return guarded
+
+
 class Store:
     def __init__(self, root: Path):
-        self.root = root
+        self.root = root = Path(root)
+        self._locks: dict[str, int] = {}
+        self._attempt_locks: set[str] = set()
+        self._files_locked = 0
+        self._closed = False
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         root.chmod(0o700)
         self.files = root / "attachments"
         self.files.mkdir(exist_ok=True, mode=0o700)
         self.files.chmod(0o700)
+        self.locks = root / "locks"
+        self.locks.mkdir(exist_ok=True, mode=0o700)
+        self.locks.chmod(0o700)
+        # A second connection must not inspect a half-migrated schema.
+        migration_fd = os.open(root / "migration.lock", os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(migration_fd, fcntl.LOCK_EX)
+            self._open_database()
+        finally:
+            os.close(migration_fd)
+        self._recover()
+        self._collect_files()
+
+    def _open_database(self) -> None:
+        root = self.root
         self.db = sqlite3.connect(root / "chats.sqlite3")
         (root / "chats.sqlite3").chmod(0o600)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA busy_timeout=3000")
         version = self.db.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, 2, 3, 4, 5):
+        if version not in (0, 1, 2, 3, 4, 5, 6, 7):
             self.db.close()
             raise ValueError("This chat library needs a newer version of Vikram.")
         self.db.executescript("""
@@ -116,14 +170,138 @@ class Store:
             PRAGMA user_version=5;
             COMMIT;
             """)
-        with self.db:
-            self.db.execute(
-                "UPDATE attempts SET status='interrupted', error='The app closed before this reply finished.' WHERE status='running'"
-            )
-        self._collect_files()
+        if version < 6:
+            with self.db:
+                columns = {
+                    "chats": {
+                        "workspace": "TEXT",
+                        "active_leaf": "TEXT",
+                        "origin_chat_id": "TEXT",
+                        "origin_message_id": "TEXT",
+                        "imported": "INTEGER NOT NULL DEFAULT 0",
+                        "context_summary": "TEXT NOT NULL DEFAULT ''",
+                        "summary_through": "TEXT",
+                    },
+                    "messages": {"parent_id": "TEXT"},
+                }
+                new_tree = "parent_id" not in {
+                    row[1] for row in self.db.execute("PRAGMA table_info(messages)")
+                }
+                for table, fields in columns.items():
+                    present = {
+                        row[1] for row in self.db.execute(f"PRAGMA table_info({table})")
+                    }
+                    for name, kind in fields.items():
+                        if name not in present:
+                            self.db.execute(
+                                f"ALTER TABLE {table} ADD COLUMN {name} {kind}"
+                            )
+                if new_tree:
+                    for row in self.db.execute("SELECT id FROM chats").fetchall():
+                        parent = None
+                        for message in self.db.execute(
+                            "SELECT id FROM messages WHERE chat_id=? ORDER BY rowid",
+                            (row[0],),
+                        ).fetchall():
+                            self.db.execute(
+                                "UPDATE messages SET parent_id=? WHERE id=?",
+                                (parent, message[0]),
+                            )
+                            parent = message[0]
+                        self.db.execute(
+                            "UPDATE chats SET active_leaf=? WHERE id=?",
+                            (parent, row[0]),
+                        )
+                self.db.execute("PRAGMA user_version=6")
+        if version < 7:
+            with self.db:
+                if "usage" not in {
+                    row[1] for row in self.db.execute("PRAGMA table_info(attempts)")
+                }:
+                    self.db.execute(
+                        "ALTER TABLE attempts ADD COLUMN usage TEXT NOT NULL DEFAULT '{}'"
+                    )
+                self.db.execute("PRAGMA user_version=7")
+
+    def claim_chat(self, chat_id: str) -> bool:
+        """Hold ownership until release/close; OS locks survive neither PID reuse nor crash."""
+        if chat_id in self._locks:
+            return False
+        self._one("SELECT id FROM chats WHERE id=?", (chat_id,))
+        if not re.fullmatch(r"[0-9a-f]{32}", chat_id):
+            raise ValueError("Invalid session identifier.")
+        fd = os.open(self.locks / f"{chat_id}.lock", os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            raise ValueError(
+                "This session is active in another Vikram instance."
+            ) from None
+        self._locks[chat_id] = fd
+        try:
+            with self.db:
+                self.db.execute(
+                    "UPDATE attempts SET status='interrupted', error='Vikram closed before this reply finished.' WHERE chat_id=? AND status='running'",
+                    (chat_id,),
+                )
+        except BaseException:
+            self.release_chat(chat_id)
+            raise
+        return True
+
+    def release_chat(self, chat_id: str) -> None:
+        fd = self._locks.pop(chat_id, None)
+        if fd is not None:
+            os.close(fd)
+        self._attempt_locks.discard(chat_id)
+
+    @contextmanager
+    def mutation(self, chat_id: str):
+        acquired = self.claim_chat(chat_id)
+        try:
+            yield
+        finally:
+            if acquired:
+                self.release_chat(chat_id)
+
+    @contextmanager
+    def file_lock(self):
+        """Prevent garbage collection from racing an attachment import."""
+        if self._files_locked:
+            yield
+            return
+        fd = os.open(self.root / "attachments.lock", os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            self._files_locked += 1
+            yield
+        finally:
+            self._files_locked -= 1
+            os.close(fd)
+
+    def _recover(self) -> None:
+        for row in self._rows(
+            "SELECT DISTINCT chat_id FROM attempts WHERE status='running'"
+        ):
+            try:
+                with self.mutation(row["chat_id"]):
+                    with self.db:
+                        self.db.execute(
+                            "UPDATE attempts SET status='interrupted', error='Vikram closed before this reply finished.' WHERE chat_id=? AND status='running'",
+                            (row["chat_id"],),
+                        )
+            except ValueError:
+                # A live owner is authoritative, even in this same process.
+                continue
 
     def close(self) -> None:
+        if self._closed:
+            return
         self.db.close()
+        for chat_id in list(self._locks):
+            self.release_chat(chat_id)
+        self._closed = True
 
     def _one(self, sql: str, args: tuple = ()) -> dict:
         row = self.db.execute(sql, args).fetchone()
@@ -153,31 +331,56 @@ class Store:
         chat["attachments"] = self._rows(
             "SELECT * FROM attachments WHERE chat_id=? ORDER BY rowid", (chat_id,)
         )
-        chat["messages"] = self._rows(
+        messages = self._rows(
             "SELECT * FROM messages WHERE chat_id=? ORDER BY rowid", (chat_id,)
         )
+        by_id = {m["id"]: m for m in messages}
+        path, leaf = [], chat["active_leaf"]
+        visited = set()
+        while leaf is not None:
+            if leaf not in by_id or leaf in visited:
+                raise ValueError("This session's branch history is inconsistent.")
+            visited.add(leaf)
+            path.append(by_id[leaf])
+            leaf = by_id[leaf]["parent_id"]
+        chat["messages"] = list(reversed(path))
         for message in chat["messages"]:
             message["attempts"] = self._rows(
                 "SELECT * FROM attempts WHERE message_id=? ORDER BY rowid",
                 (message["id"],),
             )
             for attempt in message["attempts"]:
-                for key in ("thinking", "sources", "searches", "activity"):
+                for key in ("thinking", "sources", "searches", "activity", "usage"):
                     attempt[key] = json.loads(attempt[key])
                 attempt["reasoning_truncated"] = bool(attempt["reasoning_truncated"])
         return chat
 
-    def create_chat(self, model: str | None, folder_id: str | None = None) -> dict:
+    def create_chat(
+        self,
+        model: str | None,
+        folder_id: str | None = None,
+        *,
+        workspace: str | Path | None = None,
+    ) -> dict:
         cid, timestamp = uid(), now()
         if folder_id is not None:
             self._one("SELECT id FROM folders WHERE id=?", (folder_id,))
         with self.db:
             self.db.execute(
-                "INSERT INTO chats(id,model,folder_id,created,updated,web) VALUES(?,?,?,?,?,?)",
-                (cid, model, folder_id, timestamp, timestamp, DEFAULT_WEB),
+                "INSERT INTO chats(id,model,folder_id,created,updated,web,workspace) VALUES(?,?,?,?,?,?,?)",
+                (
+                    cid,
+                    model,
+                    folder_id,
+                    timestamp,
+                    timestamp,
+                    DEFAULT_WEB,
+                    str(Path(workspace).resolve()) if workspace else None,
+                ),
             )
         return self.chat(cid)
 
+    @session_mutation
     def update_chat(self, chat_id: str, **fields: Any) -> dict:
         self._one("SELECT id FROM chats WHERE id=?", (chat_id,))
         if not fields or set(fields) - {
@@ -186,6 +389,7 @@ class Store:
             "model",
             "thinking",
             "mode",
+            "workspace",
         }:
             raise ValueError("Unsupported chat change.")
         if "mode" in fields and fields["mode"] not in ("normal", "plan"):
@@ -199,6 +403,8 @@ class Store:
             self._one("SELECT id FROM folders WHERE id=?", (fields["folder_id"],))
         if "thinking" in fields:
             fields["thinking"] = json.dumps(fields["thinking"])
+        if fields.get("workspace") is not None:
+            fields["workspace"] = str(Path(fields["workspace"]).resolve())
         # Selection and drafts must not reorder the conversation list.
         with self.db:
             self.db.execute(
@@ -207,6 +413,7 @@ class Store:
             )
         return self.chat(chat_id)
 
+    @session_mutation
     def save_draft(self, chat_id: str, text: str, revision: int) -> None:
         if len(text) > 1_000_000:
             raise ValueError(
@@ -258,9 +465,15 @@ class Store:
         self._folder(fid, name)
 
     def delete_folder(self, fid: str) -> None:
-        with self.db:
-            self.db.execute("DELETE FROM folders WHERE id=?", (fid,))
+        with ExitStack() as owners:
+            for chat in self._rows(
+                "SELECT id FROM chats WHERE folder_id=? ORDER BY id", (fid,)
+            ):
+                owners.enter_context(self.mutation(chat["id"]))
+            with self.db:
+                self.db.execute("DELETE FROM folders WHERE id=?", (fid,))
 
+    @session_mutation
     def delete_chat(self, chat_id: str) -> None:
         if self.db.execute(
             "SELECT 1 FROM attempts WHERE chat_id=? AND status='running'", (chat_id,)
@@ -270,6 +483,7 @@ class Store:
             self.db.execute("DELETE FROM chats WHERE id=?", (chat_id,))
         self._collect_files()
 
+    @file_mutation
     def _collect_files(self) -> None:
         live = {row["id"] for row in self._rows("SELECT id FROM attachments")}
         for path in self.files.iterdir():
@@ -295,6 +509,8 @@ class Store:
             },
         )
 
+    @session_mutation
+    @file_mutation
     def import_attachment(
         self, chat_id: str, name: str, data: bytes, *, extracted: dict | None = None
     ) -> dict:
@@ -344,6 +560,8 @@ class Store:
         self._one("SELECT id FROM attachments WHERE id=? AND chat_id=?", (aid, chat_id))
         return (self.files / f"{aid}.blob").read_bytes()
 
+    @session_mutation
+    @file_mutation
     def remove_image(self, chat_id: str, aid: str) -> None:
         self._one(
             "SELECT id FROM attachments WHERE id=? AND chat_id=? AND message_id IS NULL",
@@ -362,10 +580,29 @@ class Store:
         retry: bool = False,
         web: str = DEFAULT_WEB,
         mode: str = "normal",
+        prompt: str | None = None,
+    ) -> dict:
+        acquired = self.claim_chat(chat_id)
+        try:
+            attempt = self._begin(
+                chat_id, model, thinking, request_id, retry, web, mode, prompt
+            )
+        except BaseException:
+            if acquired:
+                self.release_chat(chat_id)
+            raise
+        if acquired:
+            self._attempt_locks.add(chat_id)
+        return attempt
+
+    def _begin(
+        self, chat_id, model, thinking, request_id, retry, web, mode, prompt=None
     ) -> dict:
         chat = self.chat(chat_id)
         aid, timestamp = uid(), now()
-        if self.db.execute("SELECT 1 FROM attempts WHERE status='running'").fetchone():
+        if self.db.execute(
+            "SELECT 1 FROM attempts WHERE chat_id=? AND status='running'", (chat_id,)
+        ).fetchone():
             raise ValueError("Another reply is still running.")
         with self.db:
             if retry:
@@ -381,23 +618,31 @@ class Store:
                     )
                 mid = latest["id"]
             else:
-                text = chat["draft"].strip()
-                images = [a for a in chat["attachments"] if a["message_id"] is None]
+                text = (chat["draft"] if prompt is None else prompt).strip()
+                images = (
+                    [a for a in chat["attachments"] if a["message_id"] is None]
+                    if prompt is None
+                    else []
+                )
                 if not text and not images:
                     raise ValueError("Type a message or attach a file.")
                 mid = uid()
                 self.db.execute(
-                    "INSERT INTO messages VALUES(?,?,?,?)",
-                    (mid, chat_id, text, timestamp),
+                    "INSERT INTO messages(id,chat_id,text,created,parent_id) VALUES(?,?,?,?,?)",
+                    (mid, chat_id, text, timestamp, chat["active_leaf"]),
                 )
                 self.db.execute(
-                    "UPDATE attachments SET message_id=? WHERE chat_id=? AND message_id IS NULL",
-                    (mid, chat_id),
+                    "UPDATE chats SET active_leaf=? WHERE id=?", (mid, chat_id)
                 )
-                self.db.execute(
-                    "UPDATE chats SET draft='',draft_revision=draft_revision+1 WHERE id=?",
-                    (chat_id,),
-                )
+                if prompt is None:
+                    self.db.execute(
+                        "UPDATE attachments SET message_id=? WHERE chat_id=? AND message_id IS NULL",
+                        (mid, chat_id),
+                    )
+                    self.db.execute(
+                        "UPDATE chats SET draft='',draft_revision=draft_revision+1 WHERE id=?",
+                        (chat_id,),
+                    )
                 if not chat["messages"] and not chat["custom_title"]:
                     title = (
                         " ".join(text.split())[:70]
@@ -456,8 +701,10 @@ class Store:
                 ),
             )
             self.db.execute(
-                "INSERT INTO messages VALUES(?,?,?,?)", (mid, cid, prompt, timestamp)
+                "INSERT INTO messages(id,chat_id,text,created) VALUES(?,?,?,?)",
+                (mid, cid, prompt, timestamp),
             )
+            self.db.execute("UPDATE chats SET active_leaf=? WHERE id=?", (mid, cid))
             self.db.execute(
                 "INSERT INTO attempts(id,chat_id,message_id,request_id,requested_model,"
                 "actual_model,thinking,status,content,error,created,updated,web,sources,"
@@ -483,6 +730,7 @@ class Store:
             )
         return self.chat(cid)
 
+    @attempt_mutation
     def checkpoint(
         self,
         attempt_id: str,
@@ -495,6 +743,7 @@ class Store:
         reasoning: str | None = None,
         reasoning_truncated: bool | None = None,
         activity: list | None = None,
+        usage: dict | None = None,
     ) -> None:
         with self.db:
             cur = self.db.execute(
@@ -514,7 +763,48 @@ class Store:
             )
             if cur.rowcount != 1:
                 raise ValueError("This reply is no longer running.")
+            if usage is not None:
+                self.db.execute(
+                    "UPDATE attempts SET usage=? WHERE id=?",
+                    (json.dumps(usage), attempt_id),
+                )
 
+    @session_mutation
+    def record_shell(self, chat_id: str, command: str, output: str) -> None:
+        """Append an explicit user shell result without consuming draft attachments."""
+        self._require_idle(chat_id)
+        chat = self.chat(chat_id)
+        mid, aid, timestamp = uid(), uid(), now()
+        with self.db:
+            self.db.execute(
+                "INSERT INTO messages(id,chat_id,text,created,parent_id) VALUES(?,?,?,?,?)",
+                (
+                    mid,
+                    chat_id,
+                    "User executed shell command: " + command,
+                    timestamp,
+                    chat["active_leaf"],
+                ),
+            )
+            self.db.execute(
+                "INSERT INTO attempts(id,chat_id,message_id,request_id,requested_model,thinking,status,content,created,updated,web,mode) VALUES(?,?,?,?,?,'null','complete',?,?,?,'off','normal')",
+                (
+                    aid,
+                    chat_id,
+                    mid,
+                    uid(),
+                    chat["model"] or "",
+                    "Untrusted shell output:\n" + output,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            self.db.execute(
+                "UPDATE chats SET active_leaf=?,updated=? WHERE id=?",
+                (mid, timestamp, chat_id),
+            )
+
+    @attempt_mutation
     def finish(self, attempt_id: str, status: str, error: str | None = None) -> None:
         if status not in TERMINAL:
             raise ValueError("Invalid reply state.")
@@ -523,3 +813,200 @@ class Store:
                 "UPDATE attempts SET status=?,error=?,updated=? WHERE id=? AND status='running'",
                 (status, error, now(), attempt_id),
             )
+        chat_id = self._one("SELECT chat_id FROM attempts WHERE id=?", (attempt_id,))[
+            "chat_id"
+        ]
+        if chat_id in self._attempt_locks:
+            self.release_chat(chat_id)
+
+    def list_chats(
+        self, query: str = "", *, workspace: str | Path | None = None
+    ) -> list[dict]:
+        """Search titles and all retained branches without interpreting SQL wildcards."""
+        clauses, args = [], []
+        if query:
+            clauses.append(
+                "(instr(lower(title),lower(?)) > 0 OR EXISTS (SELECT 1 FROM messages m WHERE m.chat_id=c.id AND instr(lower(m.text),lower(?)) > 0) OR EXISTS (SELECT 1 FROM attempts a WHERE a.chat_id=c.id AND instr(lower(a.content),lower(?)) > 0))"
+            )
+            args.extend([query] * 3)
+        if workspace is not None:
+            clauses.append("workspace=?")
+            args.append(str(Path(workspace).resolve()))
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        rows = self._rows(
+            "SELECT c.* FROM chats c" + where + " ORDER BY updated DESC,id", tuple(args)
+        )
+        for row in rows:
+            row["thinking"] = json.loads(row["thinking"])
+        return rows
+
+    def tree(self, chat_id: str) -> list[dict]:
+        chat = self._one("SELECT active_leaf FROM chats WHERE id=?", (chat_id,))
+        active = {message["id"] for message in self.chat(chat_id)["messages"]}
+        rows = self._rows(
+            "SELECT id,parent_id,text,created FROM messages WHERE chat_id=? ORDER BY rowid",
+            (chat_id,),
+        )
+        for row in rows:
+            row["active"] = row["id"] in active
+            row["leaf"] = row["id"] == chat["active_leaf"]
+        return rows
+
+    def _require_idle(self, chat_id: str) -> None:
+        if self.db.execute(
+            "SELECT 1 FROM attempts WHERE chat_id=? AND status='running'", (chat_id,)
+        ).fetchone():
+            raise ValueError("Stop this reply before changing its session history.")
+
+    @session_mutation
+    def select_branch(self, chat_id: str, message_id: str | None) -> dict:
+        self._require_idle(chat_id)
+        if message_id is not None:
+            self._one(
+                "SELECT id FROM messages WHERE id=? AND chat_id=?",
+                (message_id, chat_id),
+            )
+        with self.db:
+            self.db.execute(
+                "UPDATE chats SET active_leaf=?,context_summary='',summary_through=NULL,updated=? WHERE id=?",
+                (message_id, now(), chat_id),
+            )
+        return self.chat(chat_id)
+
+    @session_mutation
+    def set_summary(self, chat_id: str, text: str, through: str | None) -> None:
+        if len(text) > 128_000:
+            raise ValueError("This context summary is too long.")
+        active = self.chat(chat_id)["messages"]
+        if through is not None and through not in {m["id"] for m in active}:
+            raise ValueError("The summary does not belong to the active branch.")
+        with self.db:
+            self.db.execute(
+                "UPDATE chats SET context_summary=?,summary_through=? WHERE id=?",
+                (text, through, chat_id),
+            )
+
+    def clear_summary(self, chat_id: str) -> None:
+        self.set_summary(chat_id, "", None)
+
+    @attempt_mutation
+    def append_steering(self, attempt_id: str, texts: list[str]) -> None:
+        attempt = self._one(
+            "SELECT message_id,status FROM attempts WHERE id=?", (attempt_id,)
+        )
+        if attempt["status"] != "running":
+            raise ValueError("This reply is no longer running.")
+        if not texts or any(
+            not isinstance(text, str) or len(text) > 1_000_000 for text in texts
+        ):
+            raise ValueError("Invalid steering message.")
+        addition = "\n\n" + "\n\n".join(
+            "User steering during this reply:\n" + text for text in texts
+        )
+        with self.db:
+            self.db.execute(
+                "UPDATE messages SET text=text || ? WHERE id=?",
+                (addition, attempt["message_id"]),
+            )
+
+    @session_mutation
+    @file_mutation
+    def fork_chat(
+        self, chat_id: str, message_id: str | None = None, *, title: str | None = None
+    ) -> dict:
+        """Copy one ancestor path; source branches and file contents are untouched."""
+        self._require_idle(chat_id)
+        source = self.chat(chat_id)
+        leaf = message_id if message_id is not None else source["active_leaf"]
+        all_messages = {
+            m["id"]: m
+            for m in self._rows("SELECT * FROM messages WHERE chat_id=?", (chat_id,))
+        }
+        path, seen = [], set()
+        current = leaf
+        while current is not None:
+            if current not in all_messages or current in seen:
+                raise ValueError("That branch is no longer available.")
+            seen.add(current)
+            path.append(all_messages[current])
+            current = all_messages[current]["parent_id"]
+        path.reverse()
+        cid, timestamp = uid(), now()
+        files = []
+        try:
+            with self.db:
+                self.db.execute(
+                    "INSERT INTO chats(id,title,custom_title,folder_id,model,thinking,created,updated,web,mode,workspace,origin_chat_id,origin_message_id,imported) VALUES(?,?,1,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        cid,
+                        (title or source["title"]).strip()[:160],
+                        source["folder_id"],
+                        source["model"],
+                        json.dumps(source["thinking"]),
+                        timestamp,
+                        timestamp,
+                        DEFAULT_WEB,
+                        source["mode"],
+                        source["workspace"],
+                        chat_id,
+                        leaf,
+                        source["imported"],
+                    ),
+                )
+                parent = None
+                for message in path:
+                    mid = uid()
+                    self.db.execute(
+                        "INSERT INTO messages(id,chat_id,text,created,parent_id) VALUES(?,?,?,?,?)",
+                        (mid, cid, message["text"], message["created"], parent),
+                    )
+                    for attempt in self._rows(
+                        "SELECT * FROM attempts WHERE message_id=? ORDER BY rowid",
+                        (message["id"],),
+                    ):
+                        attempt.update(
+                            id=uid(),
+                            chat_id=cid,
+                            message_id=mid,
+                            reasoning="",
+                            reasoning_truncated=0,
+                        )
+                        self._insert_record("attempts", attempt)
+                    for attachment in self._rows(
+                        "SELECT * FROM attachments WHERE message_id=?", (message["id"],)
+                    ):
+                        original = attachment["id"]
+                        attachment.update(id=uid(), chat_id=cid, message_id=mid)
+                        destination = self.files / f"{attachment['id']}.blob"
+                        data = (self.files / f"{original}.blob").read_bytes()
+                        ensure_space(self.root, len(data) + 50 * 1024**2)
+                        with os.fdopen(
+                            os.open(
+                                destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
+                            ),
+                            "wb",
+                        ) as output:
+                            files.append(destination)
+                            output.write(data)
+                            output.flush()
+                            os.fsync(output.fileno())
+                        self._insert_record("attachments", attachment)
+                    parent = mid
+                self.db.execute(
+                    "UPDATE chats SET active_leaf=? WHERE id=?", (parent, cid)
+                )
+        except BaseException:
+            for file in files:
+                file.unlink(missing_ok=True)
+            raise
+        return self.chat(cid)
+
+    def clone_chat(self, chat_id: str, *, title: str | None = None) -> dict:
+        return self.fork_chat(chat_id, title=title)
+
+    def _insert_record(self, table: str, record: dict) -> None:
+        # Only internal schemas call this helper; imported keys never become SQL.
+        self.db.execute(
+            f"INSERT INTO {table}({','.join(record)}) VALUES({','.join('?' for _ in record)})",
+            tuple(record.values()),
+        )

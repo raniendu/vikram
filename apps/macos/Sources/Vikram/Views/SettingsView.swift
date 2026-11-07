@@ -1,14 +1,18 @@
 import SwiftUI
 import VikramKit
 
-/// Settings (⌘,): appearance, local models, privacy, and updates.
+/// Settings (⌘,): appearance, models, workbench, privacy, and updates.
 struct SettingsView: View {
     @Environment(AppState.self) private var state
     @Environment(ChatController.self) private var chats
     @Environment(UpdateController.self) private var updates
+    @State private var showsWorkbench = false
 
     var body: some View {
         Form {
+            Section("Default Model") {
+                DefaultModelSettingsView()
+            }
             Section("Appearance") {
                 Picker(
                     "Appearance",
@@ -41,13 +45,13 @@ struct SettingsView: View {
                 }
                 Text(
                     chats.connection
-                        ?? "\(chats.models.filter(\.available).count) local chat models available."
+                        ?? "\(chats.models.filter { $0.available && !$0.isCloud }.count) local chat models available."
                 )
                 .foregroundStyle(Theme.muted)
                 DisclosureGroup("Model Capabilities") {
                     ForEach(chats.models) { model in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(formatModelName(model.name)).fontWeight(.medium)
+                            Text("\(model.displayName) · \(model.providerLabel)").fontWeight(.medium)
                             Text(model.name).font(.caption.monospaced()).foregroundStyle(Theme.muted)
                             Text(
                                 !model.available
@@ -58,7 +62,7 @@ struct SettingsView: View {
                             .font(.caption)
                             if model.available && model.canThink && model.thinking.isEmpty {
                                 Text(
-                                    "Ollama does not advertise adjustable thinking levels. Model default is used."
+                                    "This model does not advertise adjustable thinking levels. Model default is used."
                                 )
                                 .font(.caption).foregroundStyle(Theme.muted)
                             }
@@ -73,6 +77,11 @@ struct SettingsView: View {
             } footer: {
                 Text("Vikram uses the chat models you installed in Ollama on this Mac.")
             }
+            Section("Workbench") {
+                Button("Workspace, OpenRouter, and Integrations…") { showsWorkbench = true }
+                Text("Manage project trust, cloud credentials, conversation branches and queues, MCP servers, and Python extensions.")
+                    .foregroundStyle(Theme.muted)
+            }
             Section("Web Search") {
                 Text(
                     "Models that support tools can search and read public pages through Parallel’s free service whenever needed, subject to rate limits. The model decides when to search. Queries may include conversation or attachment details. Original files stay on your Mac."
@@ -81,14 +90,14 @@ struct SettingsView: View {
             }
             Section("Private by Design") {
                 Text(
-                    "Chats and imported files are saved on this Mac. There is no cloud sync or analytics. The model can read attached content and use web search, but has no direct access to your files."
+                    "Chats and imported files are saved on this Mac. There is no cloud sync or analytics. OpenRouter is optional and sends active history to the selected provider. Trusted workspaces enable host coding tools with your user privileges."
                 )
                 Text(
                     "Vikram’s browser has its own private session, with none of your other browsers’ cookies or passwords; closing it or quitting Vikram clears it. Vikram asks before it submits a form, signs in, buys, posts, or deletes, never types passwords or payment details, and cannot reach your local network. Take over the browser whenever you want to use the page yourself."
                 )
                 .foregroundStyle(Theme.muted)
                 Text(
-                    "Your full conversation is saved. A model’s available context may cover less of it; Vikram does not automatically summarize or enlarge that context."
+                    "Your full conversation is saved. Vikram compacts context at 80% of a known model limit while preserving the transcript and complete tool exchanges. You can also compact it from Workbench."
                 )
                 .foregroundStyle(Theme.muted)
             }
@@ -111,5 +120,7 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .tint(Theme.accent)
         .frame(width: 560, height: 620)
+        .sheet(isPresented: $showsWorkbench) { WorkbenchView() }
+        .task { await state.workbench.refresh(chatId: chats.selected) }
     }
 }

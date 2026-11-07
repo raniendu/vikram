@@ -125,7 +125,7 @@ def sidecar_spec(image: Path) -> Path:
     return spec
 
 
-def build_app(version: str, notices: Path) -> None:
+def build_app(version: str, notices: Path, extension_python: Path) -> None:
     """Build the Swift executable and assemble, sign and verify Vikram.app."""
     subprocess.run(
         [
@@ -177,6 +177,36 @@ def build_app(version: str, notices: Path) -> None:
     # The display face (Space Grotesk) and its SIL Open Font License.
     shutil.copytree(PACKAGE / "Resources/Fonts", contents / "Resources/Fonts")
     shutil.copytree(notices, contents / "Resources/notices")
+    from scripts.fetch_extension_python import check_bundle, sign_runtime
+
+    runtime = contents / "Resources/extension-python"
+    # Extraction validated every link target; installers accept regular files only.
+    shutil.copytree(extension_python, runtime, symlinks=False)
+    workers = contents / "Resources/extension-worker/vikram"
+    workers.mkdir(parents=True)
+    (workers / "__init__.py").write_text('"""Private extension worker SDK."""\n')
+    for name in ("extension_sdk.py", "extension_worker.py"):
+        shutil.copy2(ROOT / "vikram" / name, workers / name)
+    extension_notices = contents / "Resources/notices/extension-python"
+    shutil.copytree(runtime / "licenses", extension_notices)
+    for name in ("manifest.json", "PYTHON.json"):
+        shutil.copy2(runtime / name, extension_notices / name)
+    notice_document = contents / "Resources/notices/THIRD-PARTY-NOTICES.md"
+    with notice_document.open("a") as document:
+        document.write(
+            "\n## Extension Python\n\n"
+            "Extension workers use the separately bundled, digest-pinned standalone CPython. "
+            "Its [release pin](extension-python/manifest.json), "
+            "[component licenses](extension-python/components.json), and "
+            "[vendored Python source inventory](extension-python/sources.json) are included here. "
+            "The exact vendored Python sources are in `extension-python/sources/`; "
+            "the interpreter metadata is in [PYTHON.json](extension-python/PYTHON.json).\n"
+        )
+    from scripts.third_party import add_extension_sources
+
+    add_extension_sources(contents / "Resources/notices", runtime, version)
+    sign_runtime(runtime)
+    check_bundle(staging)
     # Nested code first, then the bundle. The Python service keeps plain ad-hoc
     # signing: its unpacked libraries are not signed by one team (docs/releases.md).
     subprocess.run(
@@ -282,7 +312,9 @@ def main() -> None:
     check_space()
     if args.sidecar_only:
         return
-    build_app(version, NOTICES)
+    from scripts.fetch_extension_python import ensure as extension_runtime
+
+    build_app(version, NOTICES, extension_runtime())
     try:
         check_notices(APP, version)
     except SourceError as error:

@@ -54,6 +54,7 @@ PHASES = {
     "approving": "Waiting for your OK…",
     "paused": "Waiting for the browser…",
     "answering": "Writing…",
+    "coding": "Using workspace tools…",
 }
 PLAN_STATUS = {
     "approved": "approved",
@@ -73,6 +74,11 @@ def terminal_text(value: str) -> str:
 def activity_summary(activity: list[dict]) -> list[str]:
     """One short line per kind of tool activity in a reply."""
     lines = []
+    for item in activity:
+        if item.get("kind") in {"coding", "mcp", "extension"}:
+            lines.append(
+                f"{item.get('tool', item['kind'])} · {item.get('status', 'running')}"
+            )
     runs = [a for a in activity if a["kind"] == "code"]
     if runs:
         failed = sum(a["status"] == "failed" for a in runs)
@@ -311,13 +317,15 @@ class TerminalInteraction:
             body.append(terminal_text(request.reason), style="dim")
         if request.url:
             body.append("\n" + terminal_text(request.url), style="dim")
+        if request.details:
+            body.append("\n\n" + terminal_text(request.details))
         self.console.print(
             Panel(
                 body,
                 title=(
                     "Scheduled task · save it?"
                     if request.kind == "schedule"
-                    else "Browser · allow this action?"
+                    else request.kind.capitalize() + " · allow this action?"
                 ),
                 title_align="left",
                 border_style=ACCENT,

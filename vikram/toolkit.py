@@ -290,6 +290,9 @@ class Reply:
     tasks: TaskBook | None = None
     # For an unattended scheduled run, the task it runs (see `SCHEDULED_RUN_PROMPT`).
     scheduled: str | None = None
+    coding: Any = None
+    instructions: str = ""
+    request_boundary: Callable | None = None
     activity: list[dict] = field(default_factory=list)
     counts: dict[str, int] = field(default_factory=dict)
     # One browser action at a time, approvals and hand-backs included.
@@ -729,7 +732,10 @@ class Reply:
         if isinstance(self.interaction, Approver):
             try:
                 async with asyncio.timeout(INTERACTION_TIMEOUT):
-                    allowed = await self.interaction.approve(request) is True
+                    from vikram.composition import approval_wait
+
+                    with approval_wait():
+                        allowed = await self.interaction.approve(request) is True
             except TimeoutError:
                 record["status"] = "timed_out"
                 return False
@@ -1321,6 +1327,16 @@ class ReplyPolicy(AbstractCapability[Reply]):
 
     async def before_model_request(self, ctx, request_context):
         messages = trim_page_views(request_context.messages)
+        reply = _reply(ctx)
+        if reply is not None and reply.request_boundary is not None:
+            steering = reply.request_boundary()
+            if steering:
+                messages = [
+                    *messages,
+                    ModelRequest(
+                        parts=[UserPromptPart(content=text) for text in steering]
+                    ),
+                ]
         if messages is request_context.messages:
             return request_context
         return replace(request_context, messages=messages)

@@ -90,7 +90,9 @@ class Respond(Chat):
 
     attempt_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     interaction_id: str = Field(min_length=1, max_length=120)
-    kind: Literal["question", "plan", "browser", "schedule"]
+    kind: Literal[
+        "question", "plan", "browser", "schedule", "coding", "mcp", "extension"
+    ]
     answers: list[Answer] = Field(default_factory=list, max_length=10)
     cancelled: bool = False
     decision: Literal["approve", "revise", "dismiss"] | None = None
@@ -152,7 +154,15 @@ class Run(Params):
     run_id: str = TASK_ID
 
 
+class Workbench(Params):
+    action: str = Field(min_length=1, max_length=40)
+    chat_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+    value: str = Field(default="", max_length=20 * 1024 * 1024)
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
 PARAMS = {
+    "workbench": Workbench,
     "hello": Params,
     "snapshot": Params,
     "refresh": Params,

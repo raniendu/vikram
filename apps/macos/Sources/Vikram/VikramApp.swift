@@ -13,6 +13,7 @@ struct VikramApp: App {
                 .environment(state.chats)
                 .environment(state.schedules)
                 .environment(state.updates)
+                .environment(state.workbench)
                 .environment(state.browser)
                 .frame(minWidth: 760, minHeight: 540)
                 .onAppear { delegate.state = state }
@@ -26,6 +27,7 @@ struct VikramApp: App {
                 .environment(state)
                 .environment(state.chats)
                 .environment(state.updates)
+                .environment(state.workbench)
         }
     }
 }
@@ -69,6 +71,9 @@ struct AppCommands: Commands {
             Divider()
             Button("Refresh Models") { Task { await state.chats.refreshModels() } }
                 .disabled(state.chats.offline || state.chats.refreshing)
+            Button("Workbench…") { state.showsWorkbench = true }
+                .keyboardShortcut("w", modifiers: [.command, .shift])
+                .disabled(state.chats.offline)
             Button("Reconnect Chat Service") { Task { await state.reconnect() } }
                 .disabled(!state.canReconnect)
         }

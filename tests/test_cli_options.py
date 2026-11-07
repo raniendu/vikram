@@ -82,3 +82,99 @@ class ThinkingDefaultTests(unittest.TestCase):
         with patch("vikram.cli._chat") as chat:
             self.assertEqual(cli.main(["Hello"]), 0)
         self.assertEqual(chat.call_args.kwargs["thinking"], "on")
+
+
+class PlainOutputTests(unittest.IsolatedAsyncioTestCase):
+    async def test_plain_model_output_cannot_emit_terminal_controls(self):
+        class Session:
+            async def reply(self, prompt, **kwargs):
+                yield {"text": "hello\x1b]52;c;hidden\x07\x1b[31mworld", "sources": []}
+
+        output = io.StringIO()
+        with (
+            contextlib.redirect_stdout(output),
+            patch("vikram.cli._interaction", return_value=None),
+        ):
+            await cli._reply(Session(), "hi")
+        self.assertEqual(output.getvalue(), "helloworld\n")
+
+    async def test_plain_setting_selects_plain_loop(self):
+        import os
+        import tempfile
+        from pathlib import Path
+
+        from vikram.settings import Settings
+
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings(Path(directory))
+            settings.set("interface", "plain")
+            with (
+                patch.object(cli.sys.stdin, "isatty", return_value=True),
+                patch.object(cli.sys.stdout, "isatty", return_value=True),
+                patch.dict(os.environ, {"TERM": "xterm"}),
+                patch("vikram.cli._loop") as loop,
+                patch("vikram.tui.TerminalApp") as tui,
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                # _chat owns its synchronous Runner, so run it outside this test loop.
+                import asyncio
+
+                await asyncio.to_thread(cli.main, ["--session-dir", directory])
+            loop.assert_called_once()
+            tui.assert_not_called()
+
+
+class SettingsPrecedenceTests(unittest.TestCase):
+    def test_explicit_thinking_overrides_saved_new_session_preference(self):
+        import tempfile
+        from pathlib import Path
+
+        from vikram.settings import Settings
+
+        with tempfile.TemporaryDirectory() as directory:
+            Settings(Path(directory)).set("thinking", "off")
+            with patch("vikram.cli._chat") as chat:
+                cli.main(["--session-dir", directory, "Hello"])
+                self.assertEqual(chat.call_args.kwargs["thinking"], "off")
+                cli.main(["--session-dir", directory, "--thinking", "on", "Hello"])
+                self.assertEqual(chat.call_args.kwargs["thinking"], "on")
+
+
+class ModelDefaultPrecedenceTests(unittest.TestCase):
+    def test_explicit_cli_and_environment_override_shared_default_without_replacing_it(
+        self,
+    ):
+        import os
+        import tempfile
+        from pathlib import Path
+
+        from vikram.settings import Settings
+
+        with tempfile.TemporaryDirectory() as folder:
+            settings = Settings(root=Path(folder))
+            settings.set("model", "saved:1")
+            with (
+                patch.dict(os.environ, {"OLLAMA_MODEL": "environment:1"}),
+                patch("vikram.cli._chat") as chat,
+            ):
+                cli.main(["--session-dir", folder, "Hello"])
+                self.assertEqual(chat.call_args.args[0], "environment:1")
+                cli.main(["--session-dir", folder, "--model", "explicit:1", "Hello"])
+                self.assertEqual(chat.call_args.args[0], "explicit:1")
+            self.assertEqual(settings.get("model"), "saved:1")
+
+    def test_explicitly_saved_cloud_default_is_restored(self):
+        import os
+        import tempfile
+        from pathlib import Path
+
+        from vikram.settings import Settings
+
+        with tempfile.TemporaryDirectory() as folder:
+            Settings(root=Path(folder)).set("model", "openrouter:example/model")
+            with (
+                patch.dict(os.environ, {}, clear=True),
+                patch("vikram.cli._chat") as chat,
+            ):
+                cli.main(["--session-dir", folder, "Hello"])
+            self.assertEqual(chat.call_args.args[0], "openrouter:example/model")

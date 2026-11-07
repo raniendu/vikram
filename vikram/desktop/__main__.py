@@ -17,6 +17,10 @@ from .store import Store
 from .updates import Updater
 
 MAX_LINE = 15 * 1024 * 1024
+MAX_PENDING = 8
+MAX_IMPORTS = 4
+BACKGROUND_METHODS = {"send", "refresh", "import_attachment", "import_image"}
+QUICK_WORKBENCH = {"queue", "queue_edit", "queue_remove", "tree"}
 
 
 def emit(payload: dict) -> None:
@@ -26,7 +30,7 @@ def emit(payload: dict) -> None:
     sys.stdout.flush()
 
 
-async def serve(root: Path) -> None:
+async def serve(root: Path, *, browser: bool = True) -> None:
     from vikram.schedules import installed_agent
 
     store = Store(root)
@@ -35,25 +39,52 @@ async def serve(root: Path) -> None:
     runtime = Runtime(
         store,
         emit,
-        browser=True,
+        browser=browser,
         tasks=True,
         agent=installed_agent(root),
         updater=Updater(emit),
     )
-    imports = set()
+    pending: set[asyncio.Task] = set()
+    imports: set[asyncio.Task] = set()
 
-    async def respond(raw):
-        cmd = None
+    def decode(raw: bytes) -> Command | None:
+        identifier = None
         try:
-            cmd = Command.model_validate_json(raw.decode("utf-8"))
-            cmd = validate_parameters(cmd)
+            payload = json.loads(raw)
+            if isinstance(payload, dict):
+                candidate = payload.get("id")
+                if (
+                    isinstance(candidate, str)
+                    and 0 < len(candidate) <= 80
+                    and candidate.isprintable()
+                ):
+                    identifier = candidate
+            return validate_parameters(Command.model_validate(payload))
+        except (
+            ValidationError,
+            UnicodeError,
+            json.JSONDecodeError,
+            KeyError,
+            TypeError,
+        ):
+            error = "Invalid desktop command. Restart or update Vikram."
+        except ValueError:
+            error = "Unsupported protocol or command."
+        emit({"v": 1, "id": identifier, "error": error})
+        return None
+
+    async def respond(cmd: Command):
+        try:
             result = await runtime.command(cmd.method, cmd.params, cmd.id)
             emit({"v": 1, "id": cmd.id, "result": result})
+        except asyncio.CancelledError:
+            emit({"v": 1, "id": cmd.id, "error": "The desktop action was cancelled."})
+            raise
         except (ValidationError, UnicodeError, KeyError, TypeError):
             emit(
                 {
                     "v": 1,
-                    "id": cmd.id if cmd else None,
+                    "id": cmd.id,
                     "error": "Invalid desktop command. Restart or update Vikram.",
                 }
             )
@@ -61,15 +92,15 @@ async def serve(root: Path) -> None:
             emit(
                 {
                     "v": 1,
-                    "id": cmd.id if cmd else None,
-                    "error": str(e) if cmd else "Unsupported protocol or command.",
+                    "id": cmd.id,
+                    "error": str(e),
                 }
             )
         except (OSError, sqlite3.Error):
             emit(
                 {
                     "v": 1,
-                    "id": cmd.id if cmd else None,
+                    "id": cmd.id,
                     "error": "Could not access local chat storage. Keep a copy of unsaved text and check disk space.",
                 }
             )
@@ -77,7 +108,7 @@ async def serve(root: Path) -> None:
             emit(
                 {
                     "v": 1,
-                    "id": cmd.id if cmd else None,
+                    "id": cmd.id,
                     "error": "The desktop service could not complete this action. Reconnect and try again.",
                 }
             )
@@ -86,29 +117,42 @@ async def serve(root: Path) -> None:
         while raw := await asyncio.to_thread(sys.stdin.buffer.readline, MAX_LINE + 1):
             if len(raw) > MAX_LINE or not raw.endswith(b"\n"):
                 break
-            try:
-                method = json.loads(raw).get("method")
-            except (ValueError, AttributeError):
-                method = None
-            if method in {"import_attachment", "import_image"}:
-                if len(imports) >= 4:
+            cmd = decode(raw)
+            if cmd is None:
+                continue
+            importing = cmd.method in {"import_attachment", "import_image"}
+            background = cmd.method in BACKGROUND_METHODS or (
+                cmd.method == "workbench"
+                and cmd.params["action"] not in QUICK_WORKBENCH
+            )
+            if background:
+                if len(pending) >= MAX_PENDING or (
+                    importing and len(imports) >= MAX_IMPORTS
+                ):
                     emit(
                         {
                             "v": 1,
-                            "id": json.loads(raw).get("id"),
-                            "error": "Wait for the current file imports to finish.",
+                            "id": cmd.id,
+                            "error": "Wait for the current desktop actions to finish.",
                         }
                     )
                     continue
-                task = asyncio.create_task(respond(raw))
-                imports.add(task)
+                task = asyncio.create_task(respond(cmd))
+                pending.add(task)
+                if importing:
+                    imports.add(task)
+                task.add_done_callback(pending.discard)
                 task.add_done_callback(imports.discard)
+                # Establish Runtime/Workbench mutation guards before reading the
+                # next command; quick draft/control commands retain wire order.
+                await asyncio.sleep(0)
             else:
-                await respond(raw)
+                await respond(cmd)
     finally:
-        for task in imports:
+        tasks = tuple(pending)
+        for task in tasks:
             task.cancel()
-        await asyncio.gather(*imports, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
         await runtime.stop()
         await runtime.close()
         store.close()
