@@ -6,6 +6,7 @@ import os
 import signal
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 from uuid import uuid4
 
 from pydantic_ai.exceptions import AgentRunError
@@ -18,87 +19,13 @@ from vikram.errors import ReplyError, reply_error
 from vikram.installation import cli_version
 from vikram.model_names import format_model_name
 from vikram.models import ModelCatalog, prepare_model, thinking_selection
+from vikram.session import Session as ChatSession
 
 
-class ChatSession:
-    """One terminal conversation. `browser` is its hidden browser engine, which
-    keeps its pages across replies until `close()`."""
+def _write(stream, text):
+    from vikram.terminal import terminal_text
 
-    def __init__(
-        self,
-        model: str,
-        *,
-        thinking="on",
-        streamer=stream_reply,
-        mode="normal",
-        browser=None,
-        tasks=None,
-    ):
-        self.model, self.thinking, self.streamer = model, thinking, streamer
-        self.mode = mode
-        self.browser = browser
-        # Scheduled tasks the model may manage; `None` offers no task tools.
-        self.tasks = tasks
-        self.turns: list[dict] = []
-        self.session_id = uuid4().hex
-        self.catalog = ModelCatalog()
-
-    async def close(self) -> None:
-        if self.browser is not None and hasattr(self.browser, "close"):
-            await self.browser.close()
-        if self.tasks is not None and self.tasks.store is not None:
-            self.tasks.store.close()
-
-    async def reply(self, prompt: str, *, interaction=None):
-        models = await self.catalog.refresh()
-        selected, setting, thinking, web, notice = prepare_model(
-            models, self.model, thinking_selection(self.thinking)
-        )
-        if setting is None:
-            self.thinking = "on"
-        if notice:
-            yield {"notice": notice}
-        if self.tasks is not None:
-            # New tasks run with this chat's model and thinking.
-            self.tasks.model, self.tasks.thinking = selected["name"], setting
-        turn = {
-            "prompt": [prompt],
-            "answer": None,
-            "sources": [],
-            "model": None,
-            "activity": [],
-        }
-        iterator = self.streamer(
-            self.model,
-            thinking,
-            context_messages(self.turns),
-            [prompt],
-            web=web,
-            session_id=self.session_id,
-            mode=self.mode,
-            interaction=interaction,
-            browser=self.browser,
-            vision=bool(selected.get("vision")),
-            tasks=self.tasks,
-        )
-        last = None
-        try:
-            async for event in iterator:
-                last = event
-                yield event
-            if last and last["text"]:
-                turn.update(
-                    answer=last["text"],
-                    sources=last.get("sources", []),
-                    model=last.get("actual_model"),
-                    activity=last.get("activity", []),
-                )
-        finally:
-            await iterator.aclose()
-            self.turns.append(turn)
-            # An approved plan ends plan mode, as the desktop app does.
-            if last and last.get("mode") == "normal":
-                self.mode = "normal"
+    stream.write(terminal_text(text))
 
 
 class _PromptInteraction:
@@ -143,7 +70,7 @@ async def _reply(session: ChatSession, message: str) -> None:
     interaction = _interaction()
     async for event in session.reply(message, interaction=interaction):
         if event.get("notice"):
-            sys.stderr.write(event["notice"] + "\n")
+            _write(sys.stderr, event["notice"] + "\n")
             continue
         last = event
         for index, search in enumerate(event.get("searches", [])):
@@ -153,52 +80,56 @@ async def _reply(session: ChatSession, message: str) -> None:
             seen.add(marker)
             if search["status"] == "running":
                 arguments = search["arguments"]
-                sys.stderr.write(
+                _write(
+                    sys.stderr,
                     ("Searching: " if search["tool"] == "web_search" else "Reading: ")
                     + ", ".join(
                         arguments.get("search_queries", arguments.get("urls", []))
                     )
-                    + "\n"
+                    + "\n",
                 )
             elif search.get("error"):
-                sys.stderr.write(search["error"] + "\n")
+                _write(sys.stderr, search["error"] + "\n")
         for record in event.get("activity", []):
             marker = (record["kind"], record["id"], record["status"])
             if marker in seen:
                 continue
             seen.add(marker)
             if record["kind"] == "code" and record["status"] == "running":
-                sys.stderr.write("Running code in the sandbox…\n")
+                _write(sys.stderr, "Running code in the sandbox…\n")
             elif record["kind"] == "code" and record["status"] == "failed":
-                sys.stderr.write(
+                _write(
+                    sys.stderr,
                     "Sandbox error: "
                     + ((record.get("error") or "").strip().splitlines() or [""])[-1]
-                    + "\n"
+                    + "\n",
                 )
             elif record["kind"] == "question" and interaction is None:
                 if record["status"] == "declined":
                     for question in record["questions"]:
-                        sys.stderr.write(
+                        _write(
+                            sys.stderr,
                             f"Question skipped (no interactive terminal): "
-                            f"{question['question']}\n"
+                            f"{question['question']}\n",
                         )
             elif record["kind"] == "browser":
                 line = browser_line(record)
                 if line:
-                    sys.stderr.write(line + "\n")
+                    _write(sys.stderr, line + "\n")
             elif record["kind"] == "schedule":
                 from vikram.terminal import task_line
 
                 line = task_line(record)
                 if line:
-                    sys.stderr.write(line + "\n")
+                    _write(sys.stderr, line + "\n")
     if last:
-        sys.stdout.write(last["text"] + "\n")
+        _write(sys.stdout, last["text"] + "\n")
         if last.get("sources"):
-            sys.stdout.write("\nRetrieved sources:\n")
+            _write(sys.stdout, "\nRetrieved sources:\n")
             for source in last["sources"]:
-                sys.stdout.write(
-                    f"[{source['id']}] {source['title']} — {source['url']}\n"
+                _write(
+                    sys.stdout,
+                    f"[{source['id']}] {source['title']} — {source['url']}\n",
                 )
 
 
@@ -248,30 +179,140 @@ def _task_book():
     return book
 
 
-def _chat(model: str, prompt: str | None, *, thinking="on", mode="normal") -> None:
+def _chat(
+    model: str, prompt: str | None, *, thinking="on", mode="normal", options=None
+) -> None:
+    from vikram.settings import Settings, application_root
+
+    options = options or argparse.Namespace()
+    root = Path(
+        getattr(options, "session_dir", None)
+        or os.environ.get("VIKRAM_CHAT_DATA_DIR")
+        or application_root()
+    ).expanduser()
+    settings = Settings(root=root, workspace=Path.cwd())
+    if getattr(options, "list_models", False):
+
+        async def discover():
+            return await ModelCatalog().refresh(
+                include_cloud=model.startswith("openrouter:")
+            )
+
+        for item in asyncio.run(discover()):
+            _write(
+                sys.stdout,
+                f"{item['name']}\t{'available' if item['available'] else item.get('reason', 'unavailable')}\n",
+            )
+        return
+    if getattr(options, "mode", "text") == "rpc":
+        from vikram.desktop.__main__ import serve
+
+        asyncio.run(serve(root, browser=False))
+        return
     session = _session(model, thinking=thinking, mode=mode)
-    if (
+    store = None
+    terminal_interactive = (
         prompt is None
         and sys.stdin.isatty()
         and sys.stdout.isatty()
         and os.environ.get("TERM") != "dumb"
+    )
+    interface = getattr(options, "tui_mode", None) or settings.get("interface")
+    interactive = terminal_interactive and interface != "plain"
+    if not getattr(options, "no_session", False) and (
+        terminal_interactive
+        or prompt is not None
+        or getattr(options, "session", None)
+        or getattr(options, "resume", False)
+        or getattr(options, "continue_session", False)
     ):
-        from vikram.terminal import run_terminal
+        from vikram.desktop.store import Store
 
-        run_terminal(session)
+        store = Store(root)
+        cid = getattr(options, "session", None)
+        if getattr(options, "continue_session", False):
+            chats = store.list_chats(workspace=Path.cwd())
+            cid = chats[0]["id"] if chats else None
+        old = session
+        session = ChatSession(
+            model,
+            thinking=thinking,
+            mode=mode,
+            browser=old.browser,
+            tasks=old.tasks,
+            store=store,
+            chat_id=cid,
+            workspace=Path.cwd(),
+        )
+        if cid and getattr(options, "explicit_model", False):
+            session.model = model
+        if cid and getattr(options, "explicit_thinking", False):
+            session.thinking = thinking
+        if cid and getattr(options, "plan", False):
+            session.mode = "plan"
+        if getattr(options, "name", None):
+            store.update_chat(session.chat_id, title=options.name)
+    from vikram.coding import CodingSession
+    from vikram.resources import ProjectResources
+
+    settings.workspace = Path(session.workspace or Path.cwd())
+    session.coding = CodingSession(settings.workspace, settings=settings)
+    session.instructions = ProjectResources(settings).instructions()
+    if interactive:
+        from vikram.tui import TerminalApp
+
+        async def tui():
+            for path in getattr(options, "files", []):
+                await session.attach_file(path)
+            app = TerminalApp(
+                session,
+                settings=settings,
+                full_screen=(
+                    getattr(options, "tui_mode", None) or settings.get("interface")
+                )
+                != "regular",
+            )
+            if getattr(options, "resume", False):
+
+                async def resume():
+                    await app.ready.wait()
+                    await app.command("resume", "")
+
+                waiter = asyncio.create_task(resume())
+            try:
+                await app.run()
+            finally:
+                if getattr(options, "resume", False):
+                    waiter.cancel()
+
+        try:
+            asyncio.run(tui())
+        finally:
+            if store:
+                store.close()
         return
     if prompt is None:
-        sys.stderr.write(
+        _write(
+            sys.stderr,
             f"Local model · {format_model_name(model)}\n"
             "Supported models can search through Parallel automatically when needed.\n"
-            "/plan toggles plan mode; /exit ends the chat.\n"
+            "/plan toggles plan mode; /exit ends the chat.\n",
         )
     with asyncio.Runner() as runner:
         try:
-            _loop(runner, session, prompt)
+            for path in getattr(options, "files", []):
+                runner.run(session.attach_file(path))
+            if getattr(options, "mode", "text") == "json":
+                from vikram.automation import json_reply
+
+                runner.run(json_reply(session, prompt or ""))
+            else:
+                _loop(runner, session, prompt)
         finally:
             # The hidden browser's private data ends with the session.
             runner.run(session.close())
+            if store:
+                store.close()
 
 
 def _loop(runner: asyncio.Runner, session: ChatSession, prompt: str | None) -> None:
@@ -286,14 +327,16 @@ def _loop(runner: asyncio.Runner, session: ChatSession, prompt: str | None) -> N
                 return
             if message == "/plan":
                 session.mode = "normal" if session.mode == "plan" else "plan"
-                sys.stderr.write(
-                    f"Plan mode {'on' if session.mode == 'plan' else 'off'}.\n"
+                _write(
+                    sys.stderr,
+                    f"Plan mode {'on' if session.mode == 'plan' else 'off'}.\n",
                 )
                 continue
             if message.split(maxsplit=1)[:1] == ["/web"]:
-                sys.stderr.write(
+                _write(
+                    sys.stderr,
                     "There is no web setting. Web tools are available automatically "
-                    "for supported models.\n"
+                    "for supported models.\n",
                 )
                 continue
             if not message:
@@ -324,7 +367,7 @@ def schedules_main(argv: list[str]) -> int:
         if args.run_due:
             with schedules.runner_lock(root) as lock:
                 if lock is None:
-                    sys.stderr.write("Another scheduled run is in progress.\n")
+                    _write(sys.stderr, "Another scheduled run is in progress.\n")
                     return 1
                 count = asyncio.run(schedules.run_due(store))
             print(f"Ran {count} scheduled {'task' if count == 1 else 'tasks'}.")
@@ -370,7 +413,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--version", action="version", version=f"Vikram {cli_version()}"
     )
     parser.add_argument(
-        "prompt", nargs="?", help="one prompt; omit for interactive chat"
+        "prompt",
+        nargs="*",
+        help="prompt text and optional @file paths; omit for interactive chat",
     )
     default_model = os.environ.get("OLLAMA_MODEL", "").strip() or DEFAULT_MODEL
     parser.add_argument(
@@ -389,7 +434,67 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="start in plan mode: Vikram proposes a plan for your approval before it runs code or does the work",
     )
+    parser.add_argument("--tui-mode", choices=("fullscreen", "regular", "plain"))
+    parser.add_argument("--mode", choices=("text", "json", "rpc"), default="text")
+    parser.add_argument("--print", "-p", dest="print_once", action="store_true")
+    parser.add_argument("--list-models", action="store_true")
+    parser.add_argument(
+        "--continue", "-c", dest="continue_session", action="store_true"
+    )
+    parser.add_argument("--resume", "-r", action="store_true")
+    parser.add_argument("--session", metavar="ID")
+    parser.add_argument("--session-dir", metavar="DIRECTORY")
+    parser.add_argument("--no-session", action="store_true")
+    parser.add_argument("--name")
     args = parser.parse_args(argv)
+    args.files = [
+        value[1:] for value in args.prompt if value.startswith("@") and len(value) > 1
+    ]
+    args.prompt = (
+        " ".join(value for value in args.prompt if not value.startswith("@")) or None
+    )
+    if args.files and args.prompt is None:
+        args.prompt = "Attached files."
+    args.explicit_model = any(
+        value == "--model" or value.startswith("--model=") for value in argv
+    )
+    args.explicit_thinking = any(
+        value == "--thinking" or value.startswith("--thinking=") for value in argv
+    )
+    if not args.explicit_thinking:
+        from vikram.settings import Settings
+
+        preference_root = args.session_dir or os.environ.get("VIKRAM_CHAT_DATA_DIR")
+        args.thinking = Settings(
+            root=Path(preference_root) if preference_root else None,
+            workspace=Path.cwd(),
+        ).get("thinking", "on")
+    if not args.explicit_model and not os.environ.get("OLLAMA_MODEL"):
+        from vikram.settings import Settings
+
+        saved_root = args.session_dir or os.environ.get("VIKRAM_CHAT_DATA_DIR")
+        saved_model = Settings(
+            root=Path(saved_root) if saved_root else None, workspace=Path.cwd()
+        ).get("model")
+        if saved_model:
+            args.model = saved_model
+    if args.mode != "rpc" and not sys.stdin.isatty():
+        import stat
+
+        try:
+            piped = stat.S_ISFIFO(os.fstat(sys.stdin.fileno()).st_mode)
+        except (OSError, ValueError):
+            piped = False
+        if piped:
+            content = sys.stdin.read(1_000_001)
+            if len(content) > 1_000_000:
+                parser.error("piped input exceeds 1,000,000 characters")
+            if content.strip():
+                args.prompt = content + ("\n\n" + args.prompt if args.prompt else "")
+    if args.print_once and args.prompt is None:
+        parser.error("--print needs a prompt or piped input")
+    if args.no_session and (args.session or args.resume or args.continue_session):
+        parser.error("--no-session cannot resume a saved session")
     if args.prompt is not None and not args.prompt.strip():
         parser.error("prompt must not be empty")
     args.model = args.model.strip()
@@ -401,14 +506,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.prompt,
             thinking=args.thinking,
             mode="plan" if args.plan else "normal",
+            options=args,
         )
     except KeyboardInterrupt:
-        sys.stderr.write("\n")
+        _write(sys.stderr, "\n")
         return 130
     except ValueError as exc:
-        sys.stderr.write(str(exc) + "\n")
+        _write(sys.stderr, str(exc) + "\n")
         return 1
     except (ReplyError, AgentRunError) as exc:
-        sys.stderr.write(reply_error(exc) + "\n")
+        _write(sys.stderr, reply_error(exc) + "\n")
         return 1
     return 0

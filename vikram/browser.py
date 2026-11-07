@@ -305,6 +305,8 @@ class HelperEngine:
         return None
 
     async def _start(self) -> asyncio.subprocess.Process:
+        from vikram.providers import CredentialStore
+
         path = self.path or helper_path()
         if path is None:
             raise BrowserUnavailable(unavailable_reason() or "The browser is missing.")
@@ -319,6 +321,7 @@ class HelperEngine:
                 # Ctrl+C in the terminal stops the reply, not the helper; the
                 # helper exits when its input closes.
                 start_new_session=True,
+                env=CredentialStore().child_environment(),
             )
         except OSError:
             raise BrowserUnavailable("The browser could not start.") from None

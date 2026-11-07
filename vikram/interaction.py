@@ -4,6 +4,7 @@ Each interface supplies one `Interaction`; interfaces that can show a browser
 action to the person also implement `Approver`.
 """
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
@@ -88,7 +89,42 @@ class ActionRequest:
     summary: str
     reason: str
     url: str
-    kind: Literal["browser", "schedule"] = "browser"
+    kind: Literal["browser", "schedule", "coding", "mcp", "extension"] = "browser"
+    details: str = ""
+
+
+def argument_preview(arguments: dict) -> str:
+    """Bounded inert parameters for reviewing an effect, with secret fields hidden."""
+
+    def redact(value):
+        if isinstance(value, dict):
+            return {
+                key: (
+                    "[redacted]"
+                    if any(
+                        part in key.lower()
+                        for part in (
+                            "password",
+                            "secret",
+                            "token",
+                            "api_key",
+                            "authorization",
+                        )
+                    )
+                    else redact(item)
+                )
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [redact(item) for item in value]
+        return value
+
+    text = json.dumps(redact(arguments), ensure_ascii=False, indent=2)
+    return text[:16_000] + (
+        "\n[Parameters truncated; decline if the target or effect is unclear.]"
+        if len(text) > 16_000
+        else ""
+    )
 
 
 class Interaction(Protocol):

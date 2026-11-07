@@ -494,6 +494,14 @@ def validate_sources(sources: dict) -> None:
                     or not re.fullmatch(rf"[0-9a-f]{{{length}}}", digest or "")
                 ):
                     raise ValueError()
+                if "bundled" in item and not re.fullmatch(
+                    r"extension-python/[A-Za-z0-9._+-]+", item["bundled"]
+                ):
+                    raise ValueError()
+                if "bundled" in item and (
+                    "sha256" not in item or item["size"] > 64 * 1024 * 1024
+                ):
+                    raise ValueError()
     except (KeyError, TypeError, ValueError, AttributeError):
         raise SourceError("The third-party source list is malformed.") from None
 
@@ -728,6 +736,99 @@ def build_notices(version: str, destination: Path = NOTICES) -> Path:
     return destination
 
 
+def add_extension_sources(notices: Path, runtime: Path, version: str) -> None:
+    """Attach exact vendored Python source from the pinned extension interpreter.
+
+    The source tar is embedded in the app so the release Mac and publisher can
+    include the same bytes without downloading a different pip/certifi version.
+    """
+    pin = json.loads((runtime / "manifest.json").read_text())
+    inventory = json.loads((runtime / "licenses/sources.json").read_text())
+    source_root = runtime / "licenses/sources/python-packages"
+    if inventory.get("runtime_sha256") != pin["sha256"]:
+        raise SourceError("The extension Python sources do not match its runtime pin.")
+    records = inventory.get("files", [])
+    if not records:
+        raise SourceError(
+            "The extension interpreter's vendored Python sources are missing."
+        )
+    certifi = source_root / "pip/_vendor/certifi/__init__.py"
+    if not certifi.is_file():
+        raise SourceError("The extension interpreter's MPL certifi source is missing.")
+    match = re.search(r'__version__\s*=\s*[\'"]([^\'"]+)', certifi.read_text())
+    if match is None or not (source_root / "pip/_vendor/certifi/LICENSE").is_file():
+        raise SourceError(
+            "The extension interpreter's certifi version or license is missing."
+        )
+    target = notices / "extension-python/python-package-sources.tar"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(target, "w", format=tarfile.PAX_FORMAT) as archive:
+        _add(archive, "runtime-manifest.json", (runtime / "manifest.json").read_bytes())
+        _add(
+            archive,
+            "source-inventory.json",
+            (runtime / "licenses/sources.json").read_bytes(),
+        )
+        for item in sorted(records, key=lambda item: item["path"]):
+            relative = Path(item["path"])
+            source = source_root / relative
+            if (
+                relative.is_absolute()
+                or ".." in relative.parts
+                or not source.is_file()
+                or source.is_symlink()
+                or _file_sha256(source) != item["sha256"]
+            ):
+                raise SourceError(
+                    "An extension interpreter source file is missing or modified."
+                )
+            _add(archive, "python-packages/" + relative.as_posix(), source)
+    sources_path = notices / SOURCES_FILE
+    sources = json.loads(sources_path.read_text())
+    sources["components"] = [
+        component
+        for component in sources["components"]
+        if not component["folder"].startswith("extension-python/")
+    ]
+    sources["components"].append(
+        {
+            "folder": "extension-python/certifi-" + match[1],
+            "name": "pip-vendored certifi",
+            "version": match[1],
+            "revision": pin["sha256"],
+            "licenses": ["MPL-2.0"],
+            "for": "extension interpreter (with accompanying vendored Python source and licenses)",
+            "files": [
+                {
+                    "name": target.name,
+                    "url": pin["url"],
+                    "bundled": "extension-python/" + target.name,
+                    "size": target.stat().st_size,
+                    "sha256": _file_sha256(target),
+                }
+            ],
+        }
+    )
+    validate_sources(sources)
+    sources_path.write_text(json.dumps(sources, indent=2) + "\n")
+    with (notices / NOTICES_FILE).open("a") as document:
+        document.write(
+            f"\nThe extension interpreter contains pip-vendored certifi {match[1]} (MPL-2.0). "
+            "Its exact source and license, with the accompanying vendored Python packages, "
+            "are in [python-package-sources.tar](extension-python/python-package-sources.tar) "
+            f"and in the release's [`{sources_asset(version)}`]({sources_url(version)}).\n"
+        )
+
+
+def _bundled_source(read: Callable[[str], bytes | None], item: dict) -> bytes:
+    data = read(item["bundled"])
+    if data is None or len(data) != item["size"] or _sha256(data) != item.get("sha256"):
+        raise SourceError(
+            "The extension interpreter's bundled source archive is missing or modified."
+        )
+    return data
+
+
 def _check(read: Callable[[str], bytes | None], version: str) -> tuple[str, dict]:
     document, listing = read(NOTICES_FILE), read(SOURCES_FILE)
     if document is None or listing is None:
@@ -741,6 +842,10 @@ def _check(read: Callable[[str], bytes | None], version: str) -> tuple[str, dict
             f"The app's third-party notices are not for Vikram {version}. Rebuild it."
         )
     validate_sources(sources)
+    for component in sources["components"]:
+        for item in component["files"]:
+            if "bundled" in item:
+                _bundled_source(read, item)
     for target in re.findall(r"\]\((licenses/[^)]+)\)", text):
         if read(target) is None:
             raise SourceError(f"The third-party notices name a missing {target}.")
@@ -759,7 +864,15 @@ def check_folder(folder: Path, version: str) -> dict:
 
 def check_notices(app: Path, version: str) -> dict:
     """Check the notices inside a built Vikram.app and return its source list."""
-    return check_folder(app / APP_NOTICES, version)
+    sources = check_folder(app / APP_NOTICES, version)
+    if (
+        app / "Contents/Resources/extension-python/manifest.json"
+    ).is_file() and not any(
+        component["folder"].startswith("extension-python/")
+        for component in sources["components"]
+    ):
+        raise SourceError("The extension interpreter's release sources are missing.")
+    return sources
 
 
 def archive_notices(archive: Path, version: str) -> tuple[str, dict]:
@@ -773,9 +886,44 @@ def archive_notices(archive: Path, version: str) -> tuple[str, dict]:
                 member = prefix + name
                 return source.read(member) if member in names else None
 
-            return _check(read, version)
+            result = _check(read, version)
+            runtime_pin = f"{ARCHIVE_ROOT}/Contents/Resources/Vikram.app/Contents/Resources/extension-python/manifest.json"
+            if runtime_pin in names and not any(
+                component["folder"].startswith("extension-python/")
+                for component in result[1]["components"]
+            ):
+                raise SourceError(
+                    "The extension interpreter's release sources are missing."
+                )
+            return result
     except (zipfile.BadZipFile, NotImplementedError, RuntimeError, OSError):
         raise SourceError("The installer archive could not be read.") from None
+
+
+def archive_bundled_sources(archive: Path, sources: dict) -> dict[str, bytes]:
+    prefix = f"{ARCHIVE_ROOT}/Contents/Resources/Vikram.app/{APP_NOTICES}/"
+    result = {}
+    try:
+        with zipfile.ZipFile(archive) as source:
+
+            def read(name):
+                try:
+                    info = source.getinfo(prefix + name)
+                except KeyError:
+                    return None
+                if info.file_size > 64 * 1024 * 1024:
+                    raise SourceError(
+                        "A bundled extension source archive is too large."
+                    )
+                return source.read(info)
+
+            for component in sources["components"]:
+                for item in component["files"]:
+                    if "bundled" in item:
+                        result[item["bundled"]] = _bundled_source(read, item)
+    except (zipfile.BadZipFile, OSError):
+        raise SourceError("The installer sources could not be read.") from None
+    return result
 
 
 class _Transient(Exception):
@@ -817,11 +965,17 @@ def _download(session: httpx.Client, item: dict, path: Path) -> None:
 
 
 def render_readme(sources: dict, version: str) -> str:
+    extension = any(
+        component["folder"].startswith("extension-python/")
+        for component in sources["components"]
+    )
     lines = [
         f"# Third-party sources for Vikram {version}",
         "",
         "This archive holds the complete corresponding source code of the GPL-, "
-        "LGPL- and MPL-licensed components in Vikram's Python sandbox. "
+        "LGPL- and MPL-licensed components in Vikram's Python sandbox"
+        + (" and extension interpreter" if extension else "")
+        + ". "
         f"`{NOTICES_FILE}`, inside Vikram.app (`{APP_NOTICES}`) and beside this "
         "archive on the release page, lists every component and its license.",
         "",
@@ -832,6 +986,15 @@ def render_readme(sources: dict, version: str) -> str:
         "repository at the commit shown: its Makefile names the Linux release it "
         "builds and the configuration and patches it applies. "
         f"`{SOURCES_FILE}` lists where each file came from and its digest.",
+        *(
+            [
+                "Embedded extension interpreter sources are copied byte-for-byte from the "
+                "installer. Their inventory identifies each vendored Python source file "
+                "and its digest; their original source artifact is the pinned interpreter archive."
+            ]
+            if extension
+            else []
+        ),
         "",
         *_components_table(sources),
     ]
@@ -852,7 +1015,12 @@ def _add(archive: tarfile.TarFile, name: str, data: bytes | Path) -> None:
 
 
 def fetch_sources(
-    session: httpx.Client, sources: dict, version: str, destination: Path
+    session: httpx.Client,
+    sources: dict,
+    version: str,
+    destination: Path,
+    *,
+    bundled: dict[str, bytes] | None = None,
 ) -> Path:
     """Download every pinned source file, check it, and pack the release's archive."""
     validate_sources(sources)
@@ -863,7 +1031,12 @@ def fetch_sources(
         for component in sources["components"]:
             for item in component["files"]:
                 path = Path(work) / str(len(members))
-                _download(session, item, path)
+                if "bundled" in item:
+                    path.write_bytes(
+                        _bundled_source(lambda name: (bundled or {}).get(name), item)
+                    )
+                else:
+                    _download(session, item, path)
                 members.append((f"{prefix}/{component['folder']}/{item['name']}", path))
         staged = Path(work) / name
         with tarfile.open(staged, "w", format=tarfile.PAX_FORMAT) as archive:
@@ -884,6 +1057,9 @@ def check_published(session: httpx.Client, sources: dict) -> int:
     total = 0
     for component in sources["components"]:
         for item in component["files"]:
+            if "bundled" in item:
+                total += item["size"]
+                continue
             size = _published_size(session, item["url"])
             if size is not None and size != item["size"]:
                 raise SourceError(f"{item['url']} changed size since it was pinned.")
@@ -966,7 +1142,13 @@ def release_assets(
         shutil.copyfile(sources_archive, tarball)
     else:
         with contextlib.nullcontext(session) if session else client() as downloads:
-            tarball = fetch_sources(downloads, sources, version, destination)
+            tarball = fetch_sources(
+                downloads,
+                sources,
+                version,
+                destination,
+                bundled=archive_bundled_sources(archive, sources),
+            )
     return [(notices, "text/markdown; charset=utf-8"), (tarball, "application/x-tar")]
 
 
@@ -1010,7 +1192,7 @@ def main() -> None:
                     total = check_published(session, sources)
                     print(
                         f"All {sum(len(c['files']) for c in sources['components'])} "
-                        f"third-party source files ({total} bytes) are published."
+                        f"third-party source files ({total} bytes) are available from published origins or verified installer sources."
                     )
                     return
                 total = sum(
@@ -1019,7 +1201,15 @@ def main() -> None:
                     for item in component["files"]
                 )
                 ensure_space(args.archive.parent, 2 * total)
-                print(fetch_sources(session, sources, version, args.archive.parent))
+                print(
+                    fetch_sources(
+                        session,
+                        sources,
+                        version,
+                        args.archive.parent,
+                        bundled=archive_bundled_sources(args.archive, sources),
+                    )
+                )
     except (SourceError, InstallError, OSError, httpx.HTTPError) as error:
         raise SystemExit(f"Third-party notices: {error}") from None
 

@@ -3,7 +3,28 @@
 ## Scope
 
 Vikram is one local assistant built with Pydantic AI and Ollama. Keep the
-implementation small. The owner approved the local chat app in
+implementation small. The owner approved Pi-style CLI parity on 2026-11-06 and
+requested implementation; see `docs/superpowers/specs/2026-11-06-pi-cli-parity-design.md`.
+That approval adds the fullscreen/regular terminal workbench, shared CLI/macOS
+sessions, trusted host coding tools, explicit OpenRouter selection, MCP, native
+Python extension workers and VM tool composition. These approved features
+supersede the earlier local-only, in-memory CLI and no-host-tools constraints.
+Ollama remains default; no automatic cloud fallback. Project configuration cannot
+establish trust or select cloud inference. Host coding and extensions run with
+user privileges; never describe them as sandboxed. Keep unknown/destructive,
+outside-workspace, credential, install and remote-mutation approvals in the shared
+dispatcher. Plan mode does not execute host mutations or extension code. Scheduled
+runs and evaluations remain local and do not gain host tools/extensions. Bundle
+the pinned extension CPython and worker SDK, licenses and exact required sources;
+never fall back to system Python in a frozen install. Composition code runs only
+in the existing VM, with no network or mounts, through the bounded tool broker.
+The owner requested automatic model selection UI and persistent machine defaults
+on 2026-11-06. Open the terminal picker when a selected model is missing. Explicit
+model choices in either interface update the shared user `model` setting for new
+conversations; expose it in app Settings and terminal `/settings`/`/default-model`.
+Explicit CLI/environment overrides and restored conversation choices retain their
+precedence. A cloud default requires explicit selection with its disclosure.
+ The owner approved the local chat app in
 `docs/superpowers/specs/2026-10-14-local-chat-design.md`. Its persistence, private
 Python sidecar and focused offline tests are authorized. On 2026-11-03 the owner
 asked for it to become a native macOS app following Apple's practices; the design
@@ -76,7 +97,8 @@ Notifications name the task only. Never log prompts or answers from runs.
 Evaluations must explicitly use web Off; tool-capable models keep the local
 toolkit with a scripted user, and the browser case uses an offline scripted
 site. Do not revive the discarded software factory or add other agents,
-unrelated tools, hosted inference, or public server surfaces.
+unrelated tools, hosted inference providers other than explicitly selected OpenRouter,
+or public server surfaces.
 
 ## Structure
 
@@ -121,10 +143,16 @@ unrelated tools, hosted inference, or public server surfaces.
   metrics-only history, a self-contained HTML report, and the offline site the
   browser case uses (`site.py`).
 
-For the original CLI, the model endpoint is fixed to `http://localhost:11434/v1`. Model selection is
-`--model`, then `OLLAMA_MODEL`, then the default in `agent.py`. The application
-does not load configuration files or `.env` files. Interactive history stays
-in memory for the current process.
+The local model endpoint remains `http://localhost:11434/v1`. Bare model names
+are Ollama IDs; `ollama:<id>` and `openrouter:<provider/model>` are explicit IDs.
+Model selection uses explicit CLI/environment choices, restored session choices,
+trusted project/user settings, then the default in `agent.py`. User settings live
+beside the shared chat library; trusted project settings live in `.vikram/`.
+No `.env` files are loaded. CLI sessions persist by default in the shared library;
+`--no-session` retains in-memory behavior. CLI thinking traces are never persisted.
+Per-chat OS ownership protects simultaneous CLI/app use; never recover another
+live owner's active turn. Interrupted tool effects remain context with uncertainty
+and must not be automatically replayed.
 
 Evaluations reuse this agent with fresh history per attempt. Both answers and
 rubric grading use local Ollama; no API key is needed. Generate all cases and

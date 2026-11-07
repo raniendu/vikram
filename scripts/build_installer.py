@@ -15,6 +15,7 @@ from pathlib import Path
 
 from build_desktop import APP, ROOT, check_space
 
+from scripts.fetch_extension_python import check_bundle as check_extension_bundle
 from scripts.third_party import SourceError, check_notices
 from vikram.installation import (
     bundle_size,
@@ -58,6 +59,10 @@ def check_payload(installer: Path, version: str, where: str) -> None:
         raise SystemExit(f"{where}: {error}") from None
     if not stat.S_IMODE((app / "Contents/MacOS/vikram-sidecar").stat().st_mode) & 0o111:
         raise SystemExit(f"{where}: the runtime lost executable permissions.")
+    try:
+        check_extension_bundle(app)
+    except ValueError as error:
+        raise SystemExit(f"{where}: {error}") from None
 
 
 def build_disk_image(payload: Path, image: Path, version: str) -> None:
@@ -134,6 +139,7 @@ def main() -> None:
     bundle_size(source)
     verify_bundle(source)
     check_runtime(source, version)
+    check_extension_bundle(source)
     try:
         check_notices(source, version)
     except SourceError as error:

@@ -9,6 +9,7 @@ import httpx
 from pydantic_ai import AgentRunResultEvent
 from pydantic_ai.messages import (
     FunctionToolResultEvent,
+    ModelResponse,
     PartDeltaEvent,
     PartStartEvent,
     TextPart,
@@ -22,7 +23,7 @@ from vikram.agent import build_agent
 from vikram.browser import BrowserEngine
 from vikram.errors import ReplyError, reply_error
 from vikram.interaction import Interaction, Unattended
-from vikram.ollama import thinking_request
+from vikram.providers import ModelRef, model_settings
 from vikram.sandbox import Sandbox, host_sandbox
 from vikram.schedules import TaskBook
 from vikram.toolkit import REQUEST_LIMIT, Mode, Reply
@@ -73,6 +74,9 @@ async def stream_reply(
     vision: bool = False,
     tasks: TaskBook | None = None,
     scheduled: str | None = None,
+    coding=None,
+    instructions: str = "",
+    request_boundary=None,
 ) -> AsyncIterator[dict]:
     """Stream one reply. Tool-capable models (web "auto") also get the toolkit.
 
@@ -130,6 +134,9 @@ async def stream_reply(
         vision=vision,
         tasks=tasks if web == "auto" and not scheduled else None,
         scheduled=scheduled,
+        coding=coding if not scheduled else None,
+        instructions=instructions,
+        request_boundary=request_boundary,
     )
 
     async def observe(response):
@@ -147,11 +154,37 @@ async def stream_reply(
                 transport=transport,
                 event_hooks={"response": [observe]},
             ) as client:
+                from vikram.execution import execution_tools
+                from vikram.toolkit import toolkit_tools
+
+                web_tools = session.tools() if web == "auto" else []
+                host_tools = (
+                    await execution_tools(
+                        reply,
+                        builtin_tools=[
+                            *web_tools,
+                            *toolkit_tools(reply.sandbox is not None),
+                        ],
+                    )
+                    if web == "auto"
+                    else None
+                )
+                if (
+                    coding is not None
+                    and not scheduled
+                    and hasattr(coding, "extensions")
+                ):
+                    from vikram.integrations import lifecycle
+
+                    await lifecycle(
+                        reply, "before_reply", {"model": model, "prompt": prompt}
+                    )
                 agent = build_agent(
                     model,
                     http_client=client,
                     web=web,
-                    tools=session.tools() if web == "auto" else (),
+                    tools=web_tools,
+                    toolsets=[host_tools] if host_tools is not None else [],
                     toolkit=web == "auto",
                     sandbox=reply.sandbox is not None,
                 )
@@ -160,7 +193,7 @@ async def stream_reply(
                     prompt,
                     deps=reply,
                     message_history=history,
-                    model_settings={"extra_body": thinking_request(thinking)},
+                    model_settings=model_settings(model, thinking),
                     usage_limits=UsageLimits(request_limit=REQUEST_LIMIT),
                 ) as events:
                     async for event in events:
@@ -191,9 +224,46 @@ async def stream_reply(
                             parts.clear()
                         elif isinstance(event, AgentRunResultEvent):
                             current = event.result.output
-                            send()
+                            usage = event.result.usage
+                            counts = {
+                                "input_tokens": usage.input_tokens,
+                                "output_tokens": usage.output_tokens,
+                                "requests": usage.requests,
+                                "cache_read_tokens": usage.cache_read_tokens,
+                            }
+                            if ModelRef.parse(model).is_cloud:
+                                reported_costs = [
+                                    (message.provider_details or {}).get("cost")
+                                    for message in event.result.new_messages()
+                                    if isinstance(message, ModelResponse)
+                                ]
+                                if reported_costs and all(
+                                    isinstance(cost, (int, float))
+                                    for cost in reported_costs
+                                ):
+                                    counts.update(
+                                        cost_usd=str(sum(reported_costs)),
+                                        cost_estimated=False,
+                                    )
+                                elif getattr(usage, "cost", None) is not None:
+                                    counts.update(
+                                        cost_usd=str(usage.cost), cost_estimated=True
+                                    )
+                            if (
+                                coding is not None
+                                and not scheduled
+                                and hasattr(coding, "extensions")
+                            ):
+                                await lifecycle(
+                                    reply,
+                                    "after_reply",
+                                    {"model": model, "text": current, "usage": counts},
+                                )
+                            send(usage=counts)
         except Exception as exc:
-            queue.put_nowait(ReplyError(reply_error(exc)))
+            queue.put_nowait(
+                ReplyError(reply_error(exc, provider=ModelRef.parse(model).provider))
+            )
         finally:
             if reply.sandbox is not None:
                 # Shielded: a second stop must not leave the VM running.

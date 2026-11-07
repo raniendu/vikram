@@ -1,5 +1,7 @@
 """Canonical completed-turn context shared by terminal and desktop adapters."""
 
+import json
+
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 
 from vikram.toolkit import bounded
@@ -137,6 +139,28 @@ def activity_note(activity: list[dict]) -> str | None:
     lines.extend(
         task_note([item for item in activity if item.get("kind") == "schedule"])
     )
+    for item in [
+        a
+        for a in activity
+        if a.get("kind") in {"coding", "mcp", "extension", "composition"}
+    ][-12:]:
+        lines.append(
+            f"- {bounded(str(item.get('tool') or item['kind']), 200)}: "
+            f"{item.get('status', 'unfinished')} (untrusted tool output)\n"
+            + bounded(
+                json.dumps(
+                    {
+                        key: item[key]
+                        for key in ("path", "paths", "arguments", "summary")
+                        if key in item
+                    },
+                    ensure_ascii=False,
+                ),
+                1000,
+            )
+            + "\n"
+            + bounded(str(item.get("output") or item.get("error") or ""), 2000)
+        )
     if not lines:
         return None
     return "Tool activity while answering this message:\n" + "\n".join(lines)

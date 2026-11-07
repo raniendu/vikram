@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import contextlib
+import inspect
 import json
 import sqlite3
 from collections.abc import Callable
@@ -19,6 +20,7 @@ from vikram.interaction import (
     check_response,
 )
 from vikram.models import prepare_model
+from vikram.providers import ModelRef
 from vikram.schedules import (
     Agent,
     Schedule,
@@ -156,6 +158,9 @@ class Runtime:
         self.models: list[dict] = []
         self.active: dict | None = None
         self.task: asyncio.Task | None = None
+        self.queued_task: asyncio.Task | None = None
+        self.start_task: asyncio.Task | None = None
+        self._closed = False
         self.stopping = False
         self.starting = False
         self.waiting: dict[str, tuple] = {}
@@ -167,6 +172,9 @@ class Runtime:
         self.background = "unavailable"
         self.watcher: asyncio.Task | None = None
         self.start_runner = start_runner
+        from vikram.workbench import Workbench
+
+        self.workbench = Workbench(self)
 
     def event(self, event: str, **payload) -> None:
         self.emit({"v": 1, "event": event, **payload})
@@ -199,6 +207,9 @@ class Runtime:
         return {"tasks": self.schedules.tasks(), "background": self.background}
 
     async def close(self) -> None:
+        self._closed = True
+        await self.stop()
+        await self.workbench.close()
         await self.updater.close()
         if self.watcher is not None:
             self.watcher.cancel()
@@ -209,7 +220,11 @@ class Runtime:
 
     async def refresh(self) -> dict:
         try:
-            self.models = await self.catalog.refresh()
+            self.models = (
+                await self.catalog.refresh(include_cloud=True)
+                if self.workbench.cloud_enabled
+                else await self.catalog.refresh()
+            )
             return {"models": self.models, "connection_error": None}
         except ValueError as e:
             self.models = []
@@ -220,26 +235,59 @@ class Runtime:
             **self.store.snapshot(),
             "active": self.active,
             "models": self.models,
+            "capabilities": [
+                "workbench",
+                "coding",
+                "openrouter",
+                "branches",
+                "queue",
+                "compaction",
+                "mcp",
+                "extensions",
+            ],
             "browser": (
                 {"control": self.browser.control} if self.browser is not None else None
             ),
         }
 
     def suggested_model(self) -> str | None:
-        installed = {m["name"] for m in self.models if m["available"]}
-        last = self.store.snapshot()["preferences"].get("last_model")
-        return next((m for m in (last, DEFAULT_MODEL) if m in installed), None)
+        from vikram.settings import Settings
 
-    async def send(self, chat_id: str, request_id: str, retry: bool = False) -> dict:
+        installed = {ModelRef.parse(m["name"]) for m in self.models if m["available"]}
+        default = Settings(root=self.store.root).get("model")
+        if default:
+            return default if ModelRef.parse(default) in installed else None
+        last = self.store.snapshot()["preferences"].get("last_model")
+        return next(
+            (m for m in (last, DEFAULT_MODEL) if m and ModelRef.parse(m) in installed),
+            None,
+        )
+
+    async def send(
+        self,
+        chat_id: str,
+        request_id: str,
+        retry: bool = False,
+        *,
+        queued_id: str | None = None,
+    ) -> dict:
+        if self._closed:
+            raise ValueError("The chat runtime is closed.")
         if self.active or self.starting:
             raise ValueError(
                 "Another reply is still running. Stop it or wait for it to finish."
             )
         self.starting = True
+        self.start_task = asyncio.current_task()
         try:
             # Capture selection before awaiting metadata: changes affect only the next reply.
             chat = self.store.chat(chat_id)
-            self.models = await self.catalog.refresh()
+            cloud = bool(chat["model"] and chat["model"].startswith("openrouter:"))
+            self.models = (
+                await self.catalog.refresh(include_cloud=True)
+                if cloud or self.workbench.cloud_enabled
+                else await self.catalog.refresh()
+            )
             selected, setting, thinking, web, notice = prepare_model(
                 self.models,
                 chat["model"],
@@ -247,6 +295,7 @@ class Runtime:
             )
             if (
                 not retry
+                and queued_id is None
                 and not selected["vision"]
                 and any(
                     a["message_id"] is None and a["kind"] == "image"
@@ -258,11 +307,47 @@ class Runtime:
                 )
             if notice:
                 self.event("notice", chat_id=chat_id, message=notice)
+            context = self.workbench.context(chat_id, selected=selected)
+            queued = (
+                next(
+                    (item for item in context.queued_inputs if item["id"] == queued_id),
+                    None,
+                )
+                if queued_id
+                else None
+            )
+            if queued_id and queued is None:
+                raise ValueError(
+                    "The queued message was removed before it could be sent."
+                )
+            prompt = queued["text"] if queued else self.store.chat(chat_id)["draft"]
+            try:
+                await self.workbench.compact(
+                    chat_id,
+                    prompt=prompt,
+                    selected=selected,
+                    include_draft=queued_id is None and not retry,
+                )
+            except Exception:
+                self.event(
+                    "notice",
+                    chat_id=chat_id,
+                    message="Context compaction failed. The full conversation is preserved.",
+                )
             # Save only a reset choice; the default stays "on" as models change.
             if setting != chat["thinking"].get(chat["model"]):
                 self.store.update_chat(
                     chat_id, thinking={**chat["thinking"], chat["model"]: setting}
                 )
+            if queued_id:
+                queued = next(
+                    (item for item in context.queued_inputs if item["id"] == queued_id),
+                    None,
+                )
+                if queued is None:
+                    raise ValueError(
+                        "The queued message was removed before it could be sent."
+                    )
             attempt = self.store.begin(
                 chat_id,
                 selected["name"],
@@ -271,7 +356,11 @@ class Runtime:
                 retry,
                 web=web,
                 mode=chat["mode"],
+                prompt=queued["text"] if queued else None,
             )
+            if queued:
+                context.remove_queued(queued["id"])
+                self.event("workbench", chat_id=chat_id)
             self.active = {
                 "chat_id": chat_id,
                 "attempt_id": attempt["id"],
@@ -289,6 +378,7 @@ class Runtime:
             }
         finally:
             self.starting = False
+            self.start_task = None
 
     async def _generate(
         self, attempt: dict, model: dict, thinking, setting=None
@@ -311,12 +401,27 @@ class Runtime:
         )
         sources, searches = [], []
         reasoning, reasoning_truncated = "", False
+        usage = {}
         activity, saved_activity, mode = [], "[]", attempt["mode"]
         iterator = None
         try:
             history, prompt = inference_messages(
                 self.store, attempt["chat_id"], attempt["message_id"], model["vision"]
             )
+            from vikram.resources import ProjectResources
+
+            extra = {}
+            parameters = inspect.signature(self.streamer).parameters
+            if "coding" in parameters:
+                coding = self.workbench.coding(attempt["chat_id"])
+                extra = {
+                    "coding": coding,
+                    "instructions": ProjectResources(coding.settings).instructions(),
+                }
+            if "request_boundary" in parameters:
+                extra["request_boundary"] = lambda: self.workbench.boundary(
+                    attempt["chat_id"], attempt["id"]
+                )
             iterator = self.streamer(
                 model["name"],
                 thinking,
@@ -339,6 +444,7 @@ class Runtime:
                     if self.tasks
                     else None
                 ),
+                **extra,
             )
             async for chunk in iterator:
                 if self.stopping or self.active != route:
@@ -349,6 +455,7 @@ class Runtime:
                     "reasoning_truncated", reasoning_truncated
                 )
                 sources, searches = chunk.get("sources", []), chunk.get("searches", [])
+                usage = chunk.get("usage", usage)
                 activity, mode = chunk.get("activity", activity), chunk.get(
                     "mode", mode
                 )
@@ -366,6 +473,7 @@ class Runtime:
                         reasoning_truncated=reasoning_truncated,
                         # Code and plans can be long: write them only when they change.
                         activity=activity if encoded != saved_activity else None,
+                        usage=chunk.get("usage"),
                     )
                     saved_activity = encoded
                 except (sqlite3.Error, OSError):
@@ -385,6 +493,7 @@ class Runtime:
                     reasoning_truncated=reasoning_truncated,
                     activity=activity,
                     mode=mode,
+                    usage=usage,
                 )
             if self.stopping:
                 status = "stopped"
@@ -409,6 +518,7 @@ class Runtime:
                     await iterator.aclose()
                 except Exception:
                     pass
+            self._cancel_waiting(attempt["id"])
             try:
                 unfinished = {"running", "waiting"}
                 if any(s["status"] in unfinished for s in [*searches, *activity]):
@@ -466,11 +576,42 @@ class Runtime:
                 reasoning_truncated=reasoning_truncated,
                 activity=activity,
                 mode=mode,
+                usage=usage,
             )
             # This release happens only after the stream context has closed.
             self.active = None
             self.stopping = False
             self.event("idle", **route)
+            context = self.workbench.contexts.get(attempt["chat_id"])
+            if (
+                status == "complete"
+                and context
+                and context.queued_inputs
+                and not self._closed
+            ):
+                self.queued_task = asyncio.create_task(
+                    self._send_queued(attempt["chat_id"])
+                )
+
+    async def _send_queued(self, chat_id: str) -> None:
+        """A tracked continuation; remove an entry only after Store.begin succeeds."""
+        try:
+            await asyncio.sleep(0)
+            if self._closed or self.active or self.starting:
+                return
+            context = self.workbench.contexts.get(chat_id)
+            if context and context.queued_inputs:
+                item = context.queued_inputs[0]
+                await self.send(chat_id, uuid4().hex, queued_id=item["id"])
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self.event(
+                "notice",
+                chat_id=chat_id,
+                message="The queued message could not be sent. It remains available to edit or retry.",
+            )
+            self.event("workbench", chat_id=chat_id)
 
     async def wait_for_person(self, route: dict, kind: str, request):
         """Park the reply until the window answers `request` with `respond`."""
@@ -480,6 +621,13 @@ class Runtime:
             return await future
         finally:
             self.waiting.pop(request.id, None)
+
+    def _cancel_waiting(self, attempt_id: str | None = None) -> None:
+        for identifier, entry in list(self.waiting.items()):
+            if attempt_id is None or entry[0] == attempt_id:
+                if not entry[3].done():
+                    entry[3].cancel()
+                self.waiting.pop(identifier, None)
 
     def respond(self, p: dict) -> None:
         entry = self.waiting.get(p["interaction_id"])
@@ -493,7 +641,7 @@ class Runtime:
         ):
             raise ValueError("This reply is no longer waiting for that answer.")
         _, kind, request, future = entry
-        if kind in ("browser", "schedule"):
+        if kind in ("browser", "schedule", "coding", "mcp", "extension"):
             if p.get("decision") not in ("approve", "dismiss"):
                 raise ValueError(
                     "Allow or decline the browser action."
@@ -538,6 +686,17 @@ class Runtime:
         future.set_result(response)
 
     async def stop(self) -> None:
+        self._cancel_waiting()
+        current = asyncio.current_task()
+        pending = {
+            task
+            for task in (self.queued_task, self.start_task)
+            if task is not None and task is not current and not task.done()
+        }
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
         if self.task and not self.task.done():
             self.stopping = True
             self.task.cancel()
@@ -569,6 +728,8 @@ class Runtime:
                     self.event("idle", **route)
 
     async def command(self, method: str, p: dict, request_id: str):
+        if method == "workbench":
+            return await self.workbench.command(p)
         if method.endswith("_schedule") or method in {
             "schedules",
             "schedule",
@@ -595,10 +756,15 @@ class Runtime:
             fields = p["fields"]
             if "model" in fields:
                 if not any(
-                    m["name"] == fields["model"] and m["available"] for m in self.models
+                    ModelRef.parse(m["name"]) == ModelRef.parse(fields["model"])
+                    and m["available"]
+                    for m in self.models
                 ):
-                    raise ValueError("Choose an available local model.")
+                    raise ValueError("Choose an available model.")
                 self.store.set_preference("last_model", fields["model"])
+                from vikram.settings import Settings
+
+                Settings(root=self.store.root).set("model", fields["model"])
             return self.store.update_chat(p["chat_id"], **fields)
         if method == "draft":
             self.store.save_draft(p["chat_id"], p["text"], p["revision"])

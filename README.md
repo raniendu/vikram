@@ -1,10 +1,12 @@
 # Vikram
 
-A private Mac chat app and CLI, built with SwiftUI, Pydantic AI, and Ollama.
+A Mac assistant and terminal workbench, built with SwiftUI and Pydantic AI.
+Ollama runs locally by default; OpenRouter is an explicit optional cloud provider.
 
 Vikram runs a single agent defined in this repository. Its instructions live in
-`vikram/agent.py`, and it sends model requests to your local Ollama server at
-`http://localhost:11434/v1`. Models that support tool calling can also run
+`vikram/agent.py`. Local model requests go to your Ollama server at
+`http://localhost:11434/v1`. Choosing an OpenRouter model sends the active
+conversation and attachments to OpenRouter and that model’s provider. Models that support tool calling can also run
 Python in an isolated local VM, ask you clarifying questions, in plan mode wait
 for your approval before they work, use a private web browser that you can
 watch, stop, or take over, and schedule prompts that run later on their own,
@@ -313,19 +315,33 @@ uv run vikram --thinking off "Find the official Ollama tool-calling documentatio
 uv run vikram --plan "Compare 10-year savings for 3%, 4%, and 4.5% yearly rates."
 ```
 
-CLI conversation history exists only in memory for the current interactive session.
-The desktop app saves its own chats independently. In a terminal, Vikram streams
-formatted Markdown with a compact activity line and editable multiline input.
-Normal terminal scrollback is retained. **Enter** sends, **Alt+Enter** adds a
-newline, and **↑** recalls input. **Ctrl+T** reveals/hides live thinking;
-afterward, **Ctrl+T** or `/trace` prints the latest reply's thinking on request.
-`/activity` inspects its web requests, sandbox runs, questions, plans, and
-browser actions. `/plan` toggles plan mode. **Ctrl+C** stops a running reply and
-returns to input; at the input prompt it exits. `/exit` or **Ctrl+D** also exits.
-Terminal thinking stays in memory only. One-shot commands and redirected output
-keep plain answer text without thinking or terminal decoration.
+The CLI opens a fullscreen terminal interface with a persistent multiline editor,
+streaming Markdown, searchable model and command pickers, and visible tool activity.
+Use `--tui-mode regular` for normal terminal scrollback or `--tui-mode plain` for
+plain interactive output. One-shot and redirected replies keep plain answer text.
+
+**Enter** sends, **Ctrl+J/Shift+Enter** inserts a newline, and **Escape/Ctrl+C** stops
+work. During a reply, Enter steers at the next model request and **Alt+Enter** queues
+a follow-up. **Ctrl+L** opens the model picker, **Ctrl+P** cycles scoped models,
+**Ctrl+T** toggles thinking, and **Ctrl+O** toggles tool details. `/help` and
+`/hotkeys` show commands and shortcuts; `/exit` or Ctrl+D on empty input exits.
+
+CLI and desktop use the same saved conversation library. `/resume`, `/name`,
+`/tree`, `/fork`, and `/clone` manage sessions without changing workspace files.
+Use `--continue`, `--session ID`, or `--resume` at startup; `--no-session` keeps a
+conversation in memory. `/compact` summarizes context while preserving the full
+transcript. Terminal thinking remains in memory and is never saved or exported.
+
+The [CLI guide](docs/cli.md) covers workspace trust, host coding tools, attachments,
+OpenRouter, configuration, MCP, extensions, tool composition and automation.
 
 ## Choose a local model
+
+If the selected model is missing, the terminal opens its model picker
+automatically. Use Ctrl+L, F2 or `/model` to reopen it. Your choice becomes the
+default for new CLI and desktop conversations on this Mac. Choose a separate
+default through `/settings` → **Default model**, `/default-model`, or the Mac
+app's **Settings → Default Model**.
 
 The default is `gemma4:26b-a4b-it-qat`. To use another model you have pulled into
 Ollama, pass its name:
@@ -344,7 +360,11 @@ original Ollama ID to `--model`; requests and stored identities retain that ID.
 
 - `vikram/agent.py`: the agent's instructions, default model, and `build_agent`.
 - `vikram/cli.py`: one-shot and interactive terminal adapter.
-- `vikram/terminal.py`: inline Markdown chat, editable input, and optional thinking view.
+- `vikram/tui.py`, `terminal_commands.py`: terminal application and command controls.
+- `vikram/session.py`, `session_io.py`: shared sessions, branches, queues, compaction and exports.
+- `vikram/coding.py`, `execution.py`: trusted host tools and shared execution policy.
+- `vikram/providers.py`, `mcp_client.py`, `extensions.py`: providers and integrations.
+- `vikram/composition.py`: VM tool-composition broker.
 - `vikram/installation.py` and `releases.py`: shared installer and verified updates.
 - `vikram/bundle.py`: desktop, CLI, document-parser and installer runtime dispatch.
 - `vikram/conversation.py` and `context.py`: shared execution and conversation context.

@@ -1777,6 +1777,7 @@ source = { editable = "." }
 dependencies = [
     { name = "defusedxml" },
     { name = "httpx" },
+    { name = "jsonschema" },
     { name = "mcp" },
     { name = "openpyxl" },
     { name = "pillow" },
@@ -1802,6 +1803,7 @@ dev = [
 requires-dist = [
     { name = "defusedxml", specifier = ">=0.7,<1" },
     { name = "httpx", specifier = ">=0.28,<0.29" },
+    { name = "jsonschema", specifier = ">=4.26,<5" },
     { name = "mcp", specifier = ">=1.26,<2" },
     { name = "openpyxl", specifier = ">=3.1.5,<4" },
     { name = "pillow", specifier = ">=12.0,<13" },

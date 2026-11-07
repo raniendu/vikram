@@ -23,9 +23,11 @@ final class AppState {
     let chats: ChatController
     let schedules: ScheduleController
     let updates: UpdateController
+    let workbench: WorkbenchController
     let browser = BrowserEngine()
 
     var showsScheduled = false
+    var showsWorkbench = false
     var schedulePath: [ScheduleRoute] = []
     /// The person hid the browser panel without closing the browser.
     var browserHidden = false
@@ -40,7 +42,9 @@ final class AppState {
     init() {
         let service = ServiceConnection(appVersion: Self.version)
         self.service = service
-        chats = ChatController(service: service)
+        let chats = ChatController(service: service)
+        self.chats = chats
+        workbench = WorkbenchController(service: service, chats: chats)
         schedules = ScheduleController(service: service)
         updates = UpdateController(service: service)
         service.onEvent = { [weak self] event in
@@ -60,6 +64,7 @@ final class AppState {
         guard !chats.offline else { return }
         try? await schedules.refresh()
         await updates.load()
+        await workbench.refresh(chatId: chats.selected)
     }
 
     private func receive(_ event: JSONValue) {
@@ -69,6 +74,9 @@ final class AppState {
         default:
             if let event = try? event.decode(RuntimeEvent.self) {
                 chats.handle(event)
+                if event.event == "idle" || event.event == "queue" || event.event == "workbench" {
+                    Task { await workbench.refresh(chatId: chats.selected) }
+                }
                 if event.event == "fatal" || event.event == "disconnected" {
                     browser.close()
                 }
@@ -103,6 +111,19 @@ final class AppState {
     func newChat(folder: String? = nil) {
         showsScheduled = false
         Task { await chats.newChat(folder: folder) }
+    }
+
+    func chooseModel(_ name: String) async {
+        if name.hasPrefix("openrouter:"), name != chats.chat?.model {
+            let alert = NSAlert()
+            alert.messageText = "Use this OpenRouter model?"
+            alert.informativeText = "Your active conversation history and attachments will be sent to OpenRouter and the selected model’s provider. This choice also becomes the default for future CLI and desktop conversations. Cloud usage may incur charges."
+            alert.addButton(withTitle: "Use OpenRouter")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        await chats.setModel(name)
+        await workbench.refresh(chatId: chats.selected)
     }
 
     func openChat(_ id: String) {

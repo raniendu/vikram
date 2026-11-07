@@ -1,4 +1,4 @@
-"""The single Vikram agent, backed by local Ollama."""
+"""The single Vikram agent, with local Ollama as its default provider."""
 
 from datetime import datetime, timezone
 
@@ -6,8 +6,11 @@ import httpx
 import pydantic_ai
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.ollama import OllamaModel
+from pydantic_ai.models.openrouter import OpenRouterModel
 from pydantic_ai.providers.ollama import OllamaProvider
+from pydantic_ai.providers.openrouter import OpenRouterProvider
 
+from vikram.providers import CredentialError, CredentialStore, ModelRef, model_settings
 from vikram.toolkit import (
     SCHEDULED_RUN_PROMPT,
     TEXT_PLAN_PROMPT,
@@ -106,10 +109,12 @@ def build_agent(
     http_client: httpx.AsyncClient | None = None,
     web: str = "off",
     tools=(),
+    toolsets=(),
     toolkit: bool = False,
     sandbox: bool = False,
+    credentials: CredentialStore | None = None,
 ) -> Agent[Reply, str]:
-    """Build the repository's agent using a model installed in local Ollama.
+    """Build the shared agent using local Ollama or explicitly selected OpenRouter.
 
     `toolkit` adds questions, plan mode, and the browser and scheduled-task
     tools, which are offered only to replies with a browser or tasks; `sandbox`
@@ -118,39 +123,55 @@ def build_agent(
     and activity.
     """
     sandbox = toolkit and sandbox
-    model = model.strip()
-    if not model:
-        raise ValueError("An Ollama model name is required.")
-
-    def instructions(ctx: RunContext[Reply]) -> str:
-        # Recomputed per request, so an approved plan drops plan-mode guidance.
-        return (
-            agent_prompt(
-                web=web != "off",
-                toolkit=toolkit,
-                sandbox=sandbox,
-                mode=mode_of(ctx),
-                browser=has_browser(ctx),
-                tasks=has_tasks(ctx),
-                scheduled=scheduled_of(ctx),
+    reference = ModelRef.parse(model)
+    if reference.is_cloud:
+        key = (credentials or CredentialStore()).get("openrouter")
+        if key is None:
+            raise CredentialError(
+                "Sign in to OpenRouter or set OPENROUTER_API_KEY to use this model."
             )
-            + "\n\n"
-            + system_time_instructions()
+        backend = OpenRouterModel(
+            reference.model_id,
+            provider=OpenRouterProvider(api_key=key, http_client=http_client),
+            settings=model_settings(reference.qualified_id, None),
         )
-
-    return Agent(
-        OllamaModel(
-            model,
+    else:
+        backend = OllamaModel(
+            reference.model_id,
             provider=OllamaProvider(
                 base_url="http://localhost:11434/v1",
                 api_key="ollama",
                 http_client=http_client,
             ),
-        ),
+        )
+
+    def instructions(ctx: RunContext[Reply]) -> str:
+        # Recomputed per request, so an approved plan drops plan-mode guidance.
+        prompt = agent_prompt(
+            web=web != "off",
+            toolkit=toolkit,
+            sandbox=sandbox,
+            mode=mode_of(ctx),
+            browser=has_browser(ctx),
+            tasks=has_tasks(ctx),
+            scheduled=scheduled_of(ctx),
+        )
+        if (
+            coding := getattr(ctx.deps, "coding", None)
+        ) is not None and coding.settings.is_trusted():
+            prompt = prompt.replace("You have no direct filesystem access. ", "")
+            prompt += "\nYou have trusted host coding tools in the selected workspace. Use read/grep/find/ls to inspect and exact edit/write for changes; bash runs host commands under the shared approval policy. These host tools are distinct from run_code, which remains an isolated Python VM. Never imply that host commands are sandboxed."
+        if extra_instructions := getattr(ctx.deps, "instructions", ""):
+            prompt += "\n\n" + extra_instructions
+        return prompt + "\n\n" + system_time_instructions()
+
+    return Agent(
+        backend,
         name="Vikram",
         deps_type=Reply,
         instructions=instructions,
         tools=[*tools, *(toolkit_tools(sandbox) if toolkit else ())],
+        toolsets=list(toolsets),
         capabilities=toolkit_capabilities() if toolkit else (),
         retries=2,
     )

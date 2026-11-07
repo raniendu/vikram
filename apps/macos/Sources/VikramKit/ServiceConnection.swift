@@ -191,8 +191,9 @@ public final class ServiceConnection: @unchecked Sendable {
             }
             let current = running.generation
             var entry = Pending(generation: current, continuation: continuation)
+            let timeout: Duration = method == "workbench" ? .seconds(1800) : Self.replyTimeout
             entry.timeout = Task { [weak self] in
-                try? await Task.sleep(for: Self.replyTimeout)
+                try? await Task.sleep(for: timeout)
                 guard !Task.isCancelled else { return }
                 self?.timedOut(id: id, generation: current)
             }

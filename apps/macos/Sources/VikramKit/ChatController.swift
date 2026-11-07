@@ -80,10 +80,10 @@ public final class ChatController {
     public var chat: Chat? { selected.flatMap { cache[$0] } }
     public var draft: String { selected.flatMap { drafts[$0] } ?? "" }
 
-    /// The open chat's model, when Ollama has it.
+    /// The open chat's explicitly selected model, when its provider has it.
     public var model: LocalModel? {
         guard let name = chat?.model else { return nil }
-        return models.first { $0.name == name && $0.available }
+        return models.first { $0.matches(name) && $0.available }
     }
 
     public var lastModel: String? { preferences["last_model"]?.string }
