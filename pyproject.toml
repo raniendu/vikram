@@ -17,7 +17,7 @@ dependencies = [
     "pypdf>=6.20.1,<7",
     "python-docx>=1.2,<2",
     "rich>=15,<16",
-    "smolmachines==1.29.1 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')",
+    "smolmachines==1.32.4 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')",
 ]
 
 [build-system]
