@@ -2,11 +2,11 @@
   "format": 1,
   "inputs": {
     "image": "sha256:e041b488453556787172f43845c9e0e90b9fb4a91452498420fb2011b23241b6",
-    "smolmachines": "1.29.1",
+    "smolmachines": "1.32.4",
     "smol": {
-      "THIRD_PARTY_NOTICES.md": "02cd31efc294798d8af418d3e8c918a821fe5a23f8cd80bff0a328cb11f12b17",
-      "agent-rootfs.tar.zst": "a71d09f238ba5b29405719d6e94047d96dad8e415c344e3ab3ccdb3182f47609",
-      "libkrunfw.5.dylib": "ef538c621f724e5ab7bfa8711ecd2c242a56e67bb626b488d4d38d54495402bc"
+      "THIRD_PARTY_NOTICES.md": "eba5532d37a1d97e8e38bf35b55a9d5eb2efa443a78a2ed8b41b56ef2d4c6bc2",
+      "agent-rootfs.tar.zst": "897457172edec81fefe5f188c95e7c94be54139a67bbd2e724c15008ea079155",
+      "libkrunfw.5.dylib": "55f52bca590252a568a88a8af99036157b4330c1ee32aff890ef0907c68957ff"
     }
   },
   "image": {
@@ -702,7 +702,7 @@
       "folder": "vm-runtime/libkrunfw-5.5.0",
       "name": "libkrunfw",
       "version": "5.5.0",
-      "revision": "8ba5fe2219b5c407ce1824d1c2dcf39adff84d8e",
+      "revision": "04121e2e79766f6b68936fd4a82fed37444de5ff",
       "licenses": [
         "GPL-2.0-only",
         "LGPL-2.1-only"
@@ -710,10 +710,10 @@
       "for": "the VM runtime's kernel library, and the kernel's configuration and patches",
       "files": [
         {
-          "name": "libkrunfw-8ba5fe2219b5c407ce1824d1c2dcf39adff84d8e.tar.gz",
-          "url": "https://github.com/smol-machines/libkrunfw/archive/8ba5fe2219b5c407ce1824d1c2dcf39adff84d8e.tar.gz",
-          "size": 1865713,
-          "sha256": "0b9dd96f457f4ca144b7a8fb6a56db04c7a48eef46336d3e305b50f593576984"
+          "name": "libkrunfw-04121e2e79766f6b68936fd4a82fed37444de5ff.tar.gz",
+          "url": "https://github.com/smol-machines/libkrunfw/archive/04121e2e79766f6b68936fd4a82fed37444de5ff.tar.gz",
+          "size": 1868995,
+          "sha256": "963c3ffc7e9d45e5913a22e4c9c34e73eb83a66f9c5763b9330de46e8ae42ca7"
         }
       ]
     },

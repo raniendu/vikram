@@ -1629,12 +1629,12 @@ wheels = [
 
 [[package]]
 name = "smolmachines"
-version = "1.29.1"
+version = "1.32.4"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f0/b0/05bfe6eaece199e70851156cf414614f208918cec3ae893a431203df4a1a/smolmachines-1.29.1-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:1e7db7c2d4289aa7b396a39446a526a471b9e62849258af4bfed9958bfa9748a", size = 43446213, upload-time = "2026-10-17T03:02:38.047Z" },
-    { url = "https://files.pythonhosted.org/packages/7f/2e/c9f2d9b9ad8cad47b1a326aed907250c79b59e9292d7ae2f360b2c6ed064/smolmachines-1.29.1-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:f1c02e626df9943d19b3bdb8ae48defafe8d596c194a7e3eee04c7340f02ae5d", size = 42016158, upload-time = "2026-10-17T03:02:41.436Z" },
-    { url = "https://files.pythonhosted.org/packages/7a/6f/096bec819c2196abd4725419d0a6675af0adcc5bccba2e5ede4fb694f86f/smolmachines-1.29.1-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:aacf64c15181e9f1be7621b8f1880cf069177556c23961d024081c9ba5394f27", size = 43970462, upload-time = "2026-10-17T03:02:44.166Z" },
+    { url = "https://files.pythonhosted.org/packages/e6/e0/a2764fd636260c62224d424887139fbe5be29d7cc29cf2c5544b310ad274/smolmachines-1.32.4-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:1ec9dd6371ce3363e70bc5c059735dc058fd6e8b8e36e1074af23e5a2cc58cb4", size = 43890694, upload-time = "2026-10-28T11:40:25.177Z" },
+    { url = "https://files.pythonhosted.org/packages/17/c3/4503faf3a6237a4fccc6a1f23e0b982790fb68f496e4cf089f298fe5622a/smolmachines-1.32.4-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:a3c070c83e5f8f18a1833483595fcc49277c39cc4b5276237b84283d5ab5b4f2", size = 42419704, upload-time = "2026-10-28T11:40:29.037Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/ec/0e037854cc9cf08a85dc98e51485f9cefed9404183c82dfd78a91dcff355/smolmachines-1.32.4-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:dcbd0f51c26fb51ee19c7bd87ac0c11ca17d09fabf3bc593121cad43cd95bf56", size = 44489257, upload-time = "2026-10-28T11:40:34.446Z" },
 ]
 
 [[package]]
@@ -1814,7 +1814,7 @@ requires-dist = [
     { name = "pypdf", specifier = ">=6.20.1,<7" },
     { name = "python-docx", specifier = ">=1.2,<2" },
     { name = "rich", specifier = ">=15,<16" },
-    { name = "smolmachines", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')", specifier = "==1.29.1" },
+    { name = "smolmachines", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')", specifier = "==1.32.4" },
 ]
 
 [package.metadata.requires-dev]
