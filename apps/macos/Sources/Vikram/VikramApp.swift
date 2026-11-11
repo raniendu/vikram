@@ -12,6 +12,7 @@ struct VikramApp: App {
                 .environment(state)
                 .environment(state.chats)
                 .environment(state.schedules)
+                .environment(state.bots)
                 .environment(state.updates)
                 .environment(state.workbench)
                 .environment(state.browser)
@@ -47,6 +48,12 @@ struct AppCommands: Commands {
         }
         SidebarCommands()
         InspectorCommands()
+        CommandMenu("Bots") {
+            Button("Home") { state.selection = .home }
+                .keyboardShortcut("1")
+            Button("Bots") { state.selection = .bots }
+                .keyboardShortcut("2")
+        }
         CommandMenu("Chat") {
             Button("Send") { Task { await state.chats.send() } }
                 .keyboardShortcut(.return, modifiers: .command)

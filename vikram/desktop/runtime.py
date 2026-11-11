@@ -10,6 +10,7 @@ from collections.abc import Callable
 from uuid import uuid4
 
 from vikram.agent import DEFAULT_MODEL
+from vikram.bots import BotStore, importable, templates
 from vikram.browser import ACTION_TIMEOUT, BrowserUnavailable
 from vikram.documents import ensure_space, extract_in_worker
 from vikram.errors import reply_error
@@ -172,6 +173,7 @@ class Runtime:
         self.background = "unavailable"
         self.watcher: asyncio.Task | None = None
         self.start_runner = start_runner
+        self._bots: BotStore | None = None
         from vikram.workbench import Workbench
 
         self.workbench = Workbench(self)
@@ -185,6 +187,13 @@ class Runtime:
             self._schedules = ScheduleStore(self.store.root)
         return self._schedules
 
+    @property
+    def bots(self) -> BotStore:
+        """Bots share the scheduled-task file and its background runner."""
+        if self._bots is None:
+            self._bots = BotStore(self.schedules)
+        return self._bots
+
     def tasks_changed(self) -> None:
         """After a change here: match the agent to the tasks, tell the window."""
         self.background = ensure_agent(self.schedules, self.agent)
@@ -193,14 +202,17 @@ class Runtime:
     async def watch_schedules(self, interval: float = 2.0) -> None:
         """Tell the window when a background run or the CLI changes tasks."""
         seen = self.schedules.data_version()
+        elapsed = 0.0
         while True:
             await asyncio.sleep(interval)
+            elapsed += interval
             try:
                 version = self.schedules.data_version()
             except sqlite3.Error:
                 continue
-            if version != seen:
-                seen = version
+            if version != seen or elapsed >= 60:
+                # Snooze expiry and liveness can change without a DB writer.
+                seen, elapsed = version, 0.0
                 self.event("schedules")
 
     def schedule_list(self) -> dict:
@@ -244,6 +256,7 @@ class Runtime:
                 "compaction",
                 "mcp",
                 "extensions",
+                "bots",
             ],
             "browser": (
                 {"control": self.browser.control} if self.browser is not None else None
@@ -742,6 +755,15 @@ class Runtime:
             "open_run",
         }:
             return await self.schedule_command(method, p)
+        if method.endswith("_bot") or method in {
+            "home",
+            "bots",
+            "bot",
+            "bot_templates",
+            "finding",
+            "finding_feedback",
+        }:
+            return await self.bot_command(method, p)
         if method == "hello":
             self.updater.watch()
             return {"protocol": 1, **self.snapshot()}
@@ -834,20 +856,86 @@ class Runtime:
             raise ValueError("Unknown command.")
         return None
 
-    async def schedule_command(self, method: str, p: dict):
-        """The window's scheduled-task commands; runs happen in the background."""
-        tasks = self.schedules
+    def _watch(self) -> None:
+        """Start telling the window about background changes, once."""
         if self.watcher is None:
             # The window asks for the task list when it opens.
             self.watcher = asyncio.create_task(self.watch_schedules())
             # Keep an existing agent current, e.g. after an update.
-            self.background = ensure_agent(tasks, self.agent)
+            self.background = ensure_agent(self.schedules, self.agent)
+
+    def _check_model(self, model: str | None) -> None:
+        if model is not None and not any(
+            m["name"] == model and m["available"] for m in self.models
+        ):
+            raise ValueError("Choose an available model.")
+
+    async def bot_command(self, method: str, p: dict):
+        """The window's Home and bot commands; runs happen in the background."""
+        bots = self.bots
+        self._watch()
+        if method == "home":
+            return bots.home()
+        if method == "bots":
+            return {"bots": bots.bots(), "background": self.background}
+        if method == "bot":
+            return bots.bot(p["task_id"])
+        if method == "bot_templates":
+            return {"templates": templates()}
+        if method == "export_bot":
+            return bots.export(p["task_id"])
+        if method == "finding":
+            result = bots.set_finding(p["finding_id"], p["state"], until=p.get("until"))
+            self.event("schedules")
+            return result
+        if method == "finding_feedback":
+            result = bots.feedback(p["finding_id"], p["verdict"])
+            self.event("schedules")
+            return result
+        if method == "create_bot":
+            self._check_model(p["fields"].get("model"))
+            result = bots.create(p["fields"], origin="app")
+        elif method == "import_bot":
+            fields = importable(p["config"])
+            self._check_model(fields.get("model"))
+            result = bots.create(fields, origin="app", enabled=False)
+        elif method == "update_bot":
+            self._check_model(p["fields"].get("model"))
+            result = bots.update(p["task_id"], p["fields"])
+        elif method == "delete_bot":
+            bots.delete(p["task_id"])
+            result = None
+        elif method == "reset_bot":
+            bots.reset(p["task_id"])
+            result = bots.bot(p["task_id"])
+        elif method == "run_bot":
+            result = bots.request_run(p["task_id"])
+            try:
+                self.start_runner()
+            except OSError:
+                raise ValueError(
+                    "The background runner could not start. The run will start "
+                    "within a minute if background runs are on."
+                ) from None
+        else:
+            raise ValueError("Unknown command.")
+        self.tasks_changed()
+        return result
+
+    async def schedule_command(self, method: str, p: dict):
+        """The window's scheduled-task commands; runs happen in the background."""
+        tasks = self.schedules
+        self._watch()
         if method == "schedules":
             return self.schedule_list()
         if method == "schedule":
             return tasks.task(p["task_id"])
         if method == "schedule_run":
             return tasks.run(p["run_id"])
+        if method == "convert_schedule":
+            result = self.bots.convert_schedule(p["task_id"])
+            self.tasks_changed()
+            return result
         if method == "open_run":
             run = tasks.run(p["run_id"])
             if run["status"] == "running":

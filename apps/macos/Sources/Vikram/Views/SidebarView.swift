@@ -23,6 +23,7 @@ struct SidebarView: View {
     @Environment(AppState.self) private var state
     @Environment(ChatController.self) private var chats
     @Environment(ScheduleController.self) private var schedules
+    @Environment(BotController.self) private var bots
     @Binding var sheet: SidebarSheet?
     @Binding var deletingChat: ChatSummary?
     @State private var search = ""
@@ -39,6 +40,12 @@ struct SidebarView: View {
         @Bindable var state = state
         List(selection: $state.selection) {
             Section {
+                Label("Home", systemImage: "house")
+                    .badge(bots.attentionCount)
+                    .tag(SidebarItem.home)
+                Label("Bots", systemImage: "sparkles")
+                    .badge(bots.bots.count)
+                    .tag(SidebarItem.bots)
                 Label {
                     Text("Scheduled")
                 } icon: {
@@ -63,7 +70,7 @@ struct SidebarView: View {
                         Text("A little room for your thoughts.").foregroundStyle(Theme.muted)
                     }
                 } header: {
-                    Eyebrow("Conversations")
+                    Eyebrow("Default Bot · Conversations")
                 }
                 ForEach(chats.folders) { folder in
                     Section(

@@ -13,8 +13,22 @@ Ollama remains default; no automatic cloud fallback. Project configuration canno
 establish trust or select cloud inference. Host coding and extensions run with
 user privileges; never describe them as sandboxed. Keep unknown/destructive,
 outside-workspace, credential, install and remote-mutation approvals in the shared
-dispatcher. Plan mode does not execute host mutations or extension code. Scheduled
-runs and evaluations remain local and do not gain host tools/extensions. Bundle
+dispatcher. Plan mode does not execute host mutations or extension code. Legacy
+scheduled prompts and evaluations remain local and do not gain host tools/extensions.
+Bot runs may use OpenRouter only with an explicit per-bot grant (never inherited
+from the default bot); the owner requested the bot-centered product and approved
+sandbox-only unattended execution, search/fetch only, Home/macOS notifications,
+explicit per-bot cloud selection, and Home-first navigation with chat retained.
+See `docs/superpowers/specs/2026-11-10-bots-and-home-design.md` for implementation
+coverage and remaining work. Bots reuse the single agent, scheduler, and private
+stdio service: no multi-agent framework or new server. Do not broaden the VM's
+network/mount policy or enable unattended host tools for Dependency Keeper.
+Its unavailable template is intentional until a repository sandbox is approved.
+Imports and explicit scheduled-prompt conversion start paused and carry no cloud
+permission. Quiet requires a typed report and successful source retrieval;
+failures do not advance the last verified baseline. Findings are proposals and
+never confer execution authority. Keep monetary-cap gaps explicit; time/request/
+tool budgets are not spending caps. Bundle
 the pinned extension CPython and worker SDK, licenses and exact required sources;
 never fall back to system Python in a frozen install. Composition code runs only
 in the existing VM, with no network or mounts, through the bounded tool broker.
@@ -110,6 +124,10 @@ or public server surfaces.
 - `vikram/toolkit.py`, `interaction.py`: sandbox, questions, plan mode, browser
   tools, and the answer/review/approval contract each interface implements.
 - `vikram/sandbox.py`: the per-reply Python microVM, its pinned image, and cleanup.
+- `vikram/bots.py`, `bots_cli.py`: specialist configuration, templates, Home,
+  findings/materiality, feedback, delivery receipts and unattended bot runs;
+  bots share `schedules.sqlite3` and the LaunchAgent. Native surfaces are
+  `BotController.swift`, `HomeView.swift`, and `BotsView.swift`.
 - `vikram/schedules.py`: scheduled tasks and runs (`schedules.sqlite3` beside the
   chats), schedule parsing and repair, the unattended runner
   (`vikram-sidecar --run-schedules`), notifications, and the LaunchAgent.

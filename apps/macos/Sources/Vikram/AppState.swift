@@ -3,16 +3,32 @@ import SwiftUI
 import UniformTypeIdentifiers
 import VikramKit
 
-/// What the sidebar has selected: a chat, or the scheduled tasks.
+/// What the sidebar has selected: Home, the bots, the scheduled tasks, or a chat.
 enum SidebarItem: Hashable {
-    case chat(String)
+    case home
+    case bots
     case scheduled
+    case chat(String)
 }
 
 /// A step into a scheduled task or one of its runs.
 enum ScheduleRoute: Hashable {
     case task(String)
     case run(String)
+}
+
+/// A step into a bot or one of its runs.
+enum BotRoute: Hashable {
+    case bot(String)
+    case run(String)
+}
+
+/// The full-window screens besides a chat.
+enum Screen: Hashable {
+    case chat
+    case home
+    case bots
+    case scheduled
 }
 
 /// The app: its chat service, the controllers the window shows, the browser
@@ -22,13 +38,21 @@ final class AppState {
     let service: ServiceConnection
     let chats: ChatController
     let schedules: ScheduleController
+    let bots: BotController
     let updates: UpdateController
     let workbench: WorkbenchController
     let browser = BrowserEngine()
 
-    var showsScheduled = false
+    /// Home first: the window opens on what the bots need from the person.
+    var screen: Screen = .home
     var showsWorkbench = false
     var schedulePath: [ScheduleRoute] = []
+    var botPath: [BotRoute] = []
+
+    var showsScheduled: Bool {
+        get { screen == .scheduled }
+        set { if newValue { screen = .scheduled } else if screen == .scheduled { screen = .chat } }
+    }
     /// The person hid the browser panel without closing the browser.
     var browserHidden = false
     private(set) var exiting = false
@@ -46,6 +70,7 @@ final class AppState {
         self.chats = chats
         workbench = WorkbenchController(service: service, chats: chats)
         schedules = ScheduleController(service: service)
+        bots = BotController(service: service)
         updates = UpdateController(service: service)
         service.onEvent = { [weak self] event in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.receive(event) } }
@@ -63,6 +88,7 @@ final class AppState {
         await chats.boot()
         guard !chats.offline else { return }
         try? await schedules.refresh()
+        try? await bots.refresh()
         await updates.load()
         await workbench.refresh(chatId: chats.selected)
     }
@@ -70,7 +96,10 @@ final class AppState {
     private func receive(_ event: JSONValue) {
         switch event["event"]?.string {
         case "update": updates.handle(event)
-        case "schedules": schedules.changed()
+        case "schedules":
+            // Bots share the scheduled-task file, so one event covers both.
+            schedules.changed()
+            bots.changed()
         default:
             if let event = try? event.decode(RuntimeEvent.self) {
                 chats.handle(event)
@@ -88,19 +117,34 @@ final class AppState {
 
     var selection: SidebarItem? {
         get {
-            if showsScheduled { return .scheduled }
-            return chats.selected.map(SidebarItem.chat)
+            switch screen {
+            case .home: return .home
+            case .bots: return .bots
+            case .scheduled: return .scheduled
+            case .chat: return chats.selected.map(SidebarItem.chat)
+            }
         }
         set {
             switch newValue {
+            case .home?:
+                if screen != .home {
+                    screen = .home
+                    Task { try? await bots.refresh() }
+                }
+            case .bots?:
+                if screen != .bots {
+                    screen = .bots
+                    botPath = []
+                    Task { await bots.openBot(nil) }
+                }
             case .scheduled?:
-                if !showsScheduled {
-                    showsScheduled = true
+                if screen != .scheduled {
+                    screen = .scheduled
                     schedulePath = []
                     Task { await schedules.openTask(nil) }
                 }
             case .chat(let id)?:
-                showsScheduled = false
+                screen = .chat
                 if id != chats.selected { Task { await chats.select(id) } }
             case nil:
                 break
@@ -109,8 +153,19 @@ final class AppState {
     }
 
     func newChat(folder: String? = nil) {
-        showsScheduled = false
+        screen = .chat
         Task { await chats.newChat(folder: folder) }
+    }
+
+    func openBot(_ id: String) {
+        screen = .bots
+        botPath = [.bot(id)]
+    }
+
+    /// A bot's run, from Home or the bot's page.
+    func openBotRun(_ botId: String, _ runId: String) {
+        screen = .bots
+        botPath = [.bot(botId), .run(runId)]
     }
 
     func chooseModel(_ name: String) async {
@@ -127,12 +182,12 @@ final class AppState {
     }
 
     func openChat(_ id: String) {
-        showsScheduled = false
+        screen = .chat
         Task { await chats.select(id) }
     }
 
     func openTask(_ id: String) {
-        showsScheduled = true
+        screen = .scheduled
         schedulePath = [.task(id)]
     }
 
@@ -150,7 +205,10 @@ final class AppState {
     func reconnect() async {
         browser.close()
         await chats.reconnect()
-        if !chats.offline { try? await schedules.refresh() }
+        if !chats.offline {
+            try? await schedules.refresh()
+            try? await bots.refresh()
+        }
     }
 
     // MARK: Attachments

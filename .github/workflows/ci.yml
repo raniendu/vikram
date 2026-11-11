@@ -5,12 +5,17 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
       - name: Install dependencies
         run: uv sync --locked
       - name: Check CLI startup
@@ -21,12 +26,19 @@ jobs:
         run: uv run black --check vikram
       - name: Check import ordering
         run: uv run isort --check-only vikram
+      - name: Bot and scheduler offline regression tests
+        run: |
+          uv run python -m unittest discover -s tests -p 'test_bots.py'
+          uv run python -m unittest discover -s tests -p 'test_schedules.py'
+          uv run python -m unittest discover -s tests -p 'test_desktop_protocol.py'
 
   app:
     name: Native app
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
       - name: Build the app
         run: xcrun swift build --package-path apps/macos
       - name: Run the app's offline tests

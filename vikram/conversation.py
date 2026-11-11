@@ -77,6 +77,7 @@ async def stream_reply(
     coding=None,
     instructions: str = "",
     request_boundary=None,
+    usage_limits: UsageLimits | None = None,
 ) -> AsyncIterator[dict]:
     """Stream one reply. Tool-capable models (web "auto") also get the toolkit.
 
@@ -194,7 +195,8 @@ async def stream_reply(
                     deps=reply,
                     message_history=history,
                     model_settings=model_settings(model, thinking),
-                    usage_limits=UsageLimits(request_limit=REQUEST_LIMIT),
+                    usage_limits=usage_limits
+                    or UsageLimits(request_limit=REQUEST_LIMIT),
                 ) as events:
                     async for event in events:
                         if isinstance(event, PartStartEvent):
@@ -261,9 +263,13 @@ async def stream_reply(
                                 )
                             send(usage=counts)
         except Exception as exc:
-            queue.put_nowait(
-                ReplyError(reply_error(exc, provider=ModelRef.parse(model).provider))
+            error = ReplyError(
+                reply_error(exc, provider=ModelRef.parse(model).provider)
             )
+            # Preserve the typed cause for unattended budget handling without
+            # exposing provider exception text in the transcript.
+            error.__cause__ = exc
+            queue.put_nowait(error)
         finally:
             if reply.sandbox is not None:
                 # Shielded: a second stop must not leave the VM running.

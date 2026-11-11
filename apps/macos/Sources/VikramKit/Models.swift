@@ -710,9 +710,14 @@ public struct RunSummary: Sendable, Hashable, Codable, Identifiable {
     public var model: String?
     public var actualModel: String?
     public var preview: String?
+    /// A bot run's derived outcome: quiet, updated, needs-attention, blocked,
+    /// failed, or incomplete; nil for a scheduled prompt's run.
+    public var outcome: String?
+    /// A bot run's one-line report.
+    public var report: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, trigger, started, finished, status, error, model, preview
+        case id, trigger, started, finished, status, error, model, preview, outcome, report
         case scheduledFor = "scheduled_for"
         case actualModel = "actual_model"
     }
@@ -722,6 +727,7 @@ public struct LastRun: Sendable, Hashable, Codable {
     public var id: String
     public var status: String
     public var started: Double
+    public var outcome: String?
 }
 
 public struct ScheduledTask: Sendable, Hashable, Codable, Identifiable {
@@ -830,6 +836,199 @@ public struct ScheduleList: Sendable, Decodable {
     public var tasks: [ScheduledTask]
     /// on, off, unavailable, or failed: whether this Mac runs tasks in the background.
     public var background: String
+}
+
+// MARK: Bots
+
+/// One thing a bot reported. Findings with the same key merge; dismissed ones
+/// stay quiet until the fact behind them changes.
+public struct Finding: Sendable, Hashable, Codable, Identifiable {
+    public var id: String
+    public var taskId: String
+    public var runId: String?
+    public var key: String
+    /// decision, approval, material-change, failure, or fyi.
+    public var kind: String
+    /// attention, material, or info.
+    public var severity: String
+    public var title: String
+    public var detail: String
+    public var sources: [String]
+    /// new, seen, snoozed, resolved, or dismissed.
+    public var state: String
+    /// Held on the bot's page as uncertain; never on Home.
+    public var held: Bool
+    public var count: Int
+    public var firstSeen: Double
+    public var lastSeen: Double
+    public var updated: Double
+    public var snoozedUntil: Double?
+    public var botName: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, key, kind, severity, title, detail, sources, state, held, count, updated
+        case taskId = "task_id"
+        case runId = "run_id"
+        case firstSeen = "first_seen"
+        case lastSeen = "last_seen"
+        case snoozedUntil = "snoozed_until"
+        case botName = "bot_name"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        taskId = try c.decode(String.self, forKey: .taskId)
+        runId = try c.decodeIfPresent(String.self, forKey: .runId)
+        key = try c.decode(String.self, forKey: .key)
+        kind = try c.decode(String.self, forKey: .kind)
+        severity = try c.decode(String.self, forKey: .severity)
+        title = try c.decode(String.self, forKey: .title)
+        detail = (try c.decodeIfPresent(String.self, forKey: .detail)) ?? ""
+        sources = (try c.decodeIfPresent([String].self, forKey: .sources)) ?? []
+        state = try c.decode(String.self, forKey: .state)
+        held = (try c.decodeIfPresent(Bool.self, forKey: .held)) ?? false
+        count = (try c.decodeIfPresent(Int.self, forKey: .count)) ?? 1
+        firstSeen = (try c.decodeIfPresent(Double.self, forKey: .firstSeen)) ?? 0
+        lastSeen = (try c.decodeIfPresent(Double.self, forKey: .lastSeen)) ?? 0
+        updated = (try c.decodeIfPresent(Double.self, forKey: .updated)) ?? 0
+        snoozedUntil = try c.decodeIfPresent(Double.self, forKey: .snoozedUntil)
+        botName = (try c.decodeIfPresent(String.self, forKey: .botName)) ?? ""
+    }
+}
+
+/// A bot as the service lists it; `config`, `findings`, `runs`, and
+/// `lastSummary` are present when the service sends one bot in detail.
+public struct Bot: Sendable, Hashable, Codable, Identifiable {
+    public var id: String
+    public var name: String
+    public var mandate: String
+    public var template: String?
+    public var description: String
+    public var schedule: ScheduleTime
+    public var model: String?
+    /// Explicit OpenRouter opt-in for this bot.
+    public var cloud: Bool
+    public var enabled: Bool
+    /// scheduled, paused, or done.
+    public var state: String
+    public var nextRun: Double?
+    public var runRequested: Bool
+    public var lastRun: LastRun?
+    public var lastComplete: Double?
+    public var expectedDays: Int?
+    /// No completed run inside the expected period.
+    public var overdue: Bool
+    /// attention, findings, or never.
+    public var notify: String
+    public var budgetMinutes: Int
+    public var attention: Int
+    public var material: Int
+    public var info: Int
+    public var held: Int
+    public var created: Double
+    public var updated: Double
+    public var config: JSONValue?
+    public var findings: [Finding]?
+    public var runs: [RunSummary]?
+    public var lastSummary: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, mandate, template, description, schedule, model, cloud, enabled, state
+        case overdue, notify, attention, material, info, held, created, updated, config, findings
+        case runs
+        case nextRun = "next_run"
+        case runRequested = "run_requested"
+        case lastRun = "last_run"
+        case lastComplete = "last_complete"
+        case expectedDays = "expected_days"
+        case budgetMinutes = "budget_minutes"
+        case lastSummary = "last_summary"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        mandate = (try c.decodeIfPresent(String.self, forKey: .mandate)) ?? ""
+        template = try c.decodeIfPresent(String.self, forKey: .template)
+        description = (try c.decodeIfPresent(String.self, forKey: .description)) ?? ""
+        schedule = try c.decode(ScheduleTime.self, forKey: .schedule)
+        model = try c.decodeIfPresent(String.self, forKey: .model)
+        cloud = (try c.decodeIfPresent(Bool.self, forKey: .cloud)) ?? false
+        enabled = (try c.decodeIfPresent(Bool.self, forKey: .enabled)) ?? true
+        state = (try c.decodeIfPresent(String.self, forKey: .state)) ?? "scheduled"
+        nextRun = try c.decodeIfPresent(Double.self, forKey: .nextRun)
+        runRequested = (try c.decodeIfPresent(Bool.self, forKey: .runRequested)) ?? false
+        lastRun = try? c.decodeIfPresent(LastRun.self, forKey: .lastRun)
+        lastComplete = try c.decodeIfPresent(Double.self, forKey: .lastComplete)
+        expectedDays = try c.decodeIfPresent(Int.self, forKey: .expectedDays)
+        overdue = (try c.decodeIfPresent(Bool.self, forKey: .overdue)) ?? false
+        notify = (try c.decodeIfPresent(String.self, forKey: .notify)) ?? "attention"
+        budgetMinutes = (try c.decodeIfPresent(Int.self, forKey: .budgetMinutes)) ?? 10
+        attention = (try c.decodeIfPresent(Int.self, forKey: .attention)) ?? 0
+        material = (try c.decodeIfPresent(Int.self, forKey: .material)) ?? 0
+        info = (try c.decodeIfPresent(Int.self, forKey: .info)) ?? 0
+        held = (try c.decodeIfPresent(Int.self, forKey: .held)) ?? 0
+        created = (try c.decodeIfPresent(Double.self, forKey: .created)) ?? 0
+        updated = (try c.decodeIfPresent(Double.self, forKey: .updated)) ?? 0
+        config = try c.decodeIfPresent(JSONValue.self, forKey: .config)
+        findings = try c.decodeIfPresent([Finding].self, forKey: .findings)
+        runs = try c.decodeIfPresent([RunSummary].self, forKey: .runs)
+        lastSummary = try c.decodeIfPresent(String.self, forKey: .lastSummary)
+    }
+}
+
+/// The Home page: what needs you, what changed, and every bot's health.
+public struct Home: Sendable, Decodable {
+    public var needsYou: [Finding]
+    public var material: [Finding]
+    /// Bots with no completed run inside their expected period.
+    public var stale: [Bot]
+    public var bots: [Bot]
+
+    enum CodingKeys: String, CodingKey {
+        case material, stale, bots
+        case needsYou = "needs_you"
+    }
+
+    public static let empty = Home(needsYou: [], material: [], stale: [], bots: [])
+
+    public init(needsYou: [Finding], material: [Finding], stale: [Bot], bots: [Bot]) {
+        self.needsYou = needsYou
+        self.material = material
+        self.stale = stale
+        self.bots = bots
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        needsYou = (try c.decodeIfPresent([Finding].self, forKey: .needsYou)) ?? []
+        material = (try c.decodeIfPresent([Finding].self, forKey: .material)) ?? []
+        stale = (try c.decodeIfPresent([Bot].self, forKey: .stale)) ?? []
+        bots = (try c.decodeIfPresent([Bot].self, forKey: .bots)) ?? []
+    }
+
+    /// Nothing waits for the person.
+    public var isCalm: Bool { needsYou.isEmpty && stale.isEmpty }
+}
+
+public struct BotTemplate: Sendable, Hashable, Decodable, Identifiable {
+    public var id: String
+    public var title: String
+    public var summary: String
+    public var available: Bool
+    /// Why an unavailable template cannot be used yet.
+    public var reason: String?
+}
+
+public struct BotList: Sendable, Decodable {
+    public var bots: [Bot]
+    public var background: String
+}
+
+public struct TemplateList: Sendable, Decodable {
+    public var templates: [BotTemplate]
 }
 
 // MARK: Updates
