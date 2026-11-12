@@ -160,7 +160,7 @@ Unimplemented work is not silently reclassified as done.
 | K2 | Partial | Offline config/storage/runner/protocol/Swift regression fixtures and focused CI; full real-task contract fixtures remain with the corresponding bot implementations. |
 | L1 | Done | Shareable versioned JSON configs; imports strip cloud permission and start paused. |
 
-## Verification
+## Original implementation verification
 
 Offline tests cover schema validation, cloud grants/default inheritance, config
 round trips, migration/conversion, reports/outcomes, source-evidence failures,
@@ -197,3 +197,50 @@ fallback verification. Packaged-install/real-LaunchAgent and visual UI validatio
 were not performed in this implementation turn.
 No installed user library, LaunchAgent, external schedules, cloud-model calls,
 release tag, merge, or deployment is part of this implementation turn.
+
+## Follow-up: Bots page interaction correction
+
+The first shipped page rendered template rows as descriptive text, not buttons.
+Its editor did not load template-owned defaults: Page Watcher incorrectly began
+with the generic weekly schedule instead of its daily 09:00 schedule. Template
+loading errors were silently converted to an empty array; detail errors could
+leave an indefinite spinner or stale selection. A successful create followed by
+a failed refresh was also reported as a failed mutation, inviting duplicate bots.
+
+The correction adds explicit Use Template controls and one seeded editor shared
+with New Bot. Read-only defaults come from the existing template definitions,
+not duplicated Swift constants. Unavailable templates cannot open a creation
+draft or acquire capabilities. New drafts never inherit cloud grants. Edit
+preserves monthly/one-time schedules and disabled liveness; explicit null values
+survive subsequent updates and config import/export.
+
+List/template/detail failures have visible retry states. Late detail responses
+cannot replace a newer selection. An acknowledged mutation remains successful
+when a later refresh fails, with a separate stale-status warning. Run navigation
+clears old evidence before loading the requested run.
+
+Regression coverage includes each template's seed values, template changes,
+form validation, optional-value preservation, template retry, successful-create/
+failed-refresh handling, late detail responses, and native-shaped field payloads
+through the real private Python protocol. An attempted native click test could
+not retrieve SwiftUI controls in this environment; Screen Recording and
+Accessibility permissions were denied. It is not counted as passing UI
+verification and no existing tests are disabled or weakened.
+
+Focused verification passed: 37 bot tests, 32 scheduler tests, seven private
+protocol tests, and all 45 native tests in a serial run, plus the native build,
+formatting and syntax checks. A concurrent native test run failed in the unchanged
+WebKit page-script suite and aborted on its existing out-of-range assertion; the
+serial rerun passed without altering that test. Fresh Pi Lens probes returned no
+findings but retained incomplete primary LSP coverage. None of these checks is a
+claim that the installed UI was click-tested.
+
+Manual UI acceptance still required on a permission-enabled Mac:
+
+1. Click each supported template row; inspect its name, mandate, charter, rubric,
+   schedule and liveness defaults. Cancel and verify no bot was created.
+2. Confirm blocked templates show their reason and cannot open an editor.
+3. Create a personalized bot, inspect its detail, edit it, navigate back, and
+   reopen it. Confirm the intended schedule and optional values survived.
+4. Retry a failed list/template/detail load. A failed refresh after creation
+   must not invite a second creation or show another bot's detail/evidence.

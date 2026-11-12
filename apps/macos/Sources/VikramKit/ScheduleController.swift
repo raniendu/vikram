@@ -50,8 +50,10 @@ public final class ScheduleController {
                     .decode(TaskRun.self)
                 if openRunId == runId { run = loaded }
             } catch {
-                openRunId = nil
-                run = nil
+                if openRunId == runId {
+                    run = nil
+                    fail(error)
+                }
             }
         }
     }
@@ -85,15 +87,15 @@ public final class ScheduleController {
 
     public func openRun(_ id: String?) async {
         openRunId = id
-        guard let id else {
-            run = nil
-            return
-        }
+        run = nil
+        error = nil
+        guard let id else { return }
         do {
-            run = try await service.call("schedule_run", ["run_id": .string(id)])
+            let loaded = try await service.call("schedule_run", ["run_id": .string(id)])
                 .decode(TaskRun.self)
+            if openRunId == id { run = loaded }
         } catch {
-            fail(error)
+            if openRunId == id { fail(error) }
         }
     }
 

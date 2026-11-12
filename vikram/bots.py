@@ -336,6 +336,9 @@ def templates() -> list[dict]:
             "summary": value["summary"],
             "available": value["available"],
             "reason": value.get("reason"),
+            # The editor must use the same defaults as config_from, not a
+            # second hard-coded schedule/charter. No grants are imported here.
+            "defaults": copy.deepcopy(value["config"]) if value["available"] else None,
         }
         for key, value in TEMPLATES.items()
     ]
@@ -353,7 +356,11 @@ def config_from(fields: dict, *, now: datetime | None = None) -> BotConfig:
         if not entry["available"]:
             raise ValueError(f"{entry['title']} is not available: {entry['reason']}")
         base = copy.deepcopy(entry["config"])
-    merged = {**base, **{k: v for k, v in fields.items() if v is not None}}
+    nullable = {"model", "thinking", "expected_days"}
+    merged = {
+        **base,
+        **{k: v for k, v in fields.items() if v is not None or k in nullable},
+    }
     if isinstance(fields.get("materiality"), dict) and isinstance(
         base.get("materiality"), dict
     ):
@@ -510,7 +517,11 @@ class BotStore:
 
     def export(self, task_id: str) -> dict:
         """The bot's config as JSON-ready fields; `importable` strips its grants."""
-        return self._config(task_id).model_dump(mode="json", exclude_none=True)
+        config = self._config(task_id)
+        exported = config.model_dump(mode="json", exclude_none=True)
+        # Explicitly disabled liveness must survive template-based edits/imports.
+        exported["expected_days"] = config.expected_days
+        return exported
 
     # Changing
 

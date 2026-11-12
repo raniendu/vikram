@@ -12,13 +12,20 @@ struct HomeView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 26) {
         VStack(alignment: .leading, spacing: 8) {
-          Text(bots.home.isCalm ? "You're caught up." : "A few things need you.")
-            .font(Theme.display(32, relativeTo: .largeTitle))
+          Text(
+            !bots.loaded
+              ? "Your bots" : bots.home.isCalm ? "You're caught up." : "A few things need you."
+          )
+          .font(Theme.display(32, relativeTo: .largeTitle))
           Text("Your bots work in the background. Only what matters belongs here.")
             .foregroundStyle(Theme.muted)
         }
         if !bots.loaded {
-          ProgressView("Loading your bots…")
+          if bots.error != nil && !bots.loading {
+            Text("Your bots could not be loaded. Refresh to try again.")
+          } else {
+            ProgressView("Loading your bots…")
+          }
         } else {
           VStack(alignment: .leading, spacing: 12) {
             Eyebrow("Needs you")
