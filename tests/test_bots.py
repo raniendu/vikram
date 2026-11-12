@@ -75,6 +75,30 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unknown bot template"):
             config_from({"template": "nope", "name": "x"})
 
+    def test_template_payload_provides_detached_defaults_for_the_native_editor(self):
+        for entry in templates():
+            if not entry["available"]:
+                self.assertIsNone(entry["defaults"])
+                continue
+            config = config_from({"name": entry["title"], "template": entry["id"]})
+            self.assertEqual(entry["defaults"]["mandate"], config.mandate)
+            self.assertEqual(entry["defaults"]["charter"], config.charter)
+            self.assertEqual(
+                entry["defaults"]["schedule"],
+                config.schedule.model_dump(mode="json", exclude_none=True),
+            )
+            entry["defaults"]["charter"] = "Changed by a client"
+            again = next(t for t in templates() if t["id"] == entry["id"])
+            self.assertEqual(again["defaults"]["charter"], config.charter)
+
+    def test_explicit_null_clears_liveness_instead_of_reapplying_a_template(self):
+        config = config_from(
+            {"name": "Watch", "template": "page-watcher", "expected_days": None}
+        )
+        self.assertIsNone(config.expected_days)
+        inherited = config_from({"name": "Watch", "template": "page-watcher"})
+        self.assertEqual(inherited.expected_days, 3)
+
     def test_cloud_models_need_the_explicit_grant(self):
         fields = {
             "name": "Watch",
@@ -855,6 +879,7 @@ class CliTests(unittest.TestCase):
                 )
                 exported = json.loads(command("bots", "export", "Immigration"))
                 self.assertEqual(exported["max_requests"], 2)
+                self.assertEqual(exported["expected_days"], 10)
                 exported["mandate"] = "Track new official rules."
                 path = Path(directory) / "bot.json"
                 path.write_text(json.dumps(exported))
@@ -941,6 +966,44 @@ class DesktopTests(unittest.IsolatedAsyncioTestCase):
 
         cmd = validate_parameters(Command(v=1, id="x", method=method, params=params))
         return await self.runtime.command(cmd.method, cmd.params, "x")
+
+    async def test_native_template_form_round_trips_through_the_real_protocol(self):
+        listing = await self.command("bot_templates")
+        for entry in listing["templates"]:
+            if not entry["available"]:
+                continue
+            fields = {
+                **entry["defaults"],
+                "template": entry["id"],
+                "name": entry["title"],
+                "sources": ["https://example.gov/news"],
+                "model": None,
+                "cloud": False,
+                "expected_days": None,
+                "budget_minutes": 10,
+                "notify": "never",
+            }
+            bot = await self.command("create_bot", fields=fields)
+            self.assertEqual(bot["config"]["charter"], entry["defaults"]["charter"])
+            self.assertEqual(bot["config"]["schedule"], entry["defaults"]["schedule"])
+            self.assertIsNone(bot["expected_days"])
+            self.assertFalse(bot["cloud"])
+            self.assertIsNone(bot["model"])
+            loaded = await self.command("bot", task_id=bot["id"])
+            self.assertEqual(loaded["id"], bot["id"])
+            changed = await self.command(
+                "update_bot", task_id=bot["id"], fields={"name": "Renamed"}
+            )
+            self.assertEqual(changed["name"], "Renamed")
+            self.assertIsNone(changed["expected_days"])
+            exported = await self.command("export_bot", task_id=bot["id"])
+            self.assertIsNone(exported["expected_days"])
+            copied = await self.command("import_bot", config=exported)
+            self.assertIsNone(copied["expected_days"])
+            self.assertFalse(copied["enabled"])
+            await self.command("delete_bot", task_id=copied["id"])
+            await self.command("delete_bot", task_id=bot["id"])
+        self.assertEqual(self.started, 0)  # Editing never launches a run.
 
     async def test_the_window_manages_bots_and_findings(self):
         self.assertIn("bots", (await self.command("hello"))["capabilities"])

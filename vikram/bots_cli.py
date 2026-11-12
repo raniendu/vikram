@@ -216,6 +216,9 @@ def bots_main(argv: list[str]) -> int:
                     }.items()
                     if v is not None
                 }
+            # Omitted CLI options inherit template defaults; explicit JSON
+            # null remains available to the editor/import API to clear a value.
+            fields = {key: value for key, value in fields.items() if value is not None}
             bot = bots.create(fields, origin="cli")
             _after_change(store)
             print(

@@ -1020,6 +1020,8 @@ public struct BotTemplate: Sendable, Hashable, Decodable, Identifiable {
     public var available: Bool
     /// Why an unavailable template cannot be used yet.
     public var reason: String?
+    /// Server-owned defaults; absent for blocked templates or an older sidecar.
+    public var defaults: JSONValue?
 }
 
 public struct BotList: Sendable, Decodable {

@@ -247,10 +247,13 @@ script events, which a few sites ignore; take over for those. See the
 
 ## Bots and Home
 
-A bot owns an ongoing responsibility, independently of a conversation. Open
-**Bots → New Bot**, choose Topic Watcher, Page Watcher, or Release Watcher, then
-configure its responsibility, sources, schedule, model, time budget, materiality
-rubric, and notifications. Keep several specialists; the general-purpose default
+A bot owns an ongoing responsibility, independently of a conversation. In
+**Bots**, click **Use Template** beside Topic Watcher, Page Watcher, or Release
+Watcher (or use **New Bot**). The editor loads that template's responsibility,
+instructions, rubric, schedule, and overdue-check defaults before opening.
+Personalize its name, responsibility, sources, model, budget, and notifications.
+Unavailable templates stay disabled and explain the missing capability. Loading
+failures offer retry controls rather than looking like an empty list. Keep several specialists; the general-purpose default
 bot remains available for chat. Bots inherit the shared default **model** unless
 overridden, but never inherit permission to use cloud inference.
 

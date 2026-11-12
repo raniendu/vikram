@@ -17,9 +17,15 @@ public final class BotController {
   public var error: String?
   public private(set) var working = false
   public private(set) var loaded = false
+  public private(set) var loading = false
+  public private(set) var openingBot = false
+  public private(set) var openError: String?
+  public private(set) var templateError: String?
 
   @ObservationIgnored private let service: ServiceConnection
   @ObservationIgnored private var openBotId: String?
+  @ObservationIgnored private var openGeneration = 0
+  @ObservationIgnored private var reloadTask: Task<Void, Error>?
   @ObservationIgnored private var pendingReload: Task<Void, Never>?
 
   public init(service: ServiceConnection) {
@@ -32,30 +38,65 @@ public final class BotController {
   }
 
   public func refresh() async throws {
-    do { try await reload() } catch {
+    if let reloadTask { return try await reloadTask.value }
+    let task = Task { try await self.reload() }
+    reloadTask = task
+    loading = true
+    defer {
+      loading = false
+      reloadTask = nil
+    }
+    do {
+      try await task.value
+      error = nil
+    } catch {
       fail(error)
       throw error
     }
   }
 
   private func reload() async throws {
-    home = try await service.call("home").decode(Home.self)
+    let home = try await service.call("home").decode(Home.self)
     let list = try await service.call("bots").decode(BotList.self)
+    self.home = home
     bots = list.bots
     background = list.background
     loaded = true
-    if templates.isEmpty {
-      templates =
-        (try? await service.call("bot_templates").decode(TemplateList.self).templates)
-        ?? []
+    if templates.isEmpty || templateError != nil {
+      do {
+        templates = try await service.call("bot_templates").decode(TemplateList.self).templates
+        templateError =
+          templates.isEmpty ? "No templates were returned. Refresh or reconnect." : nil
+      } catch {
+        templateError =
+          (error as? ServiceError)?.message ?? "Templates could not be loaded. Try again."
+      }
     }
     if let id = openBotId {
       if list.bots.contains(where: { $0.id == id }) {
-        bot = try await service.call("bot", ["task_id": .string(id)]).decode(Bot.self)
+        await loadBot(id, generation: openGeneration)
       } else {
         openBotId = nil
+        openGeneration += 1
         bot = nil
+        openingBot = false
+        openError = "This bot no longer exists. Go back to the list."
       }
+    }
+  }
+
+  /// Supported templates open a fully seeded draft; blocked ones stay blocked.
+  public func draft(templateId: String? = nil) -> BotDraft? {
+    guard
+      let template = templateId.flatMap({ id in templates.first { $0.id == id } })
+        ?? (templateId == nil ? templates.first(where: \.available) : nil)
+    else {
+      error = "Templates have not loaded. Refresh the Bots page and try again."
+      return nil
+    }
+    do { return try BotDraft(template: template) } catch {
+      fail(error)
+      return nil
     }
   }
 
@@ -71,31 +112,48 @@ public final class BotController {
   }
 
   public func openBot(_ id: String?) async {
+    openGeneration += 1
     openBotId = id
-    guard let id else {
-      bot = nil
-      return
-    }
+    bot = nil
+    openError = nil
+    openingBot = id != nil
+    guard let id else { return }
+    await loadBot(id, generation: openGeneration)
+  }
+
+  private func loadBot(_ id: String, generation: Int) async {
     do {
-      bot = try await service.call("bot", ["task_id": .string(id)]).decode(Bot.self)
+      let result = try await service.call("bot", ["task_id": .string(id)]).decode(Bot.self)
+      guard openGeneration == generation, openBotId == id else { return }
+      bot = result
+      openingBot = false
+      openError = nil
     } catch {
-      fail(error)
+      guard openGeneration == generation, openBotId == id else { return }
+      bot = nil
+      openingBot = false
+      openError = (error as? ServiceError)?.message ?? "This bot could not be opened. Try again."
     }
   }
 
   @discardableResult
   private func act(_ body: () async throws -> JSONValue) async -> JSONValue? {
+    guard !working else { return nil }
     working = true
     error = nil
     defer { working = false }
-    do {
-      let result = try await body()
-      try await refresh()
-      return result
-    } catch {
+    let result: JSONValue
+    do { result = try await body() } catch {
       fail(error)
       return nil
     }
+    do { try await refresh() } catch {
+      // The mutation was acknowledged. Returning nil here made Create look
+      // unsuccessful and invited duplicate bots when the person retried.
+      self.error =
+        "The action completed, but its updated status could not be loaded. Refresh to try again."
+    }
+    return result
   }
 
   /// Create a bot from its fields (a template fills the rest); the new bot, or nil.
