@@ -14,6 +14,10 @@ Runs are unattended: questions are declined, plans and approvals refused, and
 the browser is not offered (`Unattended`, no engine). They may search the web
 and use the Python sandbox like a chat reply. Nothing here logs prompts or
 answers; the agent's output goes to /dev/null.
+
+Bots (`vikram.bots`) are tasks of kind `bot` in the same file: the same due
+file, LaunchAgent, runner, and Run now serve them, while their configuration,
+findings, and state live in their own tables here.
 """
 
 import asyncio
@@ -139,6 +143,14 @@ def _clock(value: str) -> str | None:
     return f"{hour:02d}:{minute:02d}" if hour < 24 and minute < 60 else None
 
 
+def _integer(value) -> int | None:
+    """Repair a model-supplied number without crashing on Unicode or infinity."""
+    try:
+        return int(value)
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
 def _day(value: str) -> str | None:
     text = value.strip().lower()[:3]
     return text if text in DAYS else None
@@ -242,13 +254,17 @@ def repair_schedule(args: dict, now: datetime | None = None) -> dict:
         if key in args:
             hours = args.pop(key)
             if isinstance(hours, (int, float)) and not isinstance(hours, bool):
-                args.setdefault("every_minutes", int(hours * 60))
+                minutes = _integer(hours * 60)
+                if minutes is not None:
+                    args.setdefault("every_minutes", minutes)
     for key in ("minutes", "interval_minutes", "interval"):
         if key in args:
             args.setdefault("every_minutes", args.pop(key))
     every = args.get("every_minutes")
     if isinstance(every, str) and every.strip().isdigit():
-        args["every_minutes"] = int(every)
+        minutes = _integer(every)
+        if minutes is not None:
+            args["every_minutes"] = minutes
     when = args.get("time")
     if isinstance(when, str):
         stamp = when.strip().replace(" ", "T", 1)
@@ -284,7 +300,9 @@ def repair_schedule(args: dict, now: datetime | None = None) -> dict:
             args["days"] = days
     dom = args.get("day_of_month", args.pop("day", None))
     if isinstance(dom, str) and dom.strip().rstrip("stndrdth").isdigit():
-        dom = int(dom.strip().rstrip("stndrdth"))
+        parsed = _integer(dom.strip().rstrip("stndrdth"))
+        if parsed is not None:
+            dom = parsed
     if dom is not None:
         args["day_of_month"] = dom
     repeat = args.get("repeat")
@@ -444,18 +462,26 @@ class ScheduleStore:
         self.db.execute("PRAGMA busy_timeout=10000")
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA foreign_keys=ON")
+        self._migrate()
+        self.sync()
+
+    def _migrate(self) -> None:
+        # Schema and version move together. An interrupted upgrade rolls back;
+        # the write lock also serializes the app and the background runner.
+        self.db.execute("BEGIN IMMEDIATE")
         version = self.db.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1):
+        if version not in (0, 1, 2):
+            self.db.rollback()
             self.db.close()
             raise ValueError("Scheduled tasks need a newer version of Vikram.")
-        self.db.executescript("""
-        BEGIN;
+        schema = """
         CREATE TABLE IF NOT EXISTS tasks (
             id TEXT PRIMARY KEY, name TEXT NOT NULL, prompt TEXT NOT NULL,
             schedule TEXT NOT NULL, model TEXT, thinking TEXT NOT NULL DEFAULT 'null',
             enabled INTEGER NOT NULL DEFAULT 1, origin TEXT NOT NULL DEFAULT 'app',
             anchor REAL NOT NULL, next_run REAL, run_requested INTEGER NOT NULL DEFAULT 0,
-            created REAL NOT NULL, updated REAL NOT NULL
+            created REAL NOT NULL, updated REAL NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'task'
         );
         CREATE TABLE IF NOT EXISTS runs (
             id TEXT PRIMARY KEY,
@@ -465,13 +491,47 @@ class ScheduleStore:
             model TEXT, actual_model TEXT, content TEXT NOT NULL DEFAULT '',
             reasoning TEXT NOT NULL DEFAULT '', activity TEXT NOT NULL DEFAULT '[]',
             sources TEXT NOT NULL DEFAULT '[]', searches TEXT NOT NULL DEFAULT '[]',
-            error TEXT
+            error TEXT, outcome TEXT, report TEXT
         );
         CREATE INDEX IF NOT EXISTS runs_task ON runs(task_id, started);
-        PRAGMA user_version=1;
-        COMMIT;
-        """)
-        self.sync()
+        """
+        if version == 1:
+            schema += """
+            ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'task';
+            ALTER TABLE runs ADD COLUMN outcome TEXT;
+            ALTER TABLE runs ADD COLUMN report TEXT;
+            """
+        schema += """
+        CREATE TABLE IF NOT EXISTS bots (
+            task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+            config TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS findings (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            run_id TEXT, key TEXT NOT NULL, kind TEXT NOT NULL,
+            severity TEXT NOT NULL, title TEXT NOT NULL,
+            detail TEXT NOT NULL DEFAULT '', sources TEXT NOT NULL DEFAULT '[]',
+            fingerprint TEXT NOT NULL, state TEXT NOT NULL,
+            held INTEGER NOT NULL DEFAULT 0, count INTEGER NOT NULL DEFAULT 1,
+            first_seen REAL NOT NULL, last_seen REAL NOT NULL,
+            updated REAL NOT NULL, snoozed_until REAL,
+            UNIQUE(task_id, key)
+        );
+        CREATE INDEX IF NOT EXISTS findings_state ON findings(state, severity);
+        CREATE TABLE IF NOT EXISTS bot_state (
+            task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            key TEXT NOT NULL, value TEXT NOT NULL,
+            PRIMARY KEY(task_id, key)
+        );
+        PRAGMA user_version=2;
+        """
+        with self.db:
+            # executescript commits an existing transaction first; execute the
+            # static DDL separately to retain the lock and rollback guarantees.
+            for statement in schema.split(";"):
+                if statement.strip():
+                    self.db.execute(statement)
 
     def close(self) -> None:
         self.db.close()
@@ -501,16 +561,19 @@ class ScheduleStore:
         )
         return task
 
-    def tasks(self) -> list[dict]:
+    def tasks(self, kind: str = "task") -> list[dict]:
+        """Scheduled tasks of one kind: prompts (`task`) or bots (`bot`)."""
         tasks = [
             self._task(row)
-            for row in self.db.execute("SELECT * FROM tasks ORDER BY created, id")
+            for row in self.db.execute(
+                "SELECT * FROM tasks WHERE kind=? ORDER BY created, id", (kind,)
+            )
         ]
         last = {
             row["task_id"]: dict(row)
             for row in self.db.execute(
-                "SELECT task_id,id,status,started,finished FROM runs r WHERE started="
-                "(SELECT max(started) FROM runs WHERE task_id=r.task_id)"
+                "SELECT task_id,id,status,started,finished,outcome FROM runs r WHERE "
+                "started=(SELECT max(started) FROM runs WHERE task_id=r.task_id)"
             )
         }
         for task in tasks:
@@ -526,8 +589,8 @@ class ScheduleStore:
             dict(r)
             for r in self.db.execute(
                 "SELECT id,trigger,scheduled_for,started,finished,status,error,"
-                "actual_model,model,substr(content,1,200) AS preview FROM runs "
-                "WHERE task_id=? ORDER BY started DESC, rowid DESC",
+                "actual_model,model,outcome,report,substr(content,1,200) AS preview "
+                "FROM runs WHERE task_id=? ORDER BY started DESC, rowid DESC",
                 (task_id,),
             )
         ]
@@ -583,10 +646,17 @@ class ScheduleStore:
         model: str | None,
         thinking=None,
         origin: str = "app",
+        kind: str = "task",
+        bot_config: str | None = None,
+        enabled: bool = True,
     ) -> dict:
         name, prompt = _clean(name, MAX_NAME), _clean(prompt, MAX_PROMPT)
         if not name or not prompt:
             raise ValueError("A scheduled task needs a name and a prompt.")
+        if kind not in ("task", "bot"):
+            raise ValueError("Unsupported task kind.")
+        if (kind == "bot") != (bot_config is not None):
+            raise ValueError("A bot requires its configuration.")
         count = self.db.execute("SELECT count(*) FROM tasks").fetchone()[0]
         if count >= MAX_TASKS:
             raise ValueError(
@@ -603,7 +673,8 @@ class ScheduleStore:
         with self.db:
             self.db.execute(
                 "INSERT INTO tasks(id,name,prompt,schedule,model,thinking,enabled,"
-                "origin,anchor,next_run,created,updated) VALUES(?,?,?,?,?,?,1,?,?,?,?,?)",
+                "origin,anchor,next_run,created,updated,kind) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     task_id,
                     name,
@@ -611,17 +682,26 @@ class ScheduleStore:
                     schedule.model_dump_json(exclude_none=True),
                     model,
                     json.dumps(thinking),
+                    int(enabled),
                     origin,
                     anchor,
                     next_at,
                     now,
                     now,
+                    kind,
                 ),
             )
+            if bot_config is not None:
+                self.db.execute(
+                    "INSERT INTO bots(task_id,config) VALUES(?,?)",
+                    (task_id, bot_config),
+                )
         self.sync()
         return self.task(task_id)
 
-    def update(self, task_id: str, **fields: Any) -> dict:
+    def update(
+        self, task_id: str, *, bot_config: str | None = None, **fields: Any
+    ) -> dict:
         """Change name, prompt, schedule, model, thinking, or enabled."""
         task = self.task(task_id)
         if not fields or set(fields) - {
@@ -669,6 +749,10 @@ class ScheduleStore:
                 f"UPDATE tasks SET {','.join(f'{key}=?' for key in values)} WHERE id=?",
                 (*values.values(), task_id),
             )
+            if bot_config is not None:
+                self.db.execute(
+                    "UPDATE bots SET config=? WHERE task_id=?", (bot_config, task_id)
+                )
         self.sync()
         return self.task(task_id)
 
@@ -726,6 +810,10 @@ class ScheduleStore:
     def interrupt_stale(self) -> None:
         """Runs left 'running' by a runner that was killed; call with the lock."""
         with self.db:
+            self.db.execute(
+                "UPDATE runs SET outcome='incomplete' WHERE status='running' AND "
+                "outcome IS NULL AND task_id IN (SELECT id FROM tasks WHERE kind='bot')"
+            )
             self.db.execute(
                 "UPDATE runs SET status='interrupted',finished=?,error="
                 "'The run stopped before it finished.' WHERE status='running'",
@@ -798,8 +886,15 @@ class ScheduleStore:
     def _prune(self, task_id: str) -> None:
         self.db.execute(
             "DELETE FROM runs WHERE task_id=? AND status!='running' AND id NOT IN "
-            "(SELECT id FROM runs WHERE task_id=? ORDER BY started DESC LIMIT ?)",
+            "(SELECT id FROM runs WHERE task_id=? ORDER BY started DESC LIMIT ?) "
+            "AND NOT EXISTS (SELECT 1 FROM findings f WHERE f.run_id=runs.id "
+            "AND f.state IN ('new','seen','snoozed'))",
             (task_id, task_id, KEEP_RUNS),
+        )
+        self.db.execute(
+            "UPDATE findings SET run_id=NULL WHERE task_id=? AND run_id IS NOT "
+            "NULL AND NOT EXISTS (SELECT 1 FROM runs WHERE runs.id=findings.run_id)",
+            (task_id,),
         )
 
     def checkpoint(self, run_id: str, **fields: Any) -> None:
@@ -830,14 +925,23 @@ class ScheduleStore:
                 (*values.values(), run_id),
             )
 
-    def finish(self, run_id: str, status: str, error: str | None = None) -> None:
+    def finish(
+        self,
+        run_id: str,
+        status: str,
+        error: str | None = None,
+        *,
+        outcome: str | None = None,
+        report: str | None = None,
+    ) -> None:
+        """End a run; bots also record their outcome and a short report."""
         if status not in TERMINAL:
             raise ValueError("Invalid run state.")
         with self.db:
             self.db.execute(
-                "UPDATE runs SET status=?,error=?,finished=? WHERE id=? AND "
-                "status='running'",
-                (status, error, self.clock(), run_id),
+                "UPDATE runs SET status=?,error=?,finished=?,outcome=?,report=? "
+                "WHERE id=? AND status='running'",
+                (status, error, self.clock(), outcome, report, run_id),
             )
 
 
@@ -1076,6 +1180,18 @@ async def execute(
     from vikram.interaction import Unattended
     from vikram.models import ModelCatalog, prepare_model
 
+    if task.get("kind") == "bot":
+        from vikram.bots import execute_bot
+
+        # Bots notify by outcome, with their own policy, unless a test overrides.
+        return await execute_bot(
+            store,
+            task,
+            run,
+            streamer=streamer,
+            catalog=catalog,
+            alert=None if alert is notify else alert,
+        )
     streamer = streamer or stream_reply
     status, error, iterator = "complete", None, None
     content = ""

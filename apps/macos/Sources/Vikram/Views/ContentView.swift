@@ -16,10 +16,11 @@ struct ContentView: View {
             SidebarView(sheet: $sheet, deletingChat: $deletingChat)
         } detail: {
             Group {
-                if state.showsScheduled {
-                    SchedulesView()
-                } else {
-                    ChatDetail(sheet: $sheet, deletingChat: $deletingChat)
+                switch state.screen {
+                case .home: HomeView()
+                case .bots: BotsView()
+                case .scheduled: SchedulesView()
+                case .chat: ChatDetail(sheet: $sheet, deletingChat: $deletingChat)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

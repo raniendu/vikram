@@ -1,7 +1,8 @@
 # Vikram
 
-A Mac assistant and terminal workbench, built with SwiftUI and Pydantic AI.
-Ollama runs locally by default; OpenRouter is an explicit optional cloud provider.
+A Mac assistant with specialist bots, an attention-first Home page, and a
+terminal workbench, built with SwiftUI and Pydantic AI. Ollama runs locally by
+default; OpenRouter is an explicit optional cloud provider.
 
 Vikram runs a single agent defined in this repository. Its instructions live in
 `vikram/agent.py`. Local model requests go to your Ollama server at
@@ -31,7 +32,8 @@ for its Python sandbox's third-party software, and each release attaches the
 source code of the sandbox's GPL, LGPL and MPL components.
 [Installation and release details](docs/releases.md).
 
-The app is a native SwiftUI Mac app: a sidebar of saved chats and flat folders,
+The native SwiftUI app opens on **Home**, with **Bots**, scheduled prompts,
+and the default bot's saved chats and flat folders in the sidebar. It retains
 per-chat local models and advertised thinking settings (on by default) in the
 toolbar, streamed replies, stop/retry, natively rendered Markdown with code and
 reply copy, and image, PDF, Word, text/code, CSV, and Excel attachments. Its
@@ -242,6 +244,59 @@ the model in full. Approvals and take-overs wait up to 15 minutes. Later turns
 see which actions ran and where the browser was left. Clicks and typing use
 script events, which a few sites ignore; take over for those. See the
 [design](docs/superpowers/specs/2026-10-21-agent-browser-design.md).
+
+## Bots and Home
+
+A bot owns an ongoing responsibility, independently of a conversation. Open
+**Bots → New Bot**, choose Topic Watcher, Page Watcher, or Release Watcher, then
+configure its responsibility, sources, schedule, model, time budget, materiality
+rubric, and notifications. Keep several specialists; the general-purpose default
+bot remains available for chat. Bots inherit the shared default **model** unless
+overridden, but never inherit permission to use cloud inference.
+
+**Home** shows what needs you (decisions, failures, blockers, overdue bots),
+material developments, and each bot's health. Findings can be seen, snoozed,
+resolved, or dismissed. Feedback adds a visible rubric example. Identical
+findings merge without notifying again; dismissed findings stay quiet until
+their normalized content changes. Uncertain or unsupported findings stay on the
+bot's page, not Home. Open **Evidence** to read the run, or **Discuss This Run**
+to continue it in a conversation.
+
+Runs use search/fetch and the existing **offline sandbox only**: no unattended
+browser, host commands, MCP, extensions, publishing, or automatic actions.
+Unattended OpenRouter is an explicit per-bot opt-in; inherited cloud defaults
+without that opt-in are blocked, never replaced automatically. Time, request,
+and tool budgets are enforced; **monetary spending caps are not implemented**.
+A typed report without successful source-retrieval evidence cannot claim quiet.
+This verifies retrieval, not the accuracy of the model's interpretation.
+
+Quiet runs do not notify. macOS notifications contain only the bot name and
+outcome, with durable pending/sent/uncertain receipts preventing blind retries.
+Notification dispatch uses the existing Script Editor mechanism, so its macOS
+notification permission is still required. No Telegram/Pushover integration is
+added. Bots share the existing LaunchAgent and SQLite file; developer libraries
+never install that agent or send notifications.
+
+```sh
+vikram home
+vikram bots create "Immigration" --template topic-watcher \\
+  --mandate "Report official visa rule or deadline changes that affect me." \\
+  --source https://www.uscis.gov/newsroom --model YOUR_LOCAL_MODEL
+vikram bots run Immigration
+vikram findings --json
+```
+
+Export/import uses versioned JSON. Imported bots start **paused** and strip cloud
+permission. An existing scheduled prompt can explicitly **Convert to Bot** while
+preserving its run history; it also starts paused for review. No current external
+jobs are changed or retired.
+
+**Dependency Keeper is blocked**, not simulated: the current VM has no network,
+Git, package tools, or repository files. Supporting updates needs a separately
+approved repository sandbox. Local service recovery and host housekeeping are
+also outside the sandbox-only policy. See the
+[design and item-by-item implementation inventory](docs/superpowers/specs/2026-11-10-bots-and-home-design.md)
+for remaining roadmap items; this is not the entire proposed backlog.
 
 ## Scheduled tasks
 

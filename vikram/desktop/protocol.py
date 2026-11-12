@@ -154,6 +154,39 @@ class Run(Params):
     run_id: str = TASK_ID
 
 
+class Bot(Params):
+    task_id: str = TASK_ID
+
+
+class BotFields(Params):
+    """Validated by `vikram.bots.BotConfig`; `template` fills defaults."""
+
+    fields: dict[str, Any]
+
+
+class UpdateBot(Bot):
+    fields: dict[str, Any]
+
+
+class ImportBot(Params):
+    """An exported bot; its cloud grant never travels with it."""
+
+    config: dict[str, Any]
+
+
+class FindingState(Params):
+    model_config = ConfigDict(extra="forbid", strict=False)
+    finding_id: str = TASK_ID
+    state: Literal["new", "seen", "snoozed", "resolved", "dismissed"]
+    # Epoch seconds to snooze until; none snoozes until the fact changes.
+    until: float | None = None
+
+
+class Feedback(Params):
+    finding_id: str = TASK_ID
+    verdict: Literal["material", "not-material"]
+
+
 class Workbench(Params):
     action: str = Field(min_length=1, max_length=40)
     chat_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
@@ -193,6 +226,20 @@ PARAMS = {
     "delete_schedule": Task,
     "run_schedule": Task,
     "open_run": Run,
+    "convert_schedule": Task,
+    "home": Params,
+    "bots": Params,
+    "bot": Bot,
+    "bot_templates": Params,
+    "create_bot": BotFields,
+    "update_bot": UpdateBot,
+    "delete_bot": Bot,
+    "run_bot": Bot,
+    "reset_bot": Bot,
+    "export_bot": Bot,
+    "import_bot": ImportBot,
+    "finding": FindingState,
+    "finding_feedback": Feedback,
     "update_status": Params,
     "check_update": Params,
     # From the app itself, never the window: results and the panel closing.

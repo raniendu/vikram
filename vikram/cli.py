@@ -405,9 +405,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         return update_main(argv[1:])
     if argv[:1] == ["schedules"]:
         return schedules_main(argv[1:])
+    if argv[:1] in (["home"], ["bots"], ["findings"]):
+        from vikram import bots_cli
+
+        command = {
+            "home": bots_cli.home_main,
+            "bots": bots_cli.bots_main,
+            "findings": bots_cli.findings_main,
+        }[argv[0]]
+        return command(argv[1:])
     parser = argparse.ArgumentParser(
         description="Chat with local Ollama using the same model/tools as the app. Supported models automatically use Parallel web search, Python in an isolated VM, and clarifying questions when needed; /plan toggles plan mode and /exit ends interactive chat.",
-        epilog="Use `vikram update` to update the CLI and Mac app, or `vikram update --check` to check for a release. `vikram schedules` lists scheduled tasks. Use `vikram -- update` to send 'update' as a prompt.",
+        epilog="Use `vikram update` to update the CLI and Mac app, or `vikram update --check` to check for a release. `vikram home` shows what your bots need from you; `vikram bots` and `vikram findings` manage them. `vikram schedules` lists scheduled tasks. Use `vikram -- update` to send 'update' as a prompt.",
     )
     parser.add_argument(
         "--version", action="version", version=f"Vikram {cli_version()}"

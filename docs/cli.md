@@ -140,5 +140,64 @@ tool core. JSON events omit thinking traces. RPC uses newline-delimited
 `{"v":1,"id":"request-id","method":"hello","params":{}}` commands and the
 additive desktop protocol, including its advertised capabilities and workbench
 operations. It is Vikram's protocol, not binary Pi compatibility. Noninteractive
-runs decline interactions they cannot show. Scheduled runs and evaluations keep
-the existing local-only, unattended policy and do not load host integrations.
+runs decline interactions they cannot show. Legacy scheduled prompts and
+evaluations keep the local-only policy and do not load host integrations.
+Bot runs have explicit per-bot OpenRouter permission, but still no host tools.
+
+## Bots and attention
+
+`vikram home` shows decisions/failures, material developments, and bot health.
+`vikram home --json` exposes the same typed records as the app. Create bots
+without a chat:
+
+```sh
+vikram bots templates
+vikram bots create "Immigration" --template topic-watcher \\
+  --mandate "Report official immigration rule and deadline changes, not commentary." \\
+  --source https://www.uscis.gov/newsroom --model YOUR_LOCAL_MODEL
+vikram bots show Immigration
+vikram bots run Immigration
+vikram findings --json
+vikram findings seen FINDING_ID
+vikram findings snooze FINDING_ID week
+vikram findings not-material FINDING_ID
+```
+
+Creation accepts `--repeat`, `--time`, `--days`, `--every-minutes`, `--date`, and
+`--day-of-month`; templates supply a default. `--budget-minutes`, `--max-requests`
+(at most 10), and `--max-tool-calls` (at most 20) bound each run. `--expected-days`
+flags missing completed runs. `--rubric` and repeatable `--keyword` configure
+materiality. `--notify attention|findings|never` controls macOS notifications;
+quiet never notifies. The app's Script Editor notification-permission limitation
+still applies. No notification contains finding content.
+
+Omit `--model` to inherit the shared default model. That does not permit cloud
+use: `--allow-openrouter` explicitly grants it for this bot, with no automatic
+fallback. Cloud instructions, sources, and context go to OpenRouter and its
+provider; charges may apply. **There is no monetary spending cap yet.** The
+request, tool, and time limits are not a dollar cap.
+
+`vikram bots pause|resume|delete|reset NAME` controls the bot. Reset resolves its
+open findings and forgets its baseline, not its run evidence. `vikram bots run`
+runs in the foreground under the shared runner lock and also drains other due
+tasks. Normal installed runs use the existing LaunchAgent even with the app
+closed; development libraries never register one.
+
+```sh
+vikram bots export Immigration > immigration.json
+vikram bots import immigration.json
+vikram bots edit Immigration immigration.json
+```
+
+Import strips cloud permission and starts paused. Edit changes the existing bot;
+adding cloud permission via a file still requires `--allow-openrouter`. Configs
+are versioned JSON, not executable code. `vikram findings --all` includes closed
+findings; `--bot NAME` filters them. Findings are evidence and proposals, not an
+authorization to act. OpenRouter selection never grants browser/host access.
+
+Topic, Page, and Release Watcher templates use search/fetch and the offline
+Python sandbox. Dependency Keeper is listed as blocked: updating and testing
+repositories requires a separately approved repository VM. No old external
+schedules are imported, paused, or recreated by these commands automatically.
+See the [implementation inventory](superpowers/specs/2026-11-10-bots-and-home-design.md)
+for remaining backlog items.

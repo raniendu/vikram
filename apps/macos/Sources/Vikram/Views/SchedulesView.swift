@@ -139,6 +139,7 @@ private struct TaskDetail: View {
     @Environment(ChatController.self) private var chats
     let edit: (ScheduledTask) -> Void
     @State private var deleting = false
+    @State private var converting = false
 
     var body: some View {
         if let task = schedules.task {
@@ -193,9 +194,24 @@ private struct TaskDetail: View {
                     }
                     .disabled(disabled)
                     Button("Edit", systemImage: "pencil") { edit(task) }.disabled(disabled)
+                    Button("Convert to Bot", systemImage: "sparkles") { converting = true }
+                        .disabled(disabled || running)
                     Button("Delete", systemImage: "trash", role: .destructive) { deleting = true }
                         .disabled(disabled || running)
                 }
+            }
+            .confirmationDialog("Convert “\(task.name)” to a bot?", isPresented: $converting) {
+                Button("Convert and Pause") {
+                    Task {
+                        if let bot = await state.bots.convertSchedule(task.id) {
+                            await schedules.openTask(nil)
+                            try? await schedules.refresh()
+                            state.openBot(bot.id)
+                        }
+                    }
+                }
+            } message: {
+                Text("Its history is preserved. Review its responsibility, sources, and policy before resuming. No cloud permission is carried over.")
             }
             .confirmationDialog(
                 "Delete “\(task.name)”?", isPresented: $deleting, titleVisibility: .visible
