@@ -13,7 +13,7 @@ for your approval before they work, use a private web browser that you can
 watch, stop, or take over, and schedule prompts that run later on their own,
 even while the app is closed.
 
-## Desktop app (Apple Silicon Mac)
+## Desktop app (Apple Silicon, macOS 27 or later)
 
 Install the desktop app and CLI together: open the installer disk image
 (`Vikram-VERSION-macos-arm64.dmg`), then open **Install Vikram.app** inside it.
@@ -47,7 +47,8 @@ Use your existing Ollama installation and installed models. The picker rejects
 remote/cloud-backed and non-chat models. No model downloads happen automatically.
 One reply runs at a time; other chats keep independent drafts and histories.
 
-Build with native ARM64 Python 3.13+ and Xcode 16 or later (Swift 6):
+Build with native ARM64 Python 3.13+ and Xcode 27 or later. The app uses the
+selected Xcode's macOS SDK for native Liquid Glass controls and navigation.
 
 ```bash
 uv sync --locked
@@ -247,15 +248,14 @@ script events, which a few sites ignore; take over for those. See the
 
 ## Bots and Home
 
-A bot owns an ongoing responsibility, independently of a conversation. In
-**Bots**, click **Use Template** beside Topic Watcher, Page Watcher, or Release
-Watcher (or use **New Bot**). The editor loads that template's responsibility,
-instructions, rubric, schedule, and overdue-check defaults before opening.
-Personalize its name, responsibility, sources, model, budget, and notifications.
-Unavailable templates stay disabled and explain the missing capability. Loading
-failures offer retry controls rather than looking like an empty list. Keep several specialists; the general-purpose default
-bot remains available for chat. Bots inherit the shared default **model** unless
-overridden, but never inherit permission to use cloud inference.
+A bot owns an ongoing responsibility, independently of a conversation. Choose
+**Create Bot** on Home or **New Bot** in Bots. Give it a name, describe what to
+watch in plain language, and review the schedule. Expand **Advanced** to choose
+a template, specify sources, or set the model, budget, and notifications.
+**Use Template** in Bots fills in the instructions and schedule for Topic
+Watcher, Page Watcher, or Release Watcher. Unavailable templates explain which
+capability they need. Bots inherit the shared default model unless you choose one
+for the bot. Cloud inference requires explicit permission for each bot.
 
 **Home** shows what needs you (decisions, failures, blockers, overdue bots),
 material developments, and each bot's health. Findings can be seen, snoozed,

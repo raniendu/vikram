@@ -80,7 +80,7 @@ private struct TaskList: View {
                     text:
                         "Ask in any chat, for example “every weekday at 8am, summarize the tech news” or “remind me tomorrow at 3pm to call the dentist”, or create a task here."
                 ) {
-                    Button("New Task", action: new).buttonStyle(.primary).disabled(chats.offline)
+                    Button("New Task", action: new).buttonStyle(.glassProminent).disabled(chats.offline)
                 }
             } else {
                 List {
@@ -413,11 +413,10 @@ struct TaskEditor: View {
                 }
             }
             .formStyle(.grouped)
-            .tint(Theme.accent)
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
-                    .buttonStyle(.secondary)
+                    .buttonStyle(.glass)
                     .keyboardShortcut(.cancelAction)
                 Button(task == nil ? "Create Task" : "Save") {
                     Task {
@@ -428,7 +427,7 @@ struct TaskEditor: View {
                         if saved { dismiss() }
                     }
                 }
-                .buttonStyle(.primary)
+                .buttonStyle(.glassProminent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(!valid || schedules.working)
             }

@@ -2,7 +2,7 @@
 
 ## Install both interfaces
 
-Apple Silicon and macOS 13+ are supported. Open
+Vikram requires Apple Silicon and macOS 27 or later. Open
 `Vikram-VERSION-macos-arm64.dmg`, then open **Install Vikram.app** in the window
 that appears; you can eject the disk image when it finishes.
 `Vikram-VERSION-macos-arm64.zip` holds the same installer: unzip it and open
@@ -180,8 +180,8 @@ is on `main`.
    publish waits for your approval, and allow only tags matching `v*`.
 
 The runner runs jobs as your macOS account, with the `PATH` of the terminal that
-starts it. That terminal needs the README's build tools: uv and Xcode 16 or
-later (Swift 6). Stay logged in, because the browser check
+starts it. That terminal needs uv and Xcode 27 or later. Stay logged in,
+because the browser check
 opens a hidden WebKit window. A build needs 24 GiB free to keep the 20 GiB
 reserve. Start the runner only while releasing, so nothing else can use it.
 

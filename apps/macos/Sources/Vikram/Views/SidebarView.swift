@@ -46,12 +46,8 @@ struct SidebarView: View {
                 Label("Bots", systemImage: "sparkles")
                     .badge(bots.bots.count)
                     .tag(SidebarItem.bots)
-                Label {
-                    Text("Scheduled")
-                } icon: {
-                    Image(systemName: "calendar.badge.clock").foregroundStyle(Theme.accent)
-                }
-                .badge(schedules.tasks.count)
+                Label("Scheduled", systemImage: "calendar.badge.clock")
+                    .badge(schedules.tasks.count)
                     .tag(SidebarItem.scheduled)
             }
             if !search.isEmpty {
@@ -102,8 +98,6 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .scrollContentBackground(.hidden)
-        .background(Theme.surface)
         .safeAreaInset(edge: .top, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 BrandMark(size: 22)
@@ -216,17 +210,16 @@ struct SidebarSheetView: View {
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
-                    .buttonStyle(.secondary)
+                    .buttonStyle(.glass)
                     .keyboardShortcut(.cancelAction)
                 Button(action: save) { Text(actionTitle) }
-                    .buttonStyle(.primary)
+                    .buttonStyle(.glassProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(working || (needsName && name.trimmingCharacters(in: .whitespaces).isEmpty))
             }
         }
         .padding(20)
         .frame(width: 380)
-        .tint(Theme.accent)
         .onAppear {
             switch sheet {
             case .renameFolder(let value): name = value.name

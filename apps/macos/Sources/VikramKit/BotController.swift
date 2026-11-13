@@ -94,7 +94,14 @@ public final class BotController {
       error = "Templates have not loaded. Refresh the Bots page and try again."
       return nil
     }
-    do { return try BotDraft(template: template) } catch {
+    do {
+      var draft = try BotDraft(template: template)
+      if templateId == nil {
+        draft.name = ""
+        draft.mandate = ""
+      }
+      return draft
+    } catch {
       fail(error)
       return nil
     }

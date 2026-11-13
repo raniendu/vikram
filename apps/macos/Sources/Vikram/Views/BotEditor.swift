@@ -2,14 +2,15 @@ import AppKit
 import SwiftUI
 import VikramKit
 
-/// One presentation for both template buttons and New Bot. The draft contains
-/// the actual template defaults and is initialized before the sheet opens.
+/// The same editor opens for new bots, templates, and existing bots.
 struct BotEditor: View {
   @Environment(\.dismiss) private var dismiss
   @Environment(AppState.self) private var state
   @Environment(BotController.self) private var bots
   @Environment(ChatController.self) private var chats
   @State private var draft: BotDraft
+  @State private var editingSchedule = false
+  @State private var showingAdvanced = false
 
   init(draft: BotDraft) { _draft = State(initialValue: draft) }
 
@@ -25,33 +26,23 @@ struct BotEditor: View {
         Spacer()
       }.padding()
       Form {
-        if draft.botId == nil {
-          Picker(
-            "Template",
-            selection: Binding(
-              get: { draft.templateId ?? "" },
-              set: { id in
-                guard let template = bots.templates.first(where: { $0.id == id }) else { return }
-                do { try draft.apply(template) } catch { bots.error = error.localizedDescription }
-              }
-            )
-          ) {
-            ForEach(bots.templates.filter(\.available)) { Text($0.title).tag($0.id) }
-          }
-          Text(
-            "Changing the template replaces its responsibility, instructions, rubric and schedule. Your name, sources and model are kept."
-          )
-          .font(.caption).foregroundStyle(Theme.muted)
-        }
-        TextField("Name", text: $draft.name, prompt: Text("Immigration Watch"))
+        TextField("Name", text: $draft.name, prompt: Text("e.g. macOS Updates"))
           .accessibilityIdentifier("bot-name")
-        TextField("Responsibility", text: $draft.mandate, axis: .vertical)
-          .lineLimit(2...5).accessibilityIdentifier("bot-mandate")
-        TextField(
-          "Sources (one URL or search query per line)", text: $draft.sources, axis: .vertical
-        )
-        .lineLimit(2...6).accessibilityIdentifier("bot-sources")
-        Section("When to check") {
+        VStack(alignment: .leading, spacing: 6) {
+          Text("What should it watch?").accessibilityHidden(true)
+          TextField(
+            "What should it watch?",
+            text: $draft.mandate,
+            prompt: Text("Check Apple’s release notes and tell me when a new macOS update ships."),
+            axis: .vertical
+          )
+          .labelsHidden()
+          .textFieldStyle(.roundedBorder)
+          .lineLimit(3...5)
+          .accessibilityIdentifier("bot-mandate")
+        }
+        if needsSources { sourcesField }
+        DisclosureGroup(isExpanded: $editingSchedule) {
           Picker("Repeat", selection: $draft.repeatKind) {
             Text("Daily").tag("daily")
             Text("Weekly").tag("weekly")
@@ -79,8 +70,30 @@ struct BotEditor: View {
           } else if ["daily", "weekly"].contains(draft.repeatKind) {
             DatePicker("Local time", selection: $draft.clock, displayedComponents: .hourAndMinute)
           }
+        } label: {
+          LabeledContent("Schedule", value: scheduleSummary)
         }
-        Section("Policy") {
+        DisclosureGroup("Advanced", isExpanded: $showingAdvanced) {
+          if draft.botId == nil {
+            Picker(
+              "Template",
+              selection: Binding(
+                get: { draft.templateId ?? "" },
+                set: { id in
+                  guard id != draft.templateId else { return }
+                  guard let template = bots.templates.first(where: { $0.id == id }) else { return }
+                  do { try draft.apply(template) } catch { bots.error = error.localizedDescription }
+                }
+              )
+            ) {
+              ForEach(bots.templates.filter(\.available)) { Text($0.title).tag($0.id) }
+            }
+            Text(
+              "Changing the template replaces its responsibility, instructions, rubric and schedule. Your name, sources and model are kept."
+            )
+            .font(.caption).foregroundStyle(Theme.muted)
+          }
+          if !needsSources { sourcesField }
           Picker("Model", selection: $draft.model) {
             Text("Inherit default bot's model").tag("")
             if !draft.model.isEmpty && !availableModels.contains(where: { $0.name == draft.model })
@@ -115,8 +128,6 @@ struct BotEditor: View {
             Text("Any new finding").tag("findings")
             Text("Home only").tag("never")
           }
-        }
-        DisclosureGroup("Charter and materiality") {
           TextField("Standing instructions", text: $draft.charter, axis: .vertical).lineLimit(3...8)
           TextField("What is material?", text: $draft.rubric, axis: .vertical).lineLimit(3...6)
           TextField(
@@ -126,30 +137,70 @@ struct BotEditor: View {
           Text("Uncertain or off-keyword findings stay on the bot's page rather than Home.")
             .font(.caption).foregroundStyle(Theme.muted)
         }
-        Text(
-          "Unattended: search/fetch and the offline sandbox only. No browser, host tools, integrations or automatic actions."
-        )
-        .font(.caption).foregroundStyle(Theme.muted)
       }
       .formStyle(.grouped)
       HStack {
-        if let error = bots.error ?? draft.validationMessage {
+        if let error = bots.error ?? visibleValidation {
           Text(error).font(.callout).foregroundStyle(Theme.danger).lineLimit(3)
             .accessibilityIdentifier("bot-editor-error")
         }
         Spacer()
         Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+          .buttonStyle(.glass)
         Button(bots.working ? "Saving…" : draft.botId == nil ? "Create Bot" : "Save") { save() }
-          .buttonStyle(.primary).keyboardShortcut(.defaultAction)
+          .buttonStyle(.glassProminent).keyboardShortcut(.defaultAction)
           .disabled(draft.validationMessage != nil || bots.working || chats.offline)
           .accessibilityIdentifier("save-bot")
       }.padding()
     }
-    .frame(width: 640, height: min(680, (NSScreen.main?.visibleFrame.height ?? 780) - 100))
+    .frame(width: 560, height: min(editorHeight, (NSScreen.main?.visibleFrame.height ?? 780) - 100))
     .onChange(of: draft.cloud) { _, allowed in
       if !allowed && draft.model.hasPrefix("openrouter:") { draft.model = "" }
     }
     .onAppear { bots.error = nil }
+  }
+
+  private var needsSources: Bool {
+    draft.templateId == "page-watcher" || draft.templateId == "release-watcher"
+  }
+
+  private var sourcesField: some View {
+    TextField("Sources", text: $draft.sources, prompt: Text("One URL or search query per line"), axis: .vertical)
+      .lineLimit(2...6)
+      .accessibilityIdentifier("bot-sources")
+  }
+
+  private var editorHeight: CGFloat {
+    if showingAdvanced { return 670 }
+    return (editingSchedule ? 490 : 380) + (needsSources ? 65 : 0)
+  }
+
+  private var visibleValidation: String? {
+    guard !draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      !draft.mandate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else { return nil }
+    return draft.validationMessage
+  }
+
+  private var scheduleSummary: String {
+    let time = draft.clock.formatted(date: .omitted, time: .shortened)
+    switch draft.repeatKind {
+    case "daily": return "Daily at \(time)"
+    case "weekly":
+      let symbols = Calendar.current.weekdaySymbols
+      let days = BotDraft.weekdays.enumerated().compactMap { index, day in
+        draft.days.contains(day) ? symbols[(index + 1) % 7] : nil
+      }
+      guard !days.isEmpty else { return "Choose weekdays" }
+      if days.count == 7 { return "Daily at \(time)" }
+      if days.count > 3 { return "\(days.count) days a week at \(time)" }
+      return "\(ListFormatter.localizedString(byJoining: days)) at \(time)"
+    case "interval":
+      let interval = Duration.seconds(draft.interval * 60)
+        .formatted(.units(allowed: [.hours, .minutes], width: .abbreviated))
+      return "Every \(interval)"
+    default: return draft.savedScheduleDescription ?? "Existing schedule"
+    }
   }
 
   private func save() {

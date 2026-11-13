@@ -31,7 +31,6 @@ struct WorkbenchView: View {
             }
         }
         .frame(width: 690, height: 650)
-        .tint(Theme.accent)
         .task(id: chats.selected) { await workbench.refresh(chatId: chats.selected) }
     }
 }

@@ -26,7 +26,7 @@ struct BotsView: View {
           } else {
             Text(backgroundNote).foregroundStyle(Theme.muted)
             if bots.bots.isEmpty {
-              Text("No bots yet. Choose a template below, or use New Bot.")
+            Text("No bots yet. Create one to monitor a topic on a schedule.")
             }
             ForEach(bots.bots) { bot in
               NavigationLink(value: BotRoute.bot(bot.id)) {
@@ -179,18 +179,10 @@ private struct BotDetail: View {
     } else if let bot = bots.bot {
       let running = bot.runs?.contains { $0.status == "running" } ?? false
       List {
-        Section("Responsibility") {
+        Section("Overview") {
           Text(bot.mandate).font(Theme.display(18, relativeTo: .headline))
           LabeledContent("Schedule", value: bot.description)
-          LabeledContent("Model", value: bot.model.map(formatModelName) ?? "Inherit default")
-          LabeledContent("OpenRouter", value: bot.cloud ? "Explicitly allowed" : "Not allowed")
-          LabeledContent("Budget", value: "\(bot.budgetMinutes) minutes per run")
-          LabeledContent("Notifications", value: bot.notify)
           if let summary = bot.lastSummary { Text(summary).textSelection(.enabled) }
-          Text(
-            "Sandbox only. Search and fetch, no browser, host tools, or integrations. Findings do not authorize actions."
-          )
-          .font(.caption).foregroundStyle(Theme.muted)
         }
         Section("Findings") {
           ForEach(bot.findings ?? []) { FindingCard(finding: $0) }
@@ -210,6 +202,12 @@ private struct BotDetail: View {
                   Text(report).lineLimit(3).font(.callout).foregroundStyle(Theme.muted)
                 }
               }
+        DisclosureGroup("Settings") {
+          LabeledContent("Model", value: bot.model.map(formatModelName) ?? "Inherit default")
+          LabeledContent("OpenRouter", value: bot.cloud ? "Explicitly allowed" : "Not allowed")
+          LabeledContent("Time budget", value: "\(bot.budgetMinutes) minutes per run")
+          LabeledContent("Notifications", value: bot.notify)
+        }
             }
           }
           if bot.runs?.isEmpty ?? true { Text("No runs yet.").foregroundStyle(Theme.muted) }

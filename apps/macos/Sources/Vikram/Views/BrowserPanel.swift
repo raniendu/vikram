@@ -69,17 +69,17 @@ struct BrowserPanel: View {
                     Button("Hand Back", systemImage: "arrow.uturn.backward") {
                         Task { await chats.controlBrowser(.agent) }
                     }
-                    .buttonStyle(.primary)
+                    .buttonStyle(.glassProminent)
                 } else {
                     Button("Take Over", systemImage: "hand.raised") {
                         Task { await chats.controlBrowser(.person) }
                     }
-                    .buttonStyle(.secondary)
+                    .buttonStyle(.glass)
                     .help("Use the page yourself; Vikram’s browser actions wait until you hand it back")
                 }
                 if chats.active != nil {
                     Button("Stop", systemImage: "stop.fill") { Task { await chats.stop() } }
-                        .buttonStyle(.secondary)
+                        .buttonStyle(.glass)
                         .help("Stop the reply")
                 }
             }
@@ -99,7 +99,6 @@ struct BrowserPanel: View {
                     }
                 }
         }
-        .background(Theme.surface)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Vikram’s browser")
     }

@@ -23,6 +23,7 @@ from pathlib import Path
 from uuid import uuid4
 
 REPOSITORY = "raniendu/vikram"
+MINIMUM_MACOS = "27.0"
 RESERVE = 20 * 1024**3
 RUNTIME_SPACE = 1024**3
 MAX_EXPANDED = 512 * 1024**2
@@ -115,15 +116,20 @@ def installed_runtime(layout: Layout) -> bool:
     )
 
 
-def check_platform() -> None:
+def check_macos() -> None:
     if (
         platform.system() != "Darwin"
         or platform.machine() != "arm64"
-        or int(platform.mac_ver()[0].split(".")[0] or "0") < 13
+        or int(platform.mac_ver()[0].split(".")[0] or "0")
+        < int(MINIMUM_MACOS.split(".")[0])
     ):
         raise InstallError(
-            "This installer requires Apple Silicon and macOS 13 or newer."
+            f"Vikram requires Apple Silicon and macOS {MINIMUM_MACOS} or newer."
         )
+
+
+def check_platform() -> None:
+    check_macos()
     if os.geteuid() == 0:
         raise InstallError("Run the installer as your normal account, without sudo.")
 

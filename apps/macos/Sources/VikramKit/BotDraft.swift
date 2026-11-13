@@ -22,6 +22,7 @@ public struct BotDraft: Identifiable, Sendable {
   public var expectedDays: Int? = 10
   public var notify = "attention"
   public let originallyAllowedCloud: Bool
+  public private(set) var savedScheduleDescription: String?
   private var originalSchedule: ScheduleTime?
 
   public static let weekdays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
@@ -45,6 +46,7 @@ public struct BotDraft: Identifiable, Sendable {
     budget = bot.budgetMinutes
     expectedDays = bot.expectedDays
     notify = bot.notify
+    savedScheduleDescription = bot.description
     originalSchedule = bot.schedule
     loadSchedule(bot.schedule)
     if let config = bot.config {

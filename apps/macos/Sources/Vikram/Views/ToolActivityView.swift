@@ -20,10 +20,10 @@ struct ToolActivityView: View {
                 details
                 HStack {
                     Button("Don’t Allow") { send(.dismiss) }
-                        .buttonStyle(.secondary)
+                        .buttonStyle(.glass)
                         .keyboardShortcut(.defaultAction)
                     Button("Allow Once") { send(.approve) }
-                        .buttonStyle(.primary)
+                        .buttonStyle(.glassProminent)
                 }
                 .disabled(sending)
             }

@@ -24,15 +24,12 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Theme.paper)
             .safeAreaInset(edge: .top, spacing: 0) { banners }
         }
         .inspector(isPresented: state.browserShown) {
             BrowserPanel()
                 .inspectorColumnWidth(min: 360, ideal: 560, max: 1000)
         }
-        .tint(Theme.accent)
-        .foregroundStyle(Theme.ink)
         .sheet(item: $sheet) { SidebarSheetView(sheet: $0) }
         .sheet(isPresented: Binding(get: { state.showsWorkbench }, set: { state.showsWorkbench = $0 })) {
             WorkbenchView()
@@ -71,7 +68,7 @@ struct ContentView: View {
             if let error = chats.error {
                 Banner(text: error, tint: Theme.danger) {
                     Button("Reconnect") { Task { await state.reconnect() } }
-                        .buttonStyle(.secondary)
+                        .buttonStyle(.glass)
                         .disabled(!state.canReconnect)
                     Button("Dismiss", systemImage: "xmark") { chats.error = nil }
                         .labelStyle(.iconOnly)
@@ -84,7 +81,7 @@ struct ContentView: View {
                     systemImage: "arrow.down.circle.fill"
                 ) {
                     Button("Restart") { state.restart() }
-                        .buttonStyle(.primary)
+                        .buttonStyle(.glassProminent)
                     Button("Dismiss", systemImage: "xmark") { updates.dismiss() }
                         .labelStyle(.iconOnly)
                         .buttonStyle(.borderless)
@@ -93,7 +90,7 @@ struct ContentView: View {
             if let connection = chats.connection, !chats.offline {
                 Banner(text: connection, systemImage: "bolt.horizontal.circle") {
                     Button("Refresh") { Task { await chats.refreshModels() } }
-                        .buttonStyle(.secondary)
+                        .buttonStyle(.glass)
                         .disabled(chats.refreshing)
                 }
             }
@@ -147,8 +144,9 @@ private struct ChatDetail: View {
                         .padding(.vertical, 6)
                     }
                 }
-                .safeAreaInset(edge: .bottom, spacing: 0) { ComposerView(chat: chat) }
-                .displayTitle(chat.title, subtitle: chats.model.map { "\($0.displayName) · \($0.providerLabel)" })
+                .safeAreaBar(edge: .bottom, spacing: 0) { ComposerView(chat: chat) }
+                .navigationTitle(chat.title)
+                .navigationSubtitle(chats.model.map { "\($0.displayName) · \($0.providerLabel)" } ?? "")
                 .toolbar { ChatToolbar(chat: chat, sheet: $sheet, deletingChat: $deletingChat) }
             } else {
                 Welcome(
@@ -156,7 +154,7 @@ private struct ChatDetail: View {
                     text: "Your models. Your conversations. A quiet space, right on your Mac."
                 ) {
                     Button("Start a Conversation") { state.newChat() }
-                        .buttonStyle(.primary)
+                        .buttonStyle(.glassProminent)
                         .disabled(chats.offline || chats.loading)
                 }
             }
@@ -198,7 +196,7 @@ private struct EmptyChat: View {
                 Button("Refresh Models", systemImage: "arrow.clockwise") {
                     Task { await chats.refreshModels() }
                 }
-                .buttonStyle(.secondary)
+                .buttonStyle(.glass)
                 .disabled(chats.refreshing || chats.offline)
             } else if let model = chats.model {
                 HStack(spacing: 6) {
@@ -223,35 +221,6 @@ private struct EmptyChat: View {
     }
 }
 
-extension View {
-    /// The window title in the display face where the system allows replacing
-    /// it (macOS 15 and later); the standard title elsewhere.
-    @ViewBuilder
-    func displayTitle(_ title: String, subtitle: String?) -> some View {
-        if #available(macOS 15.0, *) {
-            self
-                .navigationTitle(title)
-                .toolbar(removing: .title)
-                .toolbar {
-                    ToolbarItem(placement: .navigation) {
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(title)
-                                .font(Theme.display(17, weight: .medium, relativeTo: .headline))
-                                .lineLimit(1)
-                            if let subtitle {
-                                Text(subtitle).font(.caption).foregroundStyle(Theme.muted)
-                            }
-                        }
-                        .padding(.leading, 4)
-                        .accessibilityElement(children: .combine)
-                    }
-                }
-        } else {
-            self.navigationTitle(title).navigationSubtitle(subtitle ?? "")
-        }
-    }
-}
-
 /// A toolbar menu labelled with a small caption and its value: MODEL Gemma 4.
 /// One text, because toolbar menus keep only the first text of a label.
 private struct LabeledMenuTitle: View {
@@ -259,11 +228,11 @@ private struct LabeledMenuTitle: View {
     let value: String
 
     var body: some View {
-        Text(caption.uppercased())
+        let label = Text(caption.uppercased())
             .font(.system(size: 10, weight: .semibold))
             .tracking(1.3)
             .foregroundStyle(Theme.muted)
-            + Text("  ") + Text(value).font(.callout)
+        Text("\(label)  \(Text(value).font(.callout))")
     }
 }
 

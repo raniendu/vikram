@@ -18,6 +18,7 @@ from build_desktop import APP, ROOT, check_space
 from scripts.fetch_extension_python import check_bundle as check_extension_bundle
 from scripts.third_party import SourceError, check_notices
 from vikram.installation import (
+    MINIMUM_MACOS,
     bundle_size,
     bundle_version,
     check_platform,
@@ -171,7 +172,7 @@ def main() -> None:
             "CFBundleShortVersionString": version,
             "CFBundleVersion": version,
             "CFBundleIconFile": "AppIcon",
-            "LSMinimumSystemVersion": "14.0",
+            "LSMinimumSystemVersion": MINIMUM_MACOS,
             "NSHighResolutionCapable": True,
         }
         with (contents / "Info.plist").open("wb") as stream:
@@ -184,7 +185,7 @@ def main() -> None:
                 "5",
                 "-O",
                 "-target",
-                "arm64-apple-macosx14.0",
+                f"arm64-apple-macosx{MINIMUM_MACOS}",
                 "-module-cache-path",
                 str(cache),
                 str(ROOT / "scripts/installer.swift"),

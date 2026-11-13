@@ -33,7 +33,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from scripts import third_party  # noqa: E402
-from vikram.installation import REPOSITORY, InstallError, version_tuple  # noqa: E402
+from vikram.installation import (  # noqa: E402
+    MINIMUM_MACOS,
+    REPOSITORY,
+    InstallError,
+    version_tuple,
+)
 from vikram.releases import Release, parse_release  # noqa: E402
 
 API = f"https://api.github.com/repos/{REPOSITORY}"
@@ -117,7 +122,7 @@ def release_notes(release: Release) -> str:
     name = asset_name(release.version)
     image = disk_image_name(release.version)
     return f"""\
-Vikram {release.version} for Apple Silicon Macs with macOS 13 or newer: the desktop \
+Vikram {release.version} for Apple Silicon Macs with macOS {MINIMUM_MACOS} or newer: the desktop \
 app and CLI in one installer. Vikram uses your local Ollama models.
 
 - Update an installed copy: `vikram update`

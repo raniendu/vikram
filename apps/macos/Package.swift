@@ -5,7 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "Vikram",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS("27.0")],
     products: [
         .executable(name: "vikram-desktop", targets: ["Vikram"]),
     ],

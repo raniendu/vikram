@@ -1,4 +1,5 @@
 import contextlib
+import io
 import os
 import plistlib
 import sys
@@ -7,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from vikram import installation
+from vikram import bundle, installation
 
 
 def app_bundle(parent, version="0.1.0"):
@@ -20,7 +21,7 @@ def app_bundle(parent, version="0.1.0"):
                 "CFBundleIdentifier": "dev.raniendu.vikram",
                 "CFBundleShortVersionString": version,
                 "CFBundleExecutable": "vikram-desktop",
-                "LSMinimumSystemVersion": "13.0",
+                "LSMinimumSystemVersion": installation.MINIMUM_MACOS,
             },
             stream,
         )
@@ -29,6 +30,27 @@ def app_bundle(parent, version="0.1.0"):
         binary.write_text("executable fixture")
         binary.chmod(0o755)
     return app
+
+
+class BundlePlatformTests(unittest.TestCase):
+    def test_older_macos_fails_the_packaged_cli_startup_check(self):
+        # Older updaters check the staged CLI before activating the new bundle.
+        with (
+            patch.object(installation.platform, "system", return_value="Darwin"),
+            patch.object(installation.platform, "machine", return_value="arm64"),
+            patch.object(
+                installation.platform, "mac_ver", return_value=("26.6", (), "")
+            ),
+            patch.object(sys, "argv", ["vikram-sidecar", "--cli", "--version"]),
+            contextlib.redirect_stderr(io.StringIO()) as error,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            try:
+                status = bundle.main()
+            except SystemExit as exc:
+                status = exc.code
+            self.assertEqual(status, 1)
+        self.assertIn("macOS 27.0", error.getvalue())
 
 
 class InstallationTests(unittest.TestCase):

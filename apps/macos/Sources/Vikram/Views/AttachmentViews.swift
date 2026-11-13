@@ -118,7 +118,7 @@ private struct AttachmentPreview: View {
                 )
                 .font(.caption).foregroundStyle(Theme.muted)
                 Spacer()
-                Button("Done") { dismiss() }.buttonStyle(.primary).keyboardShortcut(.defaultAction)
+                Button("Done") { dismiss() }.buttonStyle(.glassProminent).keyboardShortcut(.defaultAction)
             }
         }
         .padding(20)

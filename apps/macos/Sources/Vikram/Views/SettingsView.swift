@@ -39,8 +39,6 @@ struct SettingsView: View {
                             .frame(width: 8, height: 8)
                             .accessibilityHidden(true)
                         Text("localhost:11434").font(.body.monospaced())
-                        Button("Refresh") { Task { await chats.refreshModels() } }
-                            .disabled(chats.refreshing || chats.offline)
                     }
                 }
                 Text(
@@ -71,6 +69,7 @@ struct SettingsView: View {
                     }
                 }
                 Button("Reconnect Chat Service") { Task { await state.reconnect() } }
+                    .buttonStyle(.glass)
                     .disabled(!state.canReconnect)
             } header: {
                 Text("Local Models")
@@ -79,6 +78,7 @@ struct SettingsView: View {
             }
             Section("Workbench") {
                 Button("Workspace, OpenRouter, and Integrations…") { showsWorkbench = true }
+                    .buttonStyle(.glass)
                 Text("Manage project trust, cloud credentials, conversation branches and queues, MCP servers, and Python extensions.")
                     .foregroundStyle(Theme.muted)
             }
@@ -109,8 +109,10 @@ struct SettingsView: View {
                             Text(updates.text).foregroundStyle(Theme.muted)
                             if status.state == "ready" {
                                 Button("Restart") { state.restart() }
+                                    .buttonStyle(.glassProminent)
                             } else if !["checking", "installing"].contains(status.state) {
                                 Button("Check for Updates") { Task { await updates.check() } }
+                                    .buttonStyle(.glass)
                             }
                         }
                     }
@@ -118,7 +120,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .tint(Theme.accent)
         .frame(width: 560, height: 620)
         .sheet(isPresented: $showsWorkbench) { WorkbenchView() }
         .task { await state.workbench.refresh(chatId: chats.selected) }

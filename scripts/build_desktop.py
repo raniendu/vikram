@@ -127,6 +127,13 @@ def sidecar_spec(image: Path) -> Path:
 
 def build_app(version: str, notices: Path, extension_python: Path) -> None:
     """Build the Swift executable and assemble, sign and verify Vikram.app."""
+    from vikram.installation import MINIMUM_MACOS
+
+    sdk = subprocess.check_output(
+        ["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-version"], text=True
+    ).strip()
+    if int(sdk.split(".")[0]) < int(MINIMUM_MACOS.split(".")[0]):
+        raise SystemExit(f"Select Xcode with a macOS {MINIMUM_MACOS} or newer SDK.")
     subprocess.run(
         [
             "/usr/bin/xcrun",
@@ -138,6 +145,16 @@ def build_app(version: str, notices: Path, extension_python: Path) -> None:
             "release",
             "--product",
             "vikram-desktop",
+            # SwiftPM's default build can record the deployment target as the SDK.
+            # macOS uses the linked SDK version to select its system appearance.
+            "-Xlinker",
+            "-platform_version",
+            "-Xlinker",
+            "macos",
+            "-Xlinker",
+            MINIMUM_MACOS,
+            "-Xlinker",
+            sdk,
         ],
         check=True,
     )
@@ -158,6 +175,8 @@ def build_app(version: str, notices: Path, extension_python: Path) -> None:
     ).stdout.strip()
     with (PACKAGE / "Resources/Info.plist").open("rb") as stream:
         info = plistlib.load(stream)
+    if info["LSMinimumSystemVersion"] != MINIMUM_MACOS:
+        raise SystemExit(f"Set the app's LSMinimumSystemVersion to {MINIMUM_MACOS}.")
     if info["CFBundleShortVersionString"] != version:
         raise SystemExit(
             f"apps/macos/Resources/Info.plist says {info['CFBundleShortVersionString']}, "

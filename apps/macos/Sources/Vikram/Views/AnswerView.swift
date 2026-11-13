@@ -257,8 +257,7 @@ struct TranscriptView: View {
                         following = true
                         withAnimation { proxy.scrollTo("end", anchor: .bottom) }
                     }
-                    .buttonStyle(.secondary)
-                    .background(Theme.raised, in: Capsule())
+                    .buttonStyle(.glass)
                     .padding(8)
                 }
             }
@@ -297,7 +296,7 @@ private struct TurnView: View {
                 && !message.attempts.contains(where: { ["running", "complete"].contains($0.status) })
             {
                 Button("Retry with Selected Model", systemImage: "arrow.counterclockwise", action: retry)
-                    .buttonStyle(.secondary)
+                    .buttonStyle(.glass)
                     .disabled(!canRetry)
             }
         }

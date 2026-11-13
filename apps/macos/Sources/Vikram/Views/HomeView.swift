@@ -7,19 +7,17 @@ struct HomeView: View {
   @Environment(AppState.self) private var state
   @Environment(BotController.self) private var bots
   @Environment(ChatController.self) private var chats
+  @State private var editor: BotDraft?
 
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 26) {
-        VStack(alignment: .leading, spacing: 8) {
-          Text(
-            !bots.loaded
-              ? "Your bots" : bots.home.isCalm ? "You're caught up." : "A few things need you."
-          )
+        Text(
+          !bots.loaded
+            ? "Your bots" : bots.home.isCalm ? "You're caught up." : "A few things need you."
+        )
           .font(Theme.display(32, relativeTo: .largeTitle))
-          Text("Your bots work in the background. Only what matters belongs here.")
-            .foregroundStyle(Theme.muted)
-        }
+          .accessibilityAddTraits(.isHeader)
         if !bots.loaded {
           if bots.error != nil && !bots.loading {
             Text("Your bots could not be loaded. Refresh to try again.")
@@ -55,11 +53,7 @@ struct HomeView: View {
             }
           }
           VStack(alignment: .leading, spacing: 12) {
-            HStack {
-              Eyebrow("Your bots")
-              Spacer()
-              Button("Manage Bots") { state.selection = .bots }
-            }
+            Eyebrow("Your bots")
             ForEach(bots.home.bots) { bot in
               Button {
                 state.openBot(bot.id)
@@ -70,17 +64,24 @@ struct HomeView: View {
               Divider()
             }
             if bots.home.bots.isEmpty {
-              Text("Give a specialist an ongoing responsibility—without starting a conversation.")
+              Text("Create a bot to monitor a topic on a schedule.")
                 .foregroundStyle(Theme.muted)
-              Button("Create Your First Bot") { state.selection = .bots }
-                .buttonStyle(.primary)
             }
           }
-          HStack {
-            Text("Need something now?").foregroundStyle(Theme.muted)
-            Button("Talk to the Default Bot") { state.newChat() }
+          HStack(spacing: 10) {
+            if bots.home.bots.isEmpty {
+              Button("Create Bot", systemImage: "plus") { editor = bots.draft() }
+                .buttonStyle(.glassProminent)
+                .disabled(chats.offline || bots.working || !bots.templates.contains(where: \.available))
+            } else {
+              Button("Manage Bots") { state.selection = .bots }
+                .buttonStyle(.glass)
+            }
+            Button("New Chat", systemImage: "square.and.pencil") { state.newChat() }
+              .buttonStyle(.glass)
               .disabled(chats.offline)
           }
+          .controlSize(.large)
         }
       }
       .frame(maxWidth: 850, alignment: .leading)
@@ -88,6 +89,7 @@ struct HomeView: View {
       .frame(maxWidth: .infinity)
     }
     .navigationTitle("Home")
+    .sheet(item: $editor) { BotEditor(draft: $0) }
     .toolbar {
       Button("Refresh", systemImage: "arrow.clockwise") {
         Task {
