@@ -43,6 +43,7 @@ public struct IntegrationStatus: Sendable, Hashable, Decodable, Identifiable {
 public struct WorkbenchStatus: Sendable, Decodable {
     public var defaultModel: String?
     public var workspace: String?
+    public var sandbox: [String: JSONValue]
     public var trusted: Bool
     public var provider: String
     public var cloudEnabled: Bool
@@ -54,24 +55,25 @@ public struct WorkbenchStatus: Sendable, Decodable {
     public var extensions: [IntegrationStatus]
 
     enum CodingKeys: String, CodingKey {
-        case workspace, trusted, provider, credentials, context, queue, resources, mcp, extensions
+        case workspace, sandbox, trusted, provider, credentials, context, queue, resources, mcp, extensions
         case cloudEnabled = "cloud_enabled"
         case defaultModel = "default_model"
     }
 
     public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        defaultModel = try c.decodeIfPresent(String.self, forKey: .defaultModel)
-        workspace = try c.decodeIfPresent(String.self, forKey: .workspace)
-        trusted = try c.decodeIfPresent(Bool.self, forKey: .trusted) ?? false
-        provider = try c.decodeIfPresent(String.self, forKey: .provider) ?? "ollama"
-        cloudEnabled = try c.decodeIfPresent(Bool.self, forKey: .cloudEnabled) ?? false
-        credentials = try c.decodeIfPresent(String.self, forKey: .credentials)
-        context = try c.decodeIfPresent([String: JSONValue].self, forKey: .context) ?? [:]
-        queue = try c.decodeIfPresent([QueuedInput].self, forKey: .queue) ?? []
-        resources = try c.decodeIfPresent([String: JSONValue].self, forKey: .resources) ?? [:]
-        mcp = try c.decodeIfPresent([IntegrationStatus].self, forKey: .mcp) ?? []
-        extensions = try c.decodeIfPresent([IntegrationStatus].self, forKey: .extensions) ?? []
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        defaultModel = try container.decodeIfPresent(String.self, forKey: .defaultModel)
+        workspace = try container.decodeIfPresent(String.self, forKey: .workspace)
+        sandbox = try container.decodeIfPresent([String: JSONValue].self, forKey: .sandbox) ?? [:]
+        trusted = try container.decodeIfPresent(Bool.self, forKey: .trusted) ?? false
+        provider = try container.decodeIfPresent(String.self, forKey: .provider) ?? "ollama"
+        cloudEnabled = try container.decodeIfPresent(Bool.self, forKey: .cloudEnabled) ?? false
+        credentials = try container.decodeIfPresent(String.self, forKey: .credentials)
+        context = try container.decodeIfPresent([String: JSONValue].self, forKey: .context) ?? [:]
+        queue = try container.decodeIfPresent([QueuedInput].self, forKey: .queue) ?? []
+        resources = try container.decodeIfPresent([String: JSONValue].self, forKey: .resources) ?? [:]
+        mcp = try container.decodeIfPresent([IntegrationStatus].self, forKey: .mcp) ?? []
+        extensions = try container.decodeIfPresent([IntegrationStatus].self, forKey: .extensions) ?? []
     }
 }
 

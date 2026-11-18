@@ -449,6 +449,7 @@ class CodingSession:
         future = asyncio.get_running_loop().create_future()
         self._calls[identifier] = fingerprint, future
         current = asyncio.current_task()
+        assert current is not None
         self._active.add(current)
         try:
             if self._closed:
@@ -573,6 +574,7 @@ class CodingSession:
         if self._closed or not self.settings.is_trusted(self.workspace):
             raise CodingDenied("Workspace trust was revoked before the action ran.")
         if name == "bash":
+            assert isinstance(args, BashArgs)
             cwd = await self._path(args.cwd, person, identifier)
             if not cwd.is_dir():
                 raise ValueError("The command working directory does not exist.")
@@ -580,11 +582,13 @@ class CodingSession:
             if reason and not user_initiated:
                 await self._approve(person, identifier, f"Run: {args.command}", reason)
             return await self._bash(args, cwd)
+        assert isinstance(args, (ReadArgs, WriteArgs, EditArgs, ListArgs))
         path = await self._path(
             args.path, person, identifier, write=name in {"edit", "write"}
         )
         display = self._display(path)
         if name == "read":
+            assert isinstance(args, ReadArgs)
             content = _read_text(path)
             lines = content.splitlines()
             selected = lines[args.offset - 1 : args.offset - 1 + args.limit]
@@ -602,6 +606,7 @@ class CodingSession:
         if name in {"edit", "write"}:
             before = _read_text(path) if path.exists() else None
             if name == "edit":
+                assert isinstance(args, EditArgs)
                 if before is None or before.count(args.old_text) != 1:
                     raise ValueError(
                         "Exact edit conflict: old_text must occur exactly once."
@@ -609,6 +614,7 @@ class CodingSession:
                 after = before.replace(args.old_text, args.new_text, 1)
                 expected = before
             else:
+                assert isinstance(args, WriteArgs)
                 after, expected = args.content, args.expected_content
             _write_text(path, after, expected)
             diff = "".join(
@@ -627,9 +633,10 @@ class CodingSession:
                 paths=[display],
                 activity=f"Edited {display}",
             )
+        assert isinstance(args, ListArgs)
         return self._inspect(name, args, path)
 
-    def _inspect(self, name: str, args: Arguments, path: Path) -> CodingResult:
+    def _inspect(self, name: str, args: ListArgs, path: Path) -> CodingResult:
         if not path.is_dir():
             raise ValueError("Choose an existing directory.")
         output, paths, truncated = [], [], False
@@ -680,12 +687,13 @@ class CodingSession:
                 break
             relative = str(entry.relative_to(path))
             display = self._display(entry)
-            if name == "find" and not (
+            if isinstance(args, FindArgs) and not (
                 fnmatch.fnmatch(relative, args.pattern)
                 or fnmatch.fnmatch(entry.name, args.pattern)
             ):
                 continue
             if name == "grep":
+                assert isinstance(args, GrepArgs)
                 if directory or not fnmatch.fnmatch(relative, args.glob):
                     continue
                 try:
@@ -755,12 +763,14 @@ class CodingSession:
             stderr=asyncio.subprocess.STDOUT,
             start_new_session=True,
         )
+        assert process.stdout is not None
+        stdout = process.stdout
         self._processes.add(process)
         chunks, size, truncated = [], 0, False
 
         async def consume():
             nonlocal size, truncated
-            while chunk := await process.stdout.read(4096):
+            while chunk := await stdout.read(4096):
                 text = chunk.decode("utf-8", errors="replace")
                 kept = text[: max(0, MAX_OUTPUT - size)]
                 if kept:

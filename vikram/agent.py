@@ -1,6 +1,7 @@
 """The single Vikram agent, with local Ollama as its default provider."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import cast
 
 import httpx
 import pydantic_ai
@@ -9,6 +10,7 @@ from pydantic_ai.models.ollama import OllamaModel
 from pydantic_ai.models.openrouter import OpenRouterModel
 from pydantic_ai.providers.ollama import OllamaProvider
 from pydantic_ai.providers.openrouter import OpenRouterProvider
+from pydantic_ai.settings import ModelSettings
 
 from vikram.providers import CredentialError, CredentialStore, ModelRef, model_settings
 from vikram.toolkit import (
@@ -16,6 +18,8 @@ from vikram.toolkit import (
     TEXT_PLAN_PROMPT,
     Mode,
     Reply,
+    ReplyPolicy,
+    budget_prompt,
     has_browser,
     has_tasks,
     mode_of,
@@ -58,6 +62,7 @@ def agent_prompt(
     browser: bool = False,
     tasks: bool = False,
     scheduled: str | None = None,
+    persistent_sandbox: bool = False,
 ) -> str:
     """Instructions for one combination of web tools, local tools, and mode.
 
@@ -76,7 +81,7 @@ def agent_prompt(
                 else "You have no live internet access. "
             )
         )
-        prompt += toolkit_prompt(sandbox, browser, tasks, scheduled)
+        prompt += toolkit_prompt(sandbox, browser, tasks, scheduled, persistent_sandbox)
     else:
         prompt = WEB_PROMPT if web else SYSTEM_PROMPT
         if scheduled:
@@ -95,7 +100,7 @@ def system_time_instructions() -> str:
         "Current system clock supplied by the user's computer for this request:\n"
         f"Local date and time: {local.isoformat(timespec='seconds')} "
         f"({local.strftime('%A')}, {local.tzname()}).\n"
-        f"UTC date and time: {local.astimezone(timezone.utc).isoformat(timespec='seconds')}.\n"
+        f"UTC date and time: {local.astimezone(UTC).isoformat(timespec='seconds')}.\n"
         "Use this clock for now, today, and relative dates, in the local timezone "
         "unless the user specifies another timezone. Older dates in the conversation "
         "are historical. You know the supplied current time even with web access off; "
@@ -133,7 +138,7 @@ def build_agent(
         backend = OpenRouterModel(
             reference.model_id,
             provider=OpenRouterProvider(api_key=key, http_client=http_client),
-            settings=model_settings(reference.qualified_id, None),
+            settings=cast(ModelSettings, model_settings(reference.qualified_id, None)),
         )
     else:
         backend = OllamaModel(
@@ -145,6 +150,10 @@ def build_agent(
             ),
         )
 
+    # Disable transport retries before erasing the concrete model's type in Agent.
+    # Tool effects must not be retried implicitly after a provider failure.
+    backend.client.max_retries = 0
+
     def instructions(ctx: RunContext[Reply]) -> str:
         # Recomputed per request, so an approved plan drops plan-mode guidance.
         prompt = agent_prompt(
@@ -155,12 +164,34 @@ def build_agent(
             browser=has_browser(ctx),
             tasks=has_tasks(ctx),
             scheduled=scheduled_of(ctx),
+            persistent_sandbox=bool(getattr(ctx.deps, "sandbox_persistent", False)),
         )
-        if (
-            coding := getattr(ctx.deps, "coding", None)
-        ) is not None and coding.settings.is_trusted():
+        coding = getattr(ctx.deps, "coding", None)
+        if toolkit and coding is not None and coding.settings.is_trusted():
             prompt = prompt.replace("You have no direct filesystem access. ", "")
-            prompt += "\nYou have trusted host coding tools in the selected workspace. Use read/grep/find/ls to inspect and exact edit/write for changes; bash runs host commands under the shared approval policy. These host tools are distinct from run_code, which remains an isolated Python VM. Never imply that host commands are sandboxed."
+            prompt += (
+                f"\nTrusted host workspace: {coding.workspace}. "
+                "Use read/grep/find/ls to inspect and exact edit/write for changes; "
+                "bash runs host commands under the shared approval policy. "
+                "For persistent files, websites, and project validation, use these "
+                "host tools, not run_code. Verify saved files with read/ls or a "
+                "focused check before claiming completion and return their full "
+                "host paths. If asked to open a file, use the host tool only within "
+                "its approval policy; never substitute the isolated VM. Host tools "
+                "run with the user's privileges and are not sandboxed."
+            )
+        elif not scheduled_of(ctx):
+            prompt += (
+                "\nNo trusted host workspace is available. For a request to build, "
+                "save, edit, validate, or open a real local file, explain this blocker "
+                "before doing file work. Ask the user to choose a folder in "
+                "Workbench → Workspace → Choose Folder and enable Trust this "
+                "workspace, or use /workspace then /trust in the CLI. Never grant "
+                "trust yourself or silently rebuild missing files in an isolated sandbox. "
+                "You may provide source code inline, clearly labeled as not saved."
+            )
+        if toolkit:
+            prompt += "\n\n" + budget_prompt(ctx)
         if extra_instructions := getattr(ctx.deps, "instructions", ""):
             prompt += "\n\n" + extra_instructions
         return prompt + "\n\n" + system_time_instructions()
@@ -172,6 +203,6 @@ def build_agent(
         instructions=instructions,
         tools=[*tools, *(toolkit_tools(sandbox) if toolkit else ())],
         toolsets=list(toolsets),
-        capabilities=toolkit_capabilities() if toolkit else (),
+        capabilities=toolkit_capabilities() if toolkit else [ReplyPolicy()],
         retries=2,
     )

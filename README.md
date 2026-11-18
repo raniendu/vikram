@@ -172,13 +172,16 @@ built on [Pydantic AI Harness](https://pydantic.dev/docs/ai/harness/):
   Python for exact arithmetic, counting, dates, and data processing. Code runs
   in a local microVM ([smolvm](https://github.com/smol-machines/smolvm) on
   Apple's Hypervisor framework) with its own Linux kernel: no network, none of
-  your files, and none of your environment. Each reply that runs code boots a
-  new VM (1 CPU, 512 MiB, 1 GB disks) from a bundled, digest-pinned
-  `python:3.13-alpine` image, so only the standard library is installed, and
-  deletes the VM when the reply ends. It will not boot a VM that could take the
-  Mac below 20 GiB free. Each snippet is a fresh Python process with 15 seconds; files in
-  `/workspace` last for the rest of the reply. Errors go back to the model to
-  fix, and a failing snippet never ends the reply. On a Mac that cannot run VMs,
+  your files, and none of your environment. A saved conversation boots a VM
+  (1 CPU, 512 MiB, 1 GB disks) on first use from the bundled, digest-pinned
+  `python:3.13-alpine` image, then reattaches through its private Pydantic
+  `WorkspaceRef`. The VM stops after each reply to flush the disk, but its
+  `/workspace` files survive replies and clean app/CLI restarts. Each snippet
+  is still a fresh Python process with 15 seconds and the standard library only.
+  Missing VMs are reported, never silently recreated. Forks and imports start
+  fresh; temporary chats, scheduled runs, evaluations, and composition VMs stay
+  disposable. It will not boot a VM that could take the Mac below 20 GiB free.
+  Errors go back to the model to fix. On a Mac that cannot run VMs,
   Vikram says why and does not offer the sandbox: code never runs outside a VM.
 - **Clarifying questions** (`ask_user_question`, Harness Ask User). When a
   request is ambiguous, Vikram shows multiple-choice questions and waits. Pick
@@ -197,6 +200,15 @@ own words (Enter skips), and answer plans with `y`, `c` (request changes), or `n
 Ctrl+C stops the reply. `/activity` shows sandbox code, output, answers, and
 plans. Piped one-shot runs cannot ask, so questions are declined and plans stay
 unapproved.
+
+Reset a saved conversation's sandbox in **Workbench → Workspace → Reset Sandbox**,
+or close its active controller and run `vikram sandbox reset --session ID --yes`.
+`vikram sandbox status --session ID` reports its saved reference. Both commands
+accept `--session-dir`. Reset deletes sandbox files, not the chat or host workspace;
+reset before deleting a chat that owns a sandbox. References stay in the private
+chat library, never in exports. Linux paths are not Mac paths: there is still no
+sandbox file export. An interrupted shutdown makes recent writes uncertain, and
+failure to flush is a failed reply rather than a successful save.
 
 Per reply: at most six sandbox runs, three question calls, three plan
 submissions, and ten model requests; the last request offers no tools so the
@@ -428,7 +440,8 @@ original Ollama ID to `--model`; requests and stored identities retain that ID.
 - `vikram/conversation.py` and `context.py`: shared execution and conversation context.
 - `vikram/toolkit.py`: Python sandbox, clarifying questions, plan mode, browser, and scheduled-task tools.
 - `vikram/schedules.py`: scheduled tasks and runs, the background runner, and its LaunchAgent.
-- `vikram/sandbox.py`: the per-reply Python microVM and its pinned image.
+- `vikram/sandbox.py`: bounded Python microVMs, native Smol reattachment, and disk flush.
+- `vikram/sandbox_session.py`, `sandbox_cli.py`: private conversation refs and explicit reset.
 - `vikram/browser.py`: the browser engine contract, page views, and the CLI's helper.
 - `vikram/interaction.py`: the question, plan-review, and approval contract interfaces implement.
 - `vikram/web.py`: bounded anonymous Parallel MCP tools.
@@ -452,7 +465,7 @@ flowchart LR
     Agent <--> Ollama[Local Ollama model]
     Runner <--> Parallel[Anonymous Parallel search tools]
     Agent <--> Toolkit[Questions, plan approval, run_code, browser, scheduled tasks]
-    Toolkit <--> VM[Python microVM per reply]
+    Toolkit <--> VM[Persistent conversation VM; disposable unattended VMs]
     Toolkit <--> Browser[WebKit browser: app panel or hidden helper]
     Toolkit <--> Tasks[(Scheduled tasks and runs)]
     Launchd[LaunchAgent: due tasks, app closed] --> Runner

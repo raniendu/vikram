@@ -165,7 +165,7 @@ class KeychainTokenStorage:
         self.keychain = keychain if keychain is not None else MacOSKeychain()
         self.prefix = "mcp:" + hashlib.sha256(server_url.encode()).hexdigest()
 
-    async def _get(self, suffix: str, model: type[BaseModel]):
+    async def _get[T: BaseModel](self, suffix: str, model: type[T]) -> T | None:
         value = await asyncio.to_thread(self.keychain.get, f"{self.prefix}:{suffix}")
         if not value or len(value) > MAX_ARGUMENTS:
             return None
@@ -226,6 +226,13 @@ class KeychainTokenStorage:
 
 
 class _PrivateOAuthProvider(OAuthClientProvider):
+    @property
+    def _storage(self) -> KeychainTokenStorage:
+        # MCPManager.oauth_provider always supplies this extended SDK storage.
+        storage = self.context.storage
+        assert isinstance(storage, KeychainTokenStorage)
+        return storage
+
     async def async_auth_flow(self, request):
         token = _PRIVATE_MCP.set(True)
         flow = super().async_auth_flow(request)
@@ -243,7 +250,7 @@ class _PrivateOAuthProvider(OAuthClientProvider):
 
     async def _initialize(self):
         await super()._initialize()
-        self.context.oauth_metadata = await self.context.storage.get_metadata()
+        self.context.oauth_metadata = await self._storage.get_metadata()
         if self.context.current_tokens:
             self.context.update_token_expiry(self.context.current_tokens)
         client = self.context.client_info
@@ -257,7 +264,7 @@ class _PrivateOAuthProvider(OAuthClientProvider):
     async def _handle_token_response(self, response):
         await super()._handle_token_response(response)
         if self.context.oauth_metadata:
-            await self.context.storage.set_metadata(self.context.oauth_metadata)
+            await self._storage.set_metadata(self.context.oauth_metadata)
 
     async def _handle_refresh_response(self, response):
         valid = await super()._handle_refresh_response(response)
@@ -286,6 +293,7 @@ async def _terminate(process: asyncio.subprocess.Process) -> None:
 @asynccontextmanager
 async def _stdio(config: MCPConfig):
     """Bounded stdio transport using the SDK's typed SessionMessage streams."""
+    assert config.command is not None
     incoming_writer, incoming = anyio.create_memory_object_stream(0)
     outgoing, outgoing_reader = anyio.create_memory_object_stream(0)
     process = await asyncio.create_subprocess_exec(
@@ -299,11 +307,13 @@ async def _stdio(config: MCPConfig):
         stderr=asyncio.subprocess.DEVNULL,
         limit=MAX_MESSAGE + 1,
     )
+    stdout, stdin = process.stdout, process.stdin
+    assert stdout is not None and stdin is not None
 
     async def read():
         async with incoming_writer:
             try:
-                while line := await process.stdout.readline():
+                while line := await stdout.readline():
                     if len(line) > MAX_MESSAGE:
                         raise ValueError("MCP message exceeds the size limit.")
                     try:
@@ -329,8 +339,8 @@ async def _stdio(config: MCPConfig):
                     ).encode()
                     if len(encoded) > MAX_MESSAGE:
                         raise ValueError("MCP message exceeds the size limit.")
-                    process.stdin.write(encoded + b"\n")
-                    await process.stdin.drain()
+                    stdin.write(encoded + b"\n")
+                    await stdin.drain()
             except (BrokenPipeError, ConnectionResetError):
                 return
 
@@ -368,6 +378,7 @@ class _BoundedTransport(httpx.AsyncBaseTransport):
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         response = await self.transport.handle_async_request(request)
+        assert isinstance(response.stream, httpx.AsyncByteStream)
         return httpx.Response(
             response.status_code,
             headers=response.headers,
@@ -561,6 +572,7 @@ class MCPManager:
                             timeout=httpx.Timeout(30, read=config.timeout),
                         )
                     )
+                    assert config.url is not None
                     streams = await stack.enter_async_context(
                         streamable_http_client(config.url, http_client=client)
                     )
@@ -601,6 +613,7 @@ class MCPManager:
                             exposed=tool.name in config.exposed,
                         )
                 connection.state = "connected"
+                assert connection.ready is not None
                 connection.ready.set_result(True)
                 await connection.stop.wait()
         except asyncio.CancelledError:
@@ -810,6 +823,7 @@ class MCPManager:
         future = asyncio.get_running_loop().create_future()
         self._calls[identifier] = fingerprint, future
         current = asyncio.current_task()
+        assert current is not None
         self._active.add(current)
         private = _PRIVATE_MCP.set(True)
         try:

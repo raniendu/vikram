@@ -65,6 +65,7 @@ async def serve(output) -> None:
         if len(raw) > MAX_FRAME or not raw.endswith(b"\n"):
             break
         request_id = None
+        request = None
         try:
             request = json.loads(raw)
             if (
@@ -123,10 +124,7 @@ async def serve(output) -> None:
             )
         output.write(encoded + "\n")
         output.flush()
-        if (
-            isinstance(locals().get("request"), dict)
-            and request.get("method") == "close"
-        ):
+        if isinstance(request, dict) and request.get("method") == "close":
             break
 
 

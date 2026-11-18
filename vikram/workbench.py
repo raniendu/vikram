@@ -178,8 +178,30 @@ class Workbench:
         )
         store = self.runtime.store
         settings = self.settings(cid)
+        if action == "sandbox_reset":
+            from vikram.sandbox_session import reset_sandbox, state_path
+
+            if not cid or options.get("confirmed") is not True:
+                raise ValueError(
+                    "Confirm deletion of this conversation's sandbox files."
+                )
+            with store.mutation(cid):
+                store._require_idle(cid)
+                await reset_sandbox(state_path(store.root, cid))
+            self.runtime.event("workbench", chat_id=cid)
+            return {"reset": True}
         if action == "status":
             from vikram.integrations import start, status
+            from vikram.sandbox_session import load_state, state_path
+
+            sandbox_status = "not_created"
+            if cid:
+                try:
+                    saved_sandbox = load_state(state_path(store.root, cid))
+                    if saved_sandbox is not None:
+                        sandbox_status = "saved" if saved_sandbox.saved else "uncertain"
+                except (OSError, ValueError):
+                    sandbox_status = "unavailable"
 
             context = self.context(cid) if cid else None
             coding = self.services.get(cid)
@@ -196,6 +218,7 @@ class Workbench:
             return {
                 "default_model": self.default_model(),
                 "workspace": str(settings.workspace) if settings.workspace else None,
+                "sandbox": {"state": sandbox_status},
                 "trusted": settings.is_trusted() if settings.workspace else False,
                 "provider": (
                     "openrouter"

@@ -154,7 +154,8 @@ BROWSER_VERBS = {
 def browser_summary(record: dict) -> str:
     """What one browser action did, for `/activity`."""
     text = f"Browser · {record['status'].replace('_', ' ')} · "
-    text += BROWSER_VERBS.get(record["action"], record["action"])
+    action = str(record["action"])
+    text += BROWSER_VERBS.get(action, action)
     if record.get("target"):
         text += f" {record['target']}"
     if record.get("text"):
@@ -197,7 +198,7 @@ def render_reply(
     if answer:
         items.append(Markdown(answer, hyperlinks=False, code_theme="ansi_dark"))
     if status == "running":
-        phase = PHASES.get(event.get("phase"), "Waiting for Ollama…")
+        phase = PHASES.get(str(event.get("phase", "")), "Waiting for Ollama…")
         hint = " · Ctrl+T " + ("hide" if show_thinking else "view") if reasoning else ""
         items.append(
             Text(f"● {phase} {elapsed:.0f}s{hint} · Ctrl+C stop", style=ACCENT)
@@ -495,13 +496,15 @@ class TerminalChat:
             except KeyboardInterrupt:
                 return None
 
+        current = asyncio.current_task()
+        assert current is not None
         prompt = asyncio.ensure_future(ask())
         # The reply may stop waiting (a stop or the shared time limit): close the prompt.
         future.add_done_callback(lambda done: prompt.cancel())
         try:
             result = await prompt
         except asyncio.CancelledError:
-            if future.done() and not asyncio.current_task().cancelling():
+            if future.done() and not current.cancelling():
                 return
             raise
         if result is None:
@@ -512,6 +515,8 @@ class TerminalChat:
             future.set_result(result)
 
     async def answer(self, message: str) -> None:
+        current = asyncio.current_task()
+        assert current is not None
         self.last_event = {"phase": "loading"}
         self.show_thinking = False
         started = time.monotonic()
@@ -545,6 +550,8 @@ class TerminalChat:
 
         def keys_ready():
             nonlocal stopped
+            if self.input is None:
+                return
             for key in self.input.read_keys():
                 if key.key == Keys.ControlT:
                     self.show_thinking = not self.show_thinking
@@ -581,11 +588,12 @@ class TerminalChat:
                     if not waiter.done():
                         waiter.cancel()
                 if waiter.done() and not waiter.cancelled():
-                    await self._interact(*waiter.result(), task)
+                    kind, payload, future = waiter.result()
+                    await self._interact(kind, payload, future, task)
             await task
         except asyncio.CancelledError:
             status = "stopped"
-            if asyncio.current_task().cancelling():
+            if current.cancelling():
                 raise
         except (ReplyError, AgentRunError, ValueError) as exc:
             status = "failed"

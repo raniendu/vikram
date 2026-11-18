@@ -26,7 +26,7 @@ MAX_CALLS = 100
 ACTIVE_TIMEOUT = 5 * 60
 TOTAL_TIMEOUT = 30 * 60
 POLL_INTERVAL = 0.01
-_CLOCK = ContextVar("vikram_composition_clock", default=None)
+_CLOCK = ContextVar["CompositionState | None"]("vikram_composition_clock", default=None)
 
 # This string is written to the VM. No model code is evaluated by the host.
 GUEST_RUNNER = r"""
@@ -165,6 +165,7 @@ class CompositionState:
 
     def remaining(self) -> float:
         self._tick()
+        assert self.started is not None
         overall = self.total_timeout - (time.monotonic() - self.started)
         active = self.active_timeout - self.active if not self._waiting else overall
         return max(0.001, min(overall, active))

@@ -35,13 +35,13 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, tzinfo
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 LABEL = "dev.raniendu.vikram.scheduler"
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
@@ -79,7 +79,7 @@ def local_zone() -> tzinfo:
             return ZoneInfo(target.split("zoneinfo/", 1)[1])
     except (OSError, ValueError, KeyError):
         pass
-    return datetime.now().astimezone().tzinfo
+    return datetime.now().astimezone().tzinfo or UTC
 
 
 class Schedule(BaseModel):
@@ -321,13 +321,18 @@ def repair_schedule(args: dict, now: datetime | None = None) -> dict:
                 moment += timedelta(days=1)
             args["date"] = moment.date().isoformat()
     # Drop fields this repeat does not use, which small models fill with nulls.
-    uses = {
-        "once": {"date", "time"},
-        "daily": {"time"},
-        "weekly": {"days", "time"},
-        "monthly": {"day_of_month", "time"},
-        "interval": {"every_minutes"},
-    }.get(args.get("repeat"))
+    repeat = args.get("repeat")
+    uses = (
+        {
+            "once": {"date", "time"},
+            "daily": {"time"},
+            "weekly": {"days", "time"},
+            "monthly": {"day_of_month", "time"},
+            "interval": {"every_minutes"},
+        }.get(repeat)
+        if isinstance(repeat, str)
+        else None
+    )
     if uses is not None:
         for key in ("time", "date", "days", "day_of_month", "every_minutes"):
             if key not in uses and key in args:
@@ -349,9 +354,8 @@ def schedule_from(args: dict) -> Schedule:
 
 
 def _first_error(error: Exception) -> str:
-    errors = getattr(error, "errors", None)
-    if callable(errors):
-        for item in errors():
+    if isinstance(error, ValidationError):
+        for item in error.errors():
             message = str(item.get("msg", "")).removeprefix("Value error, ")
             where = ".".join(str(part) for part in item.get("loc", ()))
             if message:
@@ -377,16 +381,20 @@ def next_run(
     zone = zone or local_zone()
     after = after.astimezone(zone)
     if schedule.repeat == "once":
+        assert schedule.date is not None and schedule.time is not None
         moment = _at(date.fromisoformat(schedule.date), schedule.time, zone)
         return moment if moment > after else None
     if schedule.repeat == "interval":
+        assert schedule.every_minutes is not None
         step = timedelta(minutes=schedule.every_minutes)
         start = (anchor or after).astimezone(zone)
         if start > after:
             return start
         count = int((after - start) / step) + 1
         return start + count * step
+    assert schedule.time is not None
     if schedule.repeat == "monthly":
+        assert schedule.day_of_month is not None
         year, month = after.year, after.month
         for _ in range(14):
             last = calendar.monthrange(year, month)[1]
@@ -408,11 +416,13 @@ def next_run(
 def describe(schedule: Schedule) -> str:
     """One line a person can read: 'Weekdays at 08:00'."""
     if schedule.repeat == "once":
+        assert schedule.date is not None
         day = date.fromisoformat(schedule.date)
         return f"Once on {day.strftime('%a %-d %b %Y')} at {schedule.time}"
     if schedule.repeat == "daily":
         return f"Every day at {schedule.time}"
     if schedule.repeat == "weekly":
+        assert schedule.days is not None
         days = tuple(schedule.days)
         if days == WEEKDAYS:
             which = "Weekdays"
@@ -426,6 +436,7 @@ def describe(schedule: Schedule) -> str:
     if schedule.repeat == "monthly":
         return f"Monthly on day {schedule.day_of_month} at {schedule.time}"
     minutes = schedule.every_minutes
+    assert minutes is not None
     if minutes % (24 * 60) == 0:
         count, unit = minutes // (24 * 60), "day"
     elif minutes % 60 == 0:
@@ -666,6 +677,7 @@ class ScheduleStore:
         anchor = now
         if schedule.repeat == "interval":
             # The first interval run happens one interval from now.
+            assert schedule.every_minutes is not None
             anchor = now + schedule.every_minutes * 60
         next_at = self._next(schedule, anchor, now)
         if next_at is None:
@@ -837,13 +849,14 @@ class ScheduleStore:
                 return None
             task = self._task(row)
             schedule = Schedule.model_validate(task["schedule"])
-            due = task["enabled"] and task["next_run"] is not None
-            due = due and task["next_run"] <= now
+            scheduled_for = task["next_run"]
+            due = task["enabled"] and scheduled_for is not None and scheduled_for <= now
+            lateness = now - scheduled_for if scheduled_for is not None else 0
             next_at = (
                 self._next(schedule, task["anchor"], now) if due else task["next_run"]
             )
             manual = task["run_requested"]
-            missed = due and not manual and now - task["next_run"] > CATCH_UP
+            missed = due and not manual and lateness > CATCH_UP
             run_id = _uid()
             with self.db:
                 self.db.execute(
@@ -859,11 +872,7 @@ class ScheduleStore:
                         (
                             "manual"
                             if manual
-                            else (
-                                "catch_up"
-                                if now - task["next_run"] > 120
-                                else "schedule"
-                            )
+                            else ("catch_up" if lateness > 120 else "schedule")
                         ),
                         task["next_run"] if due else None,
                         now,
@@ -1326,6 +1335,7 @@ def main() -> int:
 
             async def work():
                 task = asyncio.current_task()
+                assert task is not None
                 loop = asyncio.get_running_loop()
                 # launchd stops the agent with SIGTERM (log out, shutdown, removal).
                 for sig in (signal.SIGTERM, signal.SIGINT):
