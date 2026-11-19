@@ -49,7 +49,8 @@ def version_tuple(value: str) -> tuple[int, int, int]:
         r"(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})", value
     ):
         raise InstallError("Expected a stable MAJOR.MINOR.PATCH release version.")
-    return tuple(int(part) for part in value.split("."))
+    major, minor, patch = value.split(".")
+    return int(major), int(minor), int(patch)
 
 
 def cli_version() -> str:

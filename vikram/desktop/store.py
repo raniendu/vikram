@@ -20,6 +20,16 @@ from .attachments import MAX_IMAGES, validate_image
 TERMINAL = {"complete", "failed", "stopped", "interrupted"}
 
 
+def _json_value(value: str) -> Any:
+    """Fail clearly on damaged library metadata without exposing saved content."""
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        raise ValueError(
+            "Saved conversation metadata is damaged. Restore a library backup."
+        ) from None
+
+
 def uid() -> str:
     return uuid4().hex
 
@@ -315,19 +325,19 @@ class Store:
     def snapshot(self) -> dict:
         chats = self._rows("SELECT * FROM chats ORDER BY updated DESC, id")
         for chat in chats:
-            chat["thinking"] = json.loads(chat["thinking"])
+            chat["thinking"] = _json_value(chat["thinking"])
         return {
             "chats": chats,
             "folders": self._rows("SELECT id,name FROM folders ORDER BY name_key"),
             "preferences": {
-                r["key"]: json.loads(r["value"])
+                r["key"]: _json_value(r["value"])
                 for r in self._rows("SELECT * FROM preferences")
             },
         }
 
     def chat(self, chat_id: str) -> dict:
         chat = self._one("SELECT * FROM chats WHERE id=?", (chat_id,))
-        chat["thinking"] = json.loads(chat["thinking"])
+        chat["thinking"] = _json_value(chat["thinking"])
         chat["attachments"] = self._rows(
             "SELECT * FROM attachments WHERE chat_id=? ORDER BY rowid", (chat_id,)
         )
@@ -351,7 +361,7 @@ class Store:
             )
             for attempt in message["attempts"]:
                 for key in ("thinking", "sources", "searches", "activity", "usage"):
-                    attempt[key] = json.loads(attempt[key])
+                    attempt[key] = _json_value(attempt[key])
                 attempt["reasoning_truncated"] = bool(attempt["reasoning_truncated"])
         return chat
 
@@ -479,6 +489,14 @@ class Store:
             "SELECT 1 FROM attempts WHERE chat_id=? AND status='running'", (chat_id,)
         ).fetchone():
             raise ValueError("Stop this reply before deleting its chat.")
+        from vikram.sandbox_session import state_path
+
+        sandbox = state_path(self.root, chat_id)
+        if sandbox.exists() or sandbox.is_symlink():
+            raise ValueError(
+                "Reset this conversation's persistent sandbox before deleting the chat. "
+                "Use Workbench → Workspace → Reset Sandbox, or `vikram sandbox reset`."
+            )
         with self.db:
             self.db.execute("DELETE FROM chats WHERE id=?", (chat_id,))
         self._collect_files()
@@ -837,7 +855,7 @@ class Store:
             "SELECT c.* FROM chats c" + where + " ORDER BY updated DESC,id", tuple(args)
         )
         for row in rows:
-            row["thinking"] = json.loads(row["thinking"])
+            row["thinking"] = _json_value(row["thinking"])
         return rows
 
     def tree(self, chat_id: str) -> list[dict]:
@@ -1005,7 +1023,14 @@ class Store:
         return self.fork_chat(chat_id, title=title)
 
     def _insert_record(self, table: str, record: dict) -> None:
-        # Only internal schemas call this helper; imported keys never become SQL.
+        # SQL values are always bound. Identifiers must remain internal schema names.
+        if table not in {"chats", "messages", "attempts", "attachments"} or not record:
+            raise ValueError("Unsupported stored record schema.")
+        if any(
+            not isinstance(key, str) or re.fullmatch(r"[a-z_]+", key) is None
+            for key in record
+        ):
+            raise ValueError("Unsupported stored record column.")
         self.db.execute(
             f"INSERT INTO {table}({','.join(record)}) VALUES({','.join('?' for _ in record)})",
             tuple(record.values()),

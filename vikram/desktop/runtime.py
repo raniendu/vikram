@@ -431,6 +431,10 @@ class Runtime:
                     "coding": coding,
                     "instructions": ProjectResources(coding.settings).instructions(),
                 }
+            if "sandbox_state" in parameters:
+                from vikram.sandbox_session import state_path
+
+                extra["sandbox_state"] = state_path(self.store.root, attempt["chat_id"])
             if "request_boundary" in parameters:
                 extra["request_boundary"] = lambda: self.workbench.boundary(
                     attempt["chat_id"], attempt["id"]

@@ -22,6 +22,7 @@ from pydantic import Field
 from pydantic_ai import (
     DeferredToolRequests,
     DeferredToolResults,
+    ModelRetry,
     RunContext,
     Tool,
     ToolDenied,
@@ -32,6 +33,8 @@ from pydantic_ai.capabilities import AbstractCapability, HandleDeferredToolCalls
 from pydantic_ai.messages import (
     BinaryContent,
     ModelRequest,
+    ModelResponse,
+    ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
 )
@@ -47,6 +50,7 @@ from vikram.browser import (
     engine_result,
     repair_arguments,
 )
+from vikram.errors import ReplyError, has_tool_call_text
 from vikram.interaction import (
     ActionRequest,
     Approver,
@@ -103,7 +107,22 @@ SANDBOX_PROMPT = (
     "for exact arithmetic, counting, dates, and data processing instead of "
     "estimating, then state the result. Each call is a fresh Python process, so "
     "define everything the code needs. Its results come from your code, not from "
-    "the user.\n"
+    "the user. The VM and all /workspace files are deleted when this reply ends. "
+    "A /workspace path is not a Mac path; there is no file export from this VM. "
+    "Never use it to deliver a website or other persistent file, promise to open "
+    "its files, or assume an earlier reply's files still exist.\n"
+)
+PERSISTENT_SANDBOX_PROMPT = (
+    "- run_code runs Python 3.13 in this conversation's persistent, isolated Linux "
+    "VM, with no network, Mac files, or host environment. Only the standard library "
+    "is installed. Each call is a fresh Python process, but /workspace files remain "
+    "across replies and clean app restarts until the user explicitly resets this "
+    "conversation's sandbox. Forks, clones, and imports do not share this VM. "
+    "Inspect existing files before changing them; never automatically recreate a "
+    "missing sandbox or replay effects after interruption. /workspace is not a Mac "
+    "path and there is no file export. For a file the user can open on their Mac, "
+    "use the trusted host workspace instead. The VM is stopped/flushed after each "
+    "reply, so it does not keep running in the background.\n"
 )
 QUESTIONS_PROMPT = (
     "- ask_user_question shows the user multiple-choice questions and waits for "
@@ -148,10 +167,18 @@ TEXT_PLAN_PROMPT = (
 RUN_CODE_DESCRIPTION = (
     "Run Python 3.13 code in an isolated Linux VM and return what it printed. "
     "Each call starts a fresh Python process, so define everything the code needs; "
-    "files written under /workspace stay for the rest of this reply. A final bare "
+    "files written under /workspace stay only for this reply, then are deleted. "
+    "They cannot be exported or opened on the Mac. Use trusted host tools, not "
+    "this tool, to create persistent deliverables. A final bare "
     "expression is printed, as in the Python REPL. The VM has no internet access, "
     "none of the user's files, and only the standard library. Code is stopped "
     f"after {RUN_TIMEOUT} seconds."
+)
+PERSISTENT_RUN_CODE_DESCRIPTION = (
+    "Run Python 3.13 in the conversation's persistent Linux VM. Each call is a fresh "
+    "process; /workspace files survive replies and clean app restarts until explicit "
+    "reset. No internet, host files, host environment, or file export. Inspect files "
+    f"before using them. Standard library only; stopped after {RUN_TIMEOUT} seconds."
 )
 UNAVAILABLE = "The Python sandbox is unavailable."
 PLAN_FIRST = (
@@ -226,6 +253,7 @@ def toolkit_prompt(
     browser: bool = False,
     tasks: bool = False,
     scheduled: str | None = None,
+    persistent: bool = False,
 ) -> str:
     """`tasks` adds the scheduled-task tools; `scheduled` names the task this
     unattended run is for, which has no questions."""
@@ -236,7 +264,11 @@ def toolkit_prompt(
         return f"Local tools:\n{tools}\n\n{note}" if tools else note
     return (
         "Local tools:\n"
-        + (SANDBOX_PROMPT if sandbox else "")
+        + (
+            (PERSISTENT_SANDBOX_PROMPT if persistent else SANDBOX_PROMPT)
+            if sandbox
+            else ""
+        )
         + QUESTIONS_PROMPT
         + (BROWSER_PROMPT if browser else "")
         + (SCHEDULE_PROMPT if tasks else "")
@@ -284,6 +316,7 @@ class Reply:
     interaction: Interaction = field(default_factory=Unattended)
     notify: Callable[[str], None] = lambda phase: None
     sandbox: Sandbox | None = None
+    sandbox_persistent: bool = False
     browser: BrowserEngine | None = None
     vision: bool = False
     # The scheduled tasks this reply may manage; `None` offers no task tools.
@@ -397,6 +430,7 @@ class Reply:
             id=call_id,
             status="running",
             code=bounded(code, MAX_CODE),
+            persistent=self.sandbox_persistent,
             output="",
             error=None,
         )
@@ -418,6 +452,9 @@ class Reply:
         self.notify("loading")
         printed, errors = run.output.rstrip("\n"), run.error.strip()
         text = "\n".join(part for part in (printed, errors) if part)
+        if run.notice:
+            record["notice"] = run.notice
+            text = f"Runtime notice: {run.notice}\n{text}"
         if run.exit_code != 0:
             record["status"] = "failed"
             record["output"] = bounded(printed, MAX_OUTPUT)
@@ -479,6 +516,8 @@ class Reply:
                 self.notify("loading")
 
     async def _browse(self, record: dict, action: str, args: dict):
+        if self.browser is None:
+            raise ToolFailed(BROWSER_UNAVAILABLE)
         notices = []
         if self.browser.paused:
             record["status"] = "paused"
@@ -521,6 +560,12 @@ class Reply:
                 record["error"]
                 + (f"\n\n{describe_page(page, notices)}" if page is not None else "")
             )
+        if page is None:
+            record["status"], record["error"] = (
+                "failed",
+                "The browser returned no page.",
+            )
+            raise ToolFailed(record["error"])
         record["status"] = "complete"
         text = describe_page(page, notices, _lead(action, args, result.target))
         image = b""
@@ -549,6 +594,8 @@ class Reply:
         )
 
     async def _engine(self, record: dict, call: dict) -> EngineResult:
+        if self.browser is None:
+            raise ToolFailed(BROWSER_UNAVAILABLE)
         try:
             return engine_result(await self.browser.act(call))
         except BrowserUnavailable as error:
@@ -564,6 +611,8 @@ class Reply:
     async def _approve(self, record: dict, result: EngineResult) -> bool:
         """Ask the person to allow a consequential action; no approver declines."""
         approval = result.approval
+        if approval is None:
+            return False
         record["approval"] = approval.model_dump()
         return await self._allowed(
             record,
@@ -620,12 +669,12 @@ class Reply:
             self.notify("loading")
 
     async def _manage(self, book: TaskBook, record: dict, action: str, args: dict):
-        store = book.store
+        store = book.open()
         try:
-            task = store.find(args["task"]) if action != "create" else None
+            task = store.find(args["task"]) if action != "create" else {}
         except ValueError as error:
             raise ToolFailed(str(error)) from None
-        if task is not None:
+        if task:
             record.update(
                 task_id=task["id"],
                 name=task["name"],
@@ -696,6 +745,8 @@ class Reply:
             raise ToolFailed(TASK_NOT_APPROVED)
         try:
             if action == "create":
+                if schedule is None:
+                    raise ValueError("A schedule is required to create a task.")
                 saved = store.create(
                     name=name,
                     prompt=prompt,
@@ -873,11 +924,12 @@ def repair_task_arguments(args: dict, schema: dict | None = None) -> dict:
     Small models add fields such as `timezone` or nulls for unused ones; an
     unknown key would otherwise spend a retry.
     """
-    if "task" in args and not isinstance(args["task"], str):
-        if isinstance(args["task"], (int, float)) and not isinstance(
-            args["task"], bool
-        ):
-            args = {**args, "task": str(args["task"])}
+    if (
+        "task" in args
+        and isinstance(args["task"], (int, float))
+        and not isinstance(args["task"], bool)
+    ):
+        args = {**args, "task": str(args["task"])}
     for key in ("task_id", "id", "task_name"):
         if key in args and "task" not in args:
             args = {**args, "task": args[key]}
@@ -1026,7 +1078,7 @@ async def browser_look(ctx: RunContext[Reply]):
     return await _browse(ctx, "look", {})
 
 
-BROWSER_FUNCTIONS = (
+BROWSER_FUNCTIONS: tuple[Callable[..., Any], ...] = (
     browser_open,
     browser_click,
     browser_type,
@@ -1152,7 +1204,7 @@ async def delete_scheduled_task(ctx: RunContext[Reply], task: TaskRef) -> str:
     return await _tasks(ctx, "delete", {"task": task})
 
 
-TASK_FUNCTIONS = (
+TASK_FUNCTIONS: tuple[Callable[..., Any], ...] = (
     schedule_task,
     list_scheduled_tasks,
     update_scheduled_task,
@@ -1202,8 +1254,62 @@ class Questions(AskUser):
         return None
 
 
+def request_limit(ctx: RunContext) -> int | None:
+    """Honor a caller's smaller budget, including an explicitly unlimited run."""
+    return ctx.usage_limits.request_limit if ctx.usage_limits else REQUEST_LIMIT
+
+
+def final_request(ctx: RunContext) -> bool:
+    limit = request_limit(ctx)
+    return limit is not None and ctx.usage.requests >= limit - 1
+
+
+def budget_prompt(ctx: RunContext) -> str:
+    reply = _reply(ctx)
+    if reply is None:
+        return ""
+    limit = request_limit(ctx)
+    remaining = limit - ctx.usage.requests if limit is not None else None
+    runs = max(0, LIMITS[RUN_CODE] - reply.counts.get(RUN_CODE, 0))
+    note = (
+        f"Reply execution budget: {remaining} model requests left, including this "
+        "one and the final answer. "
+        if remaining is not None
+        else "Reply execution budget: "
+    )
+    if reply.sandbox is not None:
+        note += f"{runs} sandbox code runs left. "
+    note += (
+        "Batch related work; do not spend a code run creating a placeholder. "
+        "When a tool budget ends, do not keep requesting that tool. "
+    )
+    if final_request(ctx):
+        note += (
+            "This is the final request: no tools are available. Answer now with "
+            "verified results, saved host paths, and anything unfinished or blocked. "
+            "Do not promise to continue, emit tool-call markup, or claim completion "
+            "without a verified result."
+        )
+    else:
+        note += "Leave room to verify the result and give an honest final handoff."
+    return note
+
+
 def _available(ctx: RunContext, tool_def) -> bool:
-    if ctx.usage.requests >= REQUEST_LIMIT - 1:
+    if final_request(ctx):
+        return False
+    reply = _reply(ctx)
+    name = tool_def.name
+    group = (
+        BROWSER
+        if name in BROWSER_TOOLS
+        else SCHEDULE if name in SCHEDULE_TOOLS else name
+    )
+    if (
+        reply is not None
+        and group in LIMITS
+        and reply.counts.get(group, 0) >= LIMITS[group]
+    ):
         return False
     if tool_def.name == SUBMIT_PLAN:
         return mode_of(ctx) == "plan"
@@ -1288,6 +1394,13 @@ class ReplyToolset(WrapperToolset[Reply]):
         for name, tool in (await super().get_tools(ctx)).items():
             if not _available(ctx, tool.tool_def):
                 continue
+            if name == RUN_CODE and (reply := _reply(ctx)) and reply.sandbox_persistent:
+                tool = replace(
+                    tool,
+                    tool_def=replace(
+                        tool.tool_def, description=PERSISTENT_RUN_CODE_DESCRIPTION
+                    ),
+                )
             if name == ASK_USER:
                 tool = replace(
                     tool,
@@ -1325,6 +1438,36 @@ class ReplyPolicy(AbstractCapability[Reply]):
             return repair_task_arguments(args, tool_def.parameters_json_schema)
         return repair_arguments(call.tool_name, args)
 
+    async def after_model_request(
+        self, ctx, *, request_context, response: ModelResponse
+    ):
+        if response.finish_reason == "length":
+            raise ReplyError(
+                "The model reached its output limit. This reply is incomplete; "
+                "no actions have been replayed automatically. Inspect saved "
+                "workspace files before continuing."
+            )
+        # The hook's RunContext carries usage from before this response.
+        exhausted = final_request(ctx)
+        if exhausted and any(isinstance(part, ToolCallPart) for part in response.parts):
+            raise ReplyError(
+                "The model requested a tool after the final request. That call was "
+                "not executed; this reply is incomplete."
+            )
+        if has_tool_call_text(response.text or ""):
+            message = (
+                "The model returned a tool call as answer text. It was not executed; "
+                "this reply is incomplete."
+            )
+            if exhausted or ctx.retry >= ctx.max_retries:
+                raise ReplyError(message)
+            raise ModelRetry(
+                message + " Use an available structured tool call, or answer in "
+                "plain language with the verified result and any blockers. "
+                "Do not replay completed actions."
+            )
+        return response
+
     async def before_model_request(self, ctx, request_context):
         messages = trim_page_views(request_context.messages)
         reply = _reply(ctx)
@@ -1342,7 +1485,7 @@ class ReplyPolicy(AbstractCapability[Reply]):
         return replace(request_context, messages=messages)
 
 
-def toolkit_tools(sandbox: bool) -> list[Tool]:
+def toolkit_tools(sandbox: bool) -> list[Tool[Reply]]:
     """Every local tool; `ReplyToolset` offers the browser ones only to replies
     with an engine, and the task ones only to replies with tasks, so the same
     agent serves every interface."""

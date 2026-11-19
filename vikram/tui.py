@@ -18,7 +18,7 @@ from pathlib import Path
 from prompt_toolkit.application import Application, run_in_terminal
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.filters import Condition
-from prompt_toolkit.formatted_text import ANSI, to_formatted_text
+from prompt_toolkit.formatted_text import ANSI, AnyFormattedText, to_formatted_text
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.input import create_input
 from prompt_toolkit.key_binding import KeyBindings
@@ -267,6 +267,7 @@ class TerminalApp:
             pending = self._pending_submission
             preflight = pending is not None and not self._submission_started()
             if preflight:
+                assert pending is not None
                 text = "\n\n".join(part for part in (pending["prompt"], text) if part)
             if len(text) > 1_000_000:
                 self.notice = "Draft exceeds the save limit. Shorten it to one million characters; the editor retains your text."
@@ -365,8 +366,8 @@ class TerminalApp:
         self.cache.clear()
         self.redraw()
 
-    def schedule(self, coroutine):
-        async def guarded():
+    def schedule(self, coroutine) -> asyncio.Task[None]:
+        async def guarded() -> None:
             try:
                 await coroutine
             except (ValueError, OSError) as error:
@@ -382,7 +383,7 @@ class TerminalApp:
 
         return self.app.create_background_task(guarded())
 
-    def _header(self):
+    def _header(self) -> AnyFormattedText:
         model = terminal_text(
             format_model_name(ModelRef.parse(self.session.model).model_id)
         )
@@ -396,7 +397,7 @@ class TerminalApp:
             ("", "PLAN" if self.session.mode == "plan" else ""),
         ]
 
-    def _footer(self):
+    def _footer(self) -> AnyFormattedText:
         context = (
             self.session.context_state()
             if hasattr(self.session, "context_state")
@@ -416,7 +417,8 @@ class TerminalApp:
                 f" · last {actual['input_tokens']} in / {actual['output_tokens']} out"
             )
         try:
-            cost = float(actual.get("cost_usd"))
+            cost_value = actual.get("cost_usd")
+            cost = float(cost_value) if cost_value is not None else None
         except (ValueError, TypeError):
             cost = None
         if cost is not None and math.isfinite(cost) and cost >= 0:
@@ -444,15 +446,16 @@ class TerminalApp:
             + " · /queue to edit"
         )
 
-    def _bindings(self):
+    def _bindings(self) -> KeyBindings:
         keys = KeyBindings()
 
         schedule = self.schedule
 
         @keys.add("enter", eager=True)
-        def enter(event):
+        def enter(event) -> None:
             if self.dialog:
-                self.dialog_accept()
+                if self.dialog_accept is not None:
+                    self.dialog_accept()
             else:
                 text = self.editor.text
                 self.save_draft()
@@ -465,9 +468,10 @@ class TerminalApp:
             event.current_buffer.insert_text("\n")
 
         @keys.add("escape", "enter")
-        def followup(event):
+        def followup(event) -> None:
             if self.dialog:
-                self.dialog_accept()
+                if self.dialog_accept is not None:
+                    self.dialog_accept()
                 return
             self.save_draft()
             text, self.editor.text = self.editor.text, ""
@@ -475,7 +479,7 @@ class TerminalApp:
 
         @keys.add("escape", eager=False)
         @keys.add("c-c")
-        def cancel(event):
+        def cancel(event) -> None:
             if self.dialog:
                 self._finish_dialog(None)
             elif not self.idle.is_set():
@@ -484,7 +488,7 @@ class TerminalApp:
                 self.editor.text = ""
 
         @keys.add("c-d")
-        def quit_app(event):
+        def quit_app(event) -> None:
             if self.dialog:
                 self._finish_dialog(None)
             elif not self.editor.text and self.idle.is_set():
@@ -492,16 +496,16 @@ class TerminalApp:
 
         @keys.add("c-l")
         @keys.add("f2")
-        def models(event):
+        def models(event) -> None:
             schedule(self.command("model", ""))
 
         @keys.add("c-t")
-        def thinking(event):
+        def thinking(event) -> None:
             self.show_thinking = not self.show_thinking
             self.redraw()
 
         @keys.add("c-o")
-        def tools(event):
+        def tools(event) -> None:
             self.show_tools = not self.show_tools
             self.redraw()
 
@@ -522,7 +526,7 @@ class TerminalApp:
             schedule(self.command("copy", ""))
 
         @keys.add("c-f")
-        def search(event):
+        def search(event) -> None:
             schedule(self.command("search", ""))
 
         @keys.add("c-v")
@@ -533,14 +537,14 @@ class TerminalApp:
         def up(event):
             if self.dialog_preview and self.app.layout.has_focus(self.dialog_preview):
                 self.dialog_preview.buffer.cursor_up()
-            else:
+            elif self.dialog_move is not None:
                 self.dialog_move(-1)
 
         @keys.add("down", filter=Condition(lambda: self.dialog_move is not None))
         def down(event):
             if self.dialog_preview and self.app.layout.has_focus(self.dialog_preview):
                 self.dialog_preview.buffer.cursor_down()
-            else:
+            elif self.dialog_move is not None:
                 self.dialog_move(1)
 
         @keys.add("pageup")
@@ -782,7 +786,7 @@ class TerminalApp:
         self._begin_submission(text)
         self.idle.clear()
 
-        async def consume():
+        async def consume() -> None:
             prompt = text
             try:
                 while prompt:
@@ -806,6 +810,7 @@ class TerminalApp:
                                 if event.get("notice"):
                                     self.notice = event["notice"]
                                 else:
+                                    assert self._pending_submission is not None
                                     if not self._pending_submission["started"]:
                                         self._pending_submission["started"] = True
                                         self.save_draft()
@@ -965,7 +970,7 @@ class TerminalApp:
                 if all(word in option[1].casefold() for word in query.split())
             ]
 
-        def content():
+        def content() -> AnyFormattedText:
             values = matches()
             if not values:
                 return [("", "No matches")]
@@ -1005,6 +1010,8 @@ class TerminalApp:
 
         @preview_keys.add("tab")
         def focus_preview(event):
+            if preview is None:
+                return
             self.app.layout.focus(
                 field if self.app.layout.has_focus(preview) else preview
             )
@@ -1071,7 +1078,7 @@ class TerminalApp:
             answer = answer_from_text(question, selected or "")
             if answer is not None:
                 answers.append(answer)
-        return AskUserResponse(answers=answers)
+        return AskUserResponse(answers=tuple(answers))
 
     async def review_plan(self, request):
         self.messages.append(
@@ -1197,6 +1204,8 @@ class TerminalApp:
                     )
                     if approved is not True:
                         return
+                if self.settings is None:
+                    raise ValueError("Default model settings are unavailable.")
                 self.settings.set("model", selected)
                 self.notice = "Saved app default: " + selected
             else:
@@ -1398,7 +1407,7 @@ class TerminalApp:
             item["text"] = "```text\n" + terminal_text(partial) + "\n```"
             self.request_redraw()
 
-        async def execute():
+        async def execute() -> None:
             coding.on_output = output
             try:
                 result = await coding.dispatch(

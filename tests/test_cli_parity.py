@@ -28,6 +28,15 @@ def setUpModule():
     unittest.enterModuleContext(fake_vm())
 
 
+def persistent_cli(owner: unittest.IsolatedAsyncioTestCase, root: str, *args, **kwargs):
+    """Compare the saved CLI workflow with saved desktop chats, not --no-session."""
+    library = Store(Path(root) / "cli")
+    owner.addCleanup(library.close)
+    session = ChatSession(*args, store=library, **kwargs)
+    owner.addAsyncCleanup(session.close)
+    return session
+
+
 class ParityTests(unittest.IsolatedAsyncioTestCase):
     async def test_model_failures_are_actionable_private_and_shared(self):
         for kind, expected in (
@@ -53,10 +62,10 @@ class ParityTests(unittest.IsolatedAsyncioTestCase):
 
                 streamer = partial(stream_reply, transport=httpx.MockTransport(handler))
 
-                async def discover():
+                async def discover(*, include_cloud=False, force=False):
                     return [parse_model(ENTRY, SHOW)]
 
-                session = ChatSession("local:1", streamer=streamer)
+                session = persistent_cli(self, root, "local:1", streamer=streamer)
                 session.catalog.refresh = discover
                 with self.assertRaises(Exception) as captured:
                     _ = [e async for e in session.reply("Hello")]
@@ -68,6 +77,7 @@ class ParityTests(unittest.IsolatedAsyncioTestCase):
                     runtime = Runtime(store, lambda e: None, streamer=streamer)
                     runtime.catalog.refresh = discover
                     await runtime.send(cid, "failure")
+                    assert runtime.task is not None
                     await runtime.task
                     attempt = store.chat(cid)["messages"][-1]["attempts"][-1]
                     self.assertEqual(attempt["status"], "failed")
@@ -95,11 +105,13 @@ class ParityTests(unittest.IsolatedAsyncioTestCase):
 
         metadata = parse_model(ENTRY, SHOW)
 
-        async def discover():
+        async def discover(*, include_cloud=False, force=False):
             return [metadata]
 
         with tempfile.TemporaryDirectory() as root:
-            cli = ChatSession("local:1", thinking="off", streamer=streamer_for(0))
+            cli = persistent_cli(
+                self, root, "local:1", thinking="off", streamer=streamer_for(0)
+            )
             cli.catalog.refresh = discover
             store = Store(Path(root))
             cid = store.create_chat("local:1")["id"]
@@ -114,6 +126,7 @@ class ParityTests(unittest.IsolatedAsyncioTestCase):
                 events = [e async for e in cli.reply("Hello")]
                 store.save_draft(cid, "Hello", revision * 10)
                 await runtime.send(cid, str(revision))
+                assert runtime.task is not None
                 await runtime.task
             self.assertEqual(traces[0], traces[1])
             # Off while advertised; nothing to request without controls; then the
@@ -135,7 +148,7 @@ class ParityTests(unittest.IsolatedAsyncioTestCase):
     async def assert_tool_parity(self, *, failure, legacy_off=False):
         traces = [[], []]
 
-        async def discover():
+        async def discover(*, include_cloud=False, force=False):
             return [
                 parse_model(
                     ENTRY, {**SHOW, "capabilities": SHOW["capabilities"] + ["tools"]}
@@ -219,7 +232,9 @@ class ParityTests(unittest.IsolatedAsyncioTestCase):
             system_clock.now.return_value.astimezone.return_value = (
                 clock.now.return_value
             )
-            cli = ChatSession("local:1", thinking="off", streamer=streamer_for(0))
+            cli = persistent_cli(
+                self, root, "local:1", thinking="off", streamer=streamer_for(0)
+            )
             cli.catalog.refresh = discover
             store = Store(Path(root))
             chat = store.create_chat("local:1")
@@ -234,6 +249,7 @@ class ParityTests(unittest.IsolatedAsyncioTestCase):
                 cli_events = [e async for e in cli.reply(prompt)]
                 store.save_draft(cid, prompt, revision * 10)
                 await runtime.send(cid, "r" + str(revision))
+                assert runtime.task is not None
                 await runtime.task
             self.assertEqual(traces[0], traces[1])
             self.assertEqual(len(traces[0]), 3)
@@ -279,7 +295,7 @@ class InteractionParityTests(unittest.IsolatedAsyncioTestCase):
                 "-3.9 °C",
             )
 
-        async def discover():
+        async def discover(*, include_cloud=False, force=False):
             return [
                 parse_model(
                     ENTRY, {**SHOW, "capabilities": SHOW["capabilities"] + ["tools"]}
@@ -294,7 +310,9 @@ class InteractionParityTests(unittest.IsolatedAsyncioTestCase):
             clock.now.return_value.astimezone.return_value = datetime(
                 2026, 10, 20, tzinfo=timezone.utc
             )
-            cli = ChatSession(
+            cli = persistent_cli(
+                self,
+                root,
                 "local:1",
                 thinking="off",
                 mode="plan",
@@ -346,6 +364,7 @@ class InteractionParityTests(unittest.IsolatedAsyncioTestCase):
             runtime.catalog.refresh = discover
             store.save_draft(cid, "Convert 25 degrees", 10)
             await runtime.send(cid, "r1")
+            assert runtime.task is not None
             await runtime.task
             attempt = store.chat(cid)["messages"][-1]["attempts"][-1]
             self.assertEqual(attempt["status"], "complete", attempt["error"])
@@ -375,7 +394,7 @@ class BrowserParityTests(unittest.IsolatedAsyncioTestCase):
         def results():
             return [ok(), ok(target="link “Kettles”", url="https://shop.example/k")]
 
-        async def discover():
+        async def discover(*, include_cloud=False, force=False):
             return [
                 parse_model(
                     ENTRY, {**SHOW, "capabilities": SHOW["capabilities"] + ["tools"]}
@@ -391,7 +410,9 @@ class BrowserParityTests(unittest.IsolatedAsyncioTestCase):
                 2026, 10, 21, tzinfo=timezone.utc
             )
             engine = FakeEngine(*results())
-            cli = ChatSession(
+            cli = persistent_cli(
+                self,
+                root,
                 "local:1",
                 thinking="off",
                 browser=engine,
@@ -429,6 +450,7 @@ class BrowserParityTests(unittest.IsolatedAsyncioTestCase):
             runtime.catalog.refresh = discover
             store.save_draft(cid, "Find the kettle price", 10)
             await runtime.send(cid, "r1")
+            assert runtime.task is not None
             await runtime.task
             attempt = store.chat(cid)["messages"][-1]["attempts"][-1]
             self.assertEqual(attempt["status"], "complete", attempt["error"])

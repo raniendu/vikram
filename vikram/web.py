@@ -281,6 +281,6 @@ class WebSession:
             return await self.call("web_fetch", {"urls": urls, "objective": objective})
 
         return [
-            Tool(f, prepare=prepare, sequential=True, max_retries=1)
-            for f in (web_search, web_fetch)
+            Tool(web_search, prepare=prepare, sequential=True, max_retries=1),
+            Tool(web_fetch, prepare=prepare, sequential=True, max_retries=1),
         ]

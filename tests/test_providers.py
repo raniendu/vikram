@@ -1,11 +1,15 @@
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import patch
 
 import httpx
+from pydantic_ai.settings import ModelSettings
 
 from vikram.agent import build_agent
 from vikram.models import ModelCatalog, parse_model, prepare_model
+from vikram.toolkit import Reply
 
 LOCAL = {
     "name": "local:1",
@@ -107,6 +111,7 @@ class ProviderTests(unittest.TestCase):
         with patch("vikram.models.sandbox.unavailable_reason", return_value=None):
             prepared = prepare_model([model], model["name"], None)
         self.assertEqual(prepared.thinking, "low")
+        assert prepared.notice is not None
         self.assertIn("history", prepared.notice.lower())
 
     def test_missing_or_mandatory_reasoning_never_invents_disabled_control(self):
@@ -125,7 +130,8 @@ class ProviderTests(unittest.TestCase):
     def test_malformed_local_metadata_cannot_hide_other_models(self):
         for shown in (None, {"details": None}, {"details": []}):
             with self.subTest(shown=shown):
-                self.assertFalse(parse_model(LOCAL, shown)["available"])
+                # Deliberately pass malformed, untyped provider metadata.
+                self.assertFalse(parse_model(LOCAL, cast(dict, shown))["available"])
 
     def test_disabled_only_reasoning_does_not_advertise_enabled(self):
         from vikram.providers import parse_openrouter_model
@@ -162,9 +168,11 @@ class ProviderTests(unittest.TestCase):
         with self.assertRaises(CredentialError) as caught:
             store.set("openrouter", "secret\nvalue")
         self.assertNotIn("secret", str(caught.exception))
-        with patch.object(store.keychain, "set", side_effect=OSError("private value")):
-            with self.assertRaises(CredentialError) as caught:
-                store.set("openrouter", "test-key")
+        with (
+            patch.object(store.keychain, "set", side_effect=OSError("private value")),
+            self.assertRaises(CredentialError) as caught,
+        ):
+            store.set("openrouter", "test-key")
         self.assertNotIn("private value", str(caught.exception))
 
 
@@ -180,18 +188,19 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
             return ModelResponse(parts=[TextPart("Ready")])
 
         async with httpx.AsyncClient() as client:
-            agent = build_agent("ollama:local:1", http_client=client)
+            agent = build_agent("ollama:local:1", http_client=client, toolkit=True)
             await agent.run(
                 "Hello",
-                deps=SimpleNamespace(
+                deps=Reply(
                     coding=SimpleNamespace(
-                        settings=SimpleNamespace(is_trusted=lambda: True)
+                        settings=SimpleNamespace(is_trusted=lambda: True),
+                        workspace=Path("/example/project"),
                     ),
                     instructions="Inspect the trusted workspace.",
                 ),
                 model=FunctionModel(respond),
             )
-            await agent.run("Hello", model=FunctionModel(respond))
+            await agent.run("Hello", deps=Reply(), model=FunctionModel(respond))
         self.assertIn("Inspect the trusted workspace.", instructions[0])
         self.assertNotIn("You have no direct filesystem access.", instructions[0])
         self.assertIn("You have no direct filesystem access.", instructions[1])
@@ -340,8 +349,10 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
             )
             result = await agent.run(
                 "Hello",
-                model_settings=model_settings(
-                    "openrouter:example/reasoner:free", "low"
+                deps=Reply(),
+                model_settings=cast(
+                    ModelSettings,
+                    model_settings("openrouter:example/reasoner:free", "low"),
                 ),
             )
             self.assertEqual(result.output, "Hello")

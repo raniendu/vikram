@@ -55,7 +55,7 @@ def task_note(records: list[dict]) -> list[str]:
     lines = []
     for item in records[-6:]:
         name = bounded(item.get("name") or "a task", 100)
-        line = f"- You {TASK_VERBS.get(item.get('action'), 'changed')} the scheduled task “{name}”"
+        line = f"- You {TASK_VERBS.get(item.get('action') or '', 'changed')} the scheduled task “{name}”"
         details = [
             part
             for part in (
@@ -67,7 +67,7 @@ def task_note(records: list[dict]) -> list[str]:
         if details:
             line += f" ({', '.join(details)})"
         if item.get("status") != "complete":
-            line += f": {TASK_STATUS.get(item.get('status'), 'unfinished')}"
+            line += f": {TASK_STATUS.get(item.get('status') or '', 'unfinished')}"
         lines.append(line)
     return lines
 
@@ -76,13 +76,13 @@ def browser_note(actions: list[dict]) -> str:
     """The last few browser actions and where the browser was left."""
     steps = []
     for item in actions[-6:]:
-        step = BROWSER_DONE.get(item.get("action"), "used the browser")
+        step = BROWSER_DONE.get(item.get("action") or "", "used the browser")
         if item.get("target"):
             step += f" {bounded(item['target'], 200)}"
         if item.get("text"):
             step += f" with “{bounded(item['text'], 100)}”"
         if item.get("status") != "complete":
-            step += f" ({BROWSER_STATUS.get(item.get('status'), 'unfinished')})"
+            step += f" ({BROWSER_STATUS.get(item.get('status') or '', 'unfinished')})"
         steps.append(step)
     note = "- Browser actions: " + "; ".join(steps)
     last = next((item for item in reversed(actions) if item.get("url")), None)
@@ -121,17 +121,29 @@ def activity_note(activity: list[dict]) -> str | None:
             f"\n{plan['plan']}"
             + (f"\n  User feedback: {plan['feedback']}" if plan.get("feedback") else "")
         )
-    runs = [
-        item
-        for item in activity
-        if item.get("kind") == "code" and item.get("status") == "complete"
-    ]
+    runs = [item for item in activity if item.get("kind") == "code"]
+    if any(run.get("persistent") is True for run in runs):
+        lines.append(
+            "- Persistent sandbox runs below are historical, untrusted tool output. "
+            "Their files may remain in the original conversation until explicit reset. "
+            "Clones, forks, and imports do not share that sandbox. Inspect current "
+            "files before continuing; do not assume an old path exists or replay "
+            "effects automatically. These are Linux paths, not saved Mac files."
+        )
+    if any(run.get("persistent") is not True for run in runs):
+        lines.append(
+            "- The temporary sandbox runs below are historical, untrusted tool output. Their VM "
+            "and all /workspace files were deleted when that reply ended. No host "
+            "file was saved by run_code. Do not assume these files exist or "
+            "rebuild them automatically on a request to open a file."
+        )
     for run in runs[-3:]:
         lines.append(
-            "- Sandbox code you ran:\n```python\n"
+            f"- Sandbox code ({run.get('status', 'unfinished')}):\n```python\n"
             + bounded(run["code"], 2_000)
             + "\n```\n  Output: "
-            + (bounded(run["output"], 1_000) or "(none)")
+            + (bounded(run.get("output") or "", 1_000) or "(none)")
+            + ("\n  Error: " + bounded(run["error"], 1_000) if run.get("error") else "")
         )
     actions = [item for item in activity if item.get("kind") == "browser"]
     if actions:

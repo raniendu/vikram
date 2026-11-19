@@ -294,6 +294,7 @@ async def extract_in_worker(name: str, data: bytes) -> dict:
     try:
         async with asyncio.timeout(EXTRACT_TIMEOUT):
             out, _ = await process.communicate(payload)
+        assert process.returncode is not None
         return _worker_result(out, process.returncode)
     except TimeoutError:
         raise ValueError(

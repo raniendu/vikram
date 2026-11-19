@@ -121,6 +121,7 @@ def extract_archive(path: Path, destination: Path) -> None:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
         )
+        assert process.stdout is not None
         try:
             with tarfile.open(fileobj=process.stdout, mode="r|") as archive:
                 _extract_members(archive, destination)
@@ -356,7 +357,7 @@ def sign_runtime(runtime: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     parser.add_argument("--check-manifest", action="store_true")
     parser.add_argument("--check-runtime", type=Path)
     args = parser.parse_args()

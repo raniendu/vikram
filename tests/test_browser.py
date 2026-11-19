@@ -5,12 +5,11 @@ import base64
 import contextlib
 import io
 import json
-import os
 import stat
 import sys
 import tempfile
-import textwrap
 import unittest
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from unittest.mock import patch
 
@@ -65,7 +64,11 @@ def ok(target=None, screenshot=None, **extra):
 class FakeEngine:
     """Stands in for WebKit: records calls and replies from a script."""
 
-    def __init__(self, *results, paused=False):
+    def __init__(
+        self,
+        *results: dict | BaseException | Callable[[dict], Awaitable[dict]],
+        paused=False,
+    ):
         self.results, self.calls = list(results), []
         self.paused = paused
         self.handed_back = asyncio.Event()
@@ -85,7 +88,7 @@ class FakeEngine:
 
 
 class Approving(Person):
-    def __init__(self, *decisions):
+    def __init__(self, *decisions: bool | Callable[[ActionRequest], Awaitable[bool]]):
         super().__init__()
         self.decisions, self.approvals = list(decisions), []
 
@@ -102,7 +105,7 @@ async def browse(
     engine,
     *,
     interaction=None,
-    mode="normal",
+    mode: toolkit.Mode = "normal",
     vision=False,
     prompt="Use the browser",
 ):
@@ -310,7 +313,8 @@ class ActionTests(unittest.IsolatedAsyncioTestCase):
             events = await browse(model, engine)
         self.assertEqual(len(engine.calls), limit)
         self.assertEqual(len(browser_records(events)), limit)
-        self.assertIn("limit", tool_results(model.bodies[-1])[-1])
+        self.assertNotIn("browser_scroll", model.offered(-1))
+        self.assertIn("Unknown tool name", tool_results(model.bodies[-1])[-1])
 
     async def test_failures_refusals_and_broken_engines_never_end_the_reply(self):
         engine = FakeEngine(
@@ -350,7 +354,8 @@ class ActionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ApprovalTests(unittest.IsolatedAsyncioTestCase):
-    def approval(self=None):
+    @staticmethod
+    def approval():
         return {
             "ok": False,
             "approval": {
@@ -412,9 +417,10 @@ class ApprovalTests(unittest.IsolatedAsyncioTestCase):
     async def test_stopping_while_waiting_for_approval_marks_it_stopped(self):
         waiting = asyncio.Event()
 
-        async def hold(request):
+        async def hold(request) -> bool:
             waiting.set()
             await asyncio.Event().wait()
+            raise AssertionError("The approval wait should have been cancelled.")
 
         engine = FakeEngine(self.approval())
         stream = stream_reply(
@@ -559,6 +565,7 @@ class PageTests(unittest.TestCase):
                 },
             ]
         )
+        assert note is not None
         self.assertIn("opened https://shop.example/", note)
         self.assertIn("typed into search field “Search” with “kettle”", note)
         self.assertIn("(not allowed by the user)", note)
@@ -598,6 +605,7 @@ class HelperEngineTests(unittest.IsolatedAsyncioTestCase):
         result = await engine.act({"action": "look"})
         self.assertEqual(result["page"]["title"], "look")
         process = engine.process
+        assert process is not None
         self.assertEqual(
             (await engine.act({"action": "back"}))["page"]["title"], "back"
         )
@@ -613,9 +621,11 @@ class HelperEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             (await engine.act({"action": "look"}))["page"]["title"], "look"
         )
-        with patch.object(browsers, "ACTION_TIMEOUT", 0.2):
-            with self.assertRaises(BrowserUnavailable):
-                await engine.act({"action": "hang"})
+        with (
+            patch.object(browsers, "ACTION_TIMEOUT", 0.2),
+            self.assertRaises(BrowserUnavailable),
+        ):
+            await engine.act({"action": "hang"})
         self.assertIsNone(engine.process)
         self.assertEqual(
             (await engine.act({"action": "look"}))["page"]["title"], "look"
@@ -626,9 +636,11 @@ class HelperEngineTests(unittest.IsolatedAsyncioTestCase):
         # An older app binary would open its window instead of answering.
         self.path.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(30)\n")
         engine = HelperEngine(self.path)
-        with patch.object(browsers, "START_TIMEOUT", 0.3):
-            with self.assertRaises(BrowserUnavailable) as raised:
-                await engine.act({"action": "look"})
+        with (
+            patch.object(browsers, "START_TIMEOUT", 0.3),
+            self.assertRaises(BrowserUnavailable) as raised,
+        ):
+            await engine.act({"action": "look"})
         self.assertIn("Rebuild or reinstall", str(raised.exception))
         self.assertIsNone(engine.process)
 
@@ -665,7 +677,9 @@ class HelperEngineTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertEqual(browsers.helper_path(), self.path)
         with patch("vikram.browser.helper_path", return_value=None):
-            self.assertIn("Vikram app", browsers.unavailable_reason())
+            reason = browsers.unavailable_reason()
+            assert reason is not None
+            self.assertIn("Vikram app", reason)
 
 
 if __name__ == "__main__":
@@ -740,7 +754,7 @@ class DesktopBrowserTests(unittest.IsolatedAsyncioTestCase):
             browser=True,
         )
 
-        async def discover():
+        async def discover(*, include_cloud=False, force=False):
             return [self.metadata]
 
         self.runtime.catalog.refresh = discover
@@ -751,9 +765,11 @@ class DesktopBrowserTests(unittest.IsolatedAsyncioTestCase):
         revision = len(self.store.chat(self.chat["id"])["messages"]) * 10 + 10
         self.store.save_draft(self.chat["id"], "Use the browser", revision)
         await self.runtime.send(self.chat["id"], f"r{revision}")
+        task = self.runtime.task
+        assert task is not None
         if wait:
-            await self.runtime.task
-        return self.runtime.task
+            await task
+        return task
 
     def attempt(self):
         return self.store.chat(self.chat["id"])["messages"][-1]["attempts"][-1]
@@ -834,7 +850,7 @@ class DesktopBrowserTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_approval_in_the_window_runs_the_action(self):
         self.results = [
-            ApprovalTests.approval(None),
+            ApprovalTests.approval(),
             ok(target="button “Buy now”"),
         ]
         self.decisions = ["approve"]
@@ -856,13 +872,13 @@ class DesktopBrowserTests(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_declined_or_stopped_approvals_never_run(self):
-        self.results = [ApprovalTests.approval(None)]
+        self.results = [ApprovalTests.approval()]
         self.decisions = ["dismiss"]
         await self.send(Model(tool_call("browser_click", {"element": 3}, "b1"), "Ok"))
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.attempt()["activity"][0]["status"], "denied")
 
-        self.results = [ApprovalTests.approval(None)]
+        self.results = [ApprovalTests.approval()]
         self.calls.clear()
         task = await self.send(
             Model(tool_call("browser_click", {"element": 3}, "b2")), wait=False
