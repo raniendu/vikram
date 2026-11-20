@@ -106,7 +106,15 @@ final class AppState {
             if let event = try? event.decode(RuntimeEvent.self) {
                 chats.handle(event)
                 if event.event == "idle" || event.event == "queue" || event.event == "workbench" {
-                    Task { await workbench.refresh(chatId: chats.selected) }
+                    Task {
+                        // Ollama reports the window of a newly loaded model after its first reply.
+                        if event.event == "idle", event.chatId == chats.selected,
+                            let model = chats.model, !model.isCloud, model.contextLength == nil
+                        {
+                            await chats.refreshModels()
+                        }
+                        await workbench.refresh(chatId: chats.selected)
+                    }
                 }
                 if event.event == "fatal" || event.event == "disconnected" {
                     browser.close()

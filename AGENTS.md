@@ -242,13 +242,20 @@ Desktop commands:
 ## Working Style
 
 Inspect relevant files first and prefer small, maintainable changes. Preserve
-unrelated local work. Do not commit, push, open pull requests, or delete user
-state unless explicitly asked.
+unrelated local work. For implementation changes, the owner's standard workflow
+is to validate the change, commit it on a feature branch, push it, and open a
+pull request against `main`, unless the owner requests local-only work.
+Deleting user state requires an explicit request.
 
 Before merging any pull request, present its link, final changes, and check
 results, then obtain explicit owner approval for that specific merge. Do not
 enable auto-merge or bypass approval by pushing to a protected/default branch.
 Material changes after approval require renewed approval.
+
+Once the PR is merged, build the merged revision and update the owner's local
+app using the managed installer. Verify the installed app and CLI as described
+in [the local update procedure](docs/releases.md#update-the-local-app-after-a-merge).
+Publishing a release still requires separate owner direction for that release.
 
 Use Python 3.13 or later, type hints at public boundaries, Black's 88-character
 line length, and isort's Black profile. Keep documentation consistent with the

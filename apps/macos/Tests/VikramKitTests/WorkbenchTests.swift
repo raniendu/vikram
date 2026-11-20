@@ -62,7 +62,7 @@ private let workbenchStub = """
     chat = {"id":"c1","title":"Chat","model":"local:1","messages":[],"draft":"","draft_revision":0}
     def status():
         return {"workspace":None,"trusted":False,"provider":"ollama","cloud_enabled":False,
-                "credentials":None,"context":{},"queue":queue,"resources":{},"mcp":[],"extensions":[]}
+                "credentials":None,"context":{"estimated_tokens":320},"queue":queue,"resources":{},"mcp":[],"extensions":[]}
     for line in sys.stdin:
         command = json.loads(line)
         method, params = command["method"], command.get("params", {})
@@ -109,6 +109,8 @@ private let workbenchStub = """
         #expect(chats.draft.isEmpty)
         #expect(workbench.status?.queue.first?.text == "Inspect first")
         #expect(workbench.status?.queue.first?.kind == .steer)
+        #expect(workbench.estimatedContextTokens(for: "c1") == 320)
+        #expect(workbench.estimatedContextTokens(for: "another-chat") == nil)
         _ = await workbench.perform("queue_remove", value: "q1")
         #expect(workbench.status?.queue.isEmpty == true)
         chats.changeDraft("fail")

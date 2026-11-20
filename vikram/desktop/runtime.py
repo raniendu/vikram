@@ -552,6 +552,7 @@ class Runtime:
                 except Exception:
                     pass
             self._cancel_waiting(attempt["id"])
+            updated = None
             try:
                 unfinished = {"running", "waiting"}
                 if any(s["status"] in unfinished for s in [*searches, *activity]):
@@ -583,7 +584,7 @@ class Runtime:
                         revision=revision,
                         activity=activity,
                     )
-                self.store.finish(attempt["id"], status, error)
+                updated = self.store.finish(attempt["id"], status, error)
                 if attempt["mode"] == "plan" and mode == "normal":
                     # An approved plan ends plan mode for the chat's next replies.
                     self.store.update_chat(attempt["chat_id"], mode="normal")
@@ -600,6 +601,7 @@ class Runtime:
                 content=content,
                 actual_model=actual,
                 status=status,
+                updated=updated,
                 error=error,
                 unsaved=unsaved,
                 sources=sources,
@@ -740,8 +742,9 @@ class Runtime:
                 if self.active:
                     route = self.active
                     status, unsaved, error = "stopped", False, None
+                    updated = None
                     try:
-                        self.store.finish(route["attempt_id"], status)
+                        updated = self.store.finish(route["attempt_id"], status)
                     except (OSError, sqlite3.Error):
                         status, unsaved, error = (
                             "interrupted",
@@ -753,6 +756,7 @@ class Runtime:
                         **route,
                         content="",
                         status=status,
+                        updated=updated,
                         unsaved=unsaved,
                         error=error,
                     )

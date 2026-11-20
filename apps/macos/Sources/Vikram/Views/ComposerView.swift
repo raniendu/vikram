@@ -150,10 +150,7 @@ struct ComposerView: View {
                     "\(chats.model?.providerLabel ?? "No model") · Web \(tools ? "available" : "unavailable")"
                         + (tools ? " · Python sandbox · Browser" : ""))
                 Spacer()
-                Text(
-                    chats.model?.contextLength.map {
-                        "\($0.formatted()) token context"
-                    } ?? "Saved history · finite model context")
+                contextUsage
             }
             .font(.caption)
             .foregroundStyle(Theme.muted)
@@ -165,6 +162,23 @@ struct ComposerView: View {
         .padding(.top, 12)
         .frame(maxWidth: .infinity)
         .task(id: runningHere) { await workbench.refresh(chatId: chat.id) }
+    }
+
+    @ViewBuilder private var contextUsage: some View {
+        if let used = workbench.estimatedContextTokens(for: chat.id),
+            let capacity = chats.model?.contextLength, capacity > 0
+        {
+            let fraction = min(Double(used) / Double(capacity), 1)
+            let percent = fraction > 0 && fraction < 0.01
+                ? "<1%" : fraction.formatted(.percent.precision(.fractionLength(0)).rounded(rule: .down))
+            let detail = "Estimated \(used.formatted()) of \(capacity.formatted()) tokens in saved conversation context."
+            Text("\(percent) context used")
+                .monospacedDigit()
+                .help(detail)
+                .accessibilityHint(detail)
+        } else {
+            Text("Context usage unavailable")
+        }
     }
 
     private func notice(_ text: String, systemImage: String = "exclamationmark.triangle")

@@ -124,6 +124,24 @@ refuses a version that is not newer. Settings shows the version from the app's
 unique: use a new version for every changed release rather than replacing assets
 on an existing tag. Updates never downgrade or replace an already current version.
 
+## Update the local app after a merge
+
+After an implementation PR merges, fetch `main` and build from a clean checkout
+of the merge commit. The managed installer supports reinstalling the same version
+for local development. It switches the CLI and app together and preserves chat data.
+
+```sh
+uv run python scripts/build_desktop.py
+app=apps/macos/build/Vikram.app
+"$app/Contents/MacOS/vikram-sidecar" --install-bundle "$app"
+"$HOME/.local/bin/vikram" --version
+cmp "$app/Contents/MacOS/vikram-desktop" "$HOME/Applications/Vikram.app/Contents/MacOS/vikram-desktop"
+cmp "$app/Contents/MacOS/vikram-sidecar" "$HOME/Applications/Vikram.app/Contents/MacOS/vikram-sidecar"
+```
+
+The executable comparisons verify the installed build even when the version
+number is the same. An already-open app picks up the change on its next launch.
+
 ## Publish a release
 
 The owner chose this process on 2026-10-21: a version tag starts a release, the

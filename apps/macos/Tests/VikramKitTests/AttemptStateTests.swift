@@ -27,6 +27,23 @@ private func event(
 }
 
 @Suite struct AttemptRoutingTests {
+    @Test func completionUsesTheSameTimestampsAsReopeningTheChat() throws {
+        let value: JSONValue = [
+            "id": "a1", "message_id": "m1", "chat_id": "c1", "request_id": "q1",
+            "status": "running", "created": 100, "updated": 100,
+        ]
+        let finished: JSONValue = [
+            "event": "attempt", "attempt_id": "a1", "chat_id": "c1", "request_id": "q1",
+            "status": "complete", "updated": 125,
+        ]
+        let running = try value.decode(Attempt.self)
+        let chat = applyAttempt(chat(running), try finished.decode(RuntimeEvent.self))
+        let saved = chat.messages[0].attempts[0]
+        #expect(saved.created == 100)
+        #expect(saved.updated == 125)
+        #expect(try JSONValue.from(saved).decode(Attempt.self) == saved)
+    }
+
     @Test func rejectsChunksAfterStop() {
         let stopped = chat(attempt(status: "stopped", content: "Partial"))
         let late = applyAttempt(stopped, event(content: "Partial and more", revision: 9))

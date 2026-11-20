@@ -823,7 +823,7 @@ class Store:
             )
 
     @attempt_mutation
-    def finish(self, attempt_id: str, status: str, error: str | None = None) -> None:
+    def finish(self, attempt_id: str, status: str, error: str | None = None) -> float:
         if status not in TERMINAL:
             raise ValueError("Invalid reply state.")
         with self.db:
@@ -831,11 +831,13 @@ class Store:
                 "UPDATE attempts SET status=?,error=?,updated=? WHERE id=? AND status='running'",
                 (status, error, now(), attempt_id),
             )
-        chat_id = self._one("SELECT chat_id FROM attempts WHERE id=?", (attempt_id,))[
-            "chat_id"
-        ]
+        attempt = self._one(
+            "SELECT chat_id,updated FROM attempts WHERE id=?", (attempt_id,)
+        )
+        chat_id = attempt["chat_id"]
         if chat_id in self._attempt_locks:
             self.release_chat(chat_id)
+        return attempt["updated"]
 
     def list_chats(
         self, query: str = "", *, workspace: str | Path | None = None

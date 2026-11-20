@@ -264,6 +264,9 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(attempt["requested_model"], "local:1")
         self.assertEqual(attempt["actual_model"], "reported:1")
         self.assertEqual(attempt["status"], "complete")
+        finished = next(e for e in self.events if e.get("status") == "complete")
+        self.assertEqual(finished["updated"], attempt["updated"])
+        self.assertGreater(attempt["updated"], attempt["created"])
 
     async def test_disk_failure_emits_unsaved_output_and_stops(self):
         with patch.object(self.store, "checkpoint", side_effect=OSError("disk full")):
