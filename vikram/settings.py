@@ -195,9 +195,10 @@ class Settings:
             Path(temporary).unlink(missing_ok=True)
 
     def _workspace(self, workspace: str | Path | None = None) -> Path:
-        if workspace is None and self.workspace is None:
+        selected = workspace or self.workspace
+        if selected is None:
             raise ValueError("No project workspace was selected.")
-        return canonical_workspace(workspace or self.workspace)
+        return canonical_workspace(selected)
 
     def is_trusted(self, workspace: str | Path | None = None) -> bool:
         try:

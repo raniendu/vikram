@@ -71,12 +71,12 @@ struct WorkspaceSettingsView: View {
                 LabeledContent("State", value: workbench.status?.sandbox["state"]?.string ?? "not_created")
                 Text(
                     "Isolated Linux files persist across replies and clean restarts. The VM stops after each reply. "
-                    + "These are not Mac files; resetting deletes only this conversation’s sandbox, not the chat or host workspace."
+                    + "Reset deletes this conversation’s Linux files, not the chat or Mac workspace."
                 )
                     .font(.callout).foregroundStyle(Theme.muted)
                 Button("Reset Sandbox…", role: .destructive) { confirmSandboxReset = true }
                     .disabled(workbench.working || chats.active != nil || chats.selected == nil)
-                    .confirmationDialog("Delete this conversation’s sandbox files?", isPresented: $confirmSandboxReset) {
+                    .confirmationDialog("Delete this sandbox’s files?", isPresented: $confirmSandboxReset) {
                         Button("Reset Sandbox", role: .destructive) {
                             Task { await workbench.perform("sandbox_reset", options: ["confirmed": .bool(true)]) }
                         }

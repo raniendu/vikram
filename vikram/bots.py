@@ -34,7 +34,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from vikram.schedules import (
     MAX_NAME,
@@ -400,9 +400,8 @@ def config_from(fields: dict, *, now: datetime | None = None) -> BotConfig:
 
 
 def _first_error(error: Exception) -> str:
-    errors = getattr(error, "errors", None)
-    if callable(errors):
-        for item in errors():
+    if isinstance(error, ValidationError):
+        for item in error.errors():
             message = str(item.get("msg", "")).removeprefix("Value error, ")
             where = ".".join(str(part) for part in item.get("loc", ()))
             if message:
@@ -1254,7 +1253,7 @@ async def execute_bot(
     *,
     streamer=None,
     catalog=None,
-    alert: Callable[[str, str], None] | None = None,
+    alert: Callable[[str, str], Any] | None = None,
 ) -> str:
     """Run one claimed bot: an unattended reply, then the report and findings.
 
@@ -1272,7 +1271,7 @@ async def execute_bot(
 
     bots = BotStore(store)
     streamer = streamer or stream_reply
-    alert = notify_bot if alert is None else alert
+    deliver_alert = notify_bot if alert is None else alert
     status, error, iterator = "complete", None, None
     content, outcome, reason = "", "failed", ""
     config: BotConfig | None = None
@@ -1427,5 +1426,5 @@ async def execute_bot(
     if status != "stopped" and outcome is not None:
         policy = config.notify if config is not None else "attention"
         if should_notify(policy, outcome):
-            bots.deliver(task["id"], task["name"], outcome, alert)
+            bots.deliver(task["id"], task["name"], outcome, deliver_alert)
     return status

@@ -209,6 +209,8 @@ async def _sweep() -> None:
     for marker in _markers().glob("*.json"):
         try:
             record = json.loads(marker.read_text())
+            if not isinstance(record, dict):
+                raise ValueError("Invalid sandbox process marker.")
             if record.get("persistent") is True:
                 continue  # Conversation-owned disks are never crash garbage.
             pid = record["pid"]
@@ -247,6 +249,7 @@ class VmSandbox:
         self._workspace: Workspace | None = None
         self._broken: str | None = None
         self._boot: asyncio.Task | None = None
+        self._closing: asyncio.Task[None] | None = None
         self._lease: AbstractContextManager | None = None
         self._persisted = False
         self._notice: str | None = None
@@ -302,10 +305,6 @@ class VmSandbox:
             marked = True
             await boot
         except BaseException as error:
-            if boot is not None:
-                boot.cancel()
-                await asyncio.gather(boot, return_exceptions=True)
-            self._boot = None
             if not marked or isinstance(error, asyncio.CancelledError):
                 with suppress(Exception):
                     await self.close()
@@ -371,6 +370,25 @@ class VmSandbox:
         return CodeRun(result.exit_code, result.stdout, result.stderr, notice=notice)
 
     async def close(self) -> None:
+        """Drain one shared shutdown even if its callers are cancelled repeatedly."""
+        closing = self._closing
+        if closing is None:
+            closing = self._closing = asyncio.create_task(self._close())
+        cancelled = False
+        try:
+            while not closing.done():
+                try:
+                    await asyncio.shield(closing)
+                except asyncio.CancelledError:
+                    cancelled = True
+            closing.result()
+        finally:
+            if self._closing is closing:
+                self._closing = None
+        if cancelled:
+            raise asyncio.CancelledError
+
+    async def _close(self) -> None:
         """Stop/flush a saved workspace; destroy only an ephemeral or unsaved VM."""
         boot, self._boot = self._boot, None
         if boot is not None and not boot.done():

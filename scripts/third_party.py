@@ -134,13 +134,21 @@ def apkbuild_checksums(recipe: str) -> list[tuple[str, str]]:
     return re.findall(r"^\s*([0-9a-f]{128})\s+(\S+)\s*$", match.group(2), re.M)
 
 
+def _read_member(archive: tarfile.TarFile, member: tarfile.TarInfo) -> bytes:
+    stream = archive.extractfile(member)
+    if stream is None:
+        raise SourceError("The archive member is not a regular file.")
+    with stream:
+        return stream.read()
+
+
 def image_files(
     path: Path, wanted: Callable[[str], bool]
 ) -> tuple[dict, dict[str, bytes]]:
     """An image archive's config, and the wanted files its layers end up with."""
     with tarfile.open(path) as outer:
         blobs = {
-            member.name: outer.extractfile(member).read()
+            member.name: _read_member(outer, member)
             for member in outer.getmembers()
             if member.isfile()
         }
@@ -161,7 +169,7 @@ def image_files(
                         if key != gone and not key.startswith(f"{gone}/")
                     }
                 elif member.isfile() and wanted(name):
-                    files[name] = archive.extractfile(member).read()
+                    files[name] = _read_member(archive, member)
     return json.loads(blobs[entry["Config"]]), files
 
 
@@ -201,7 +209,7 @@ def guest_filesystem(smol: Path) -> tuple[str, list[dict[str, str]]]:
             name = member.name.removeprefix("./")
             if name in ("etc/alpine-release", "lib/apk/db/installed"):
                 if member.isfile():
-                    found[name] = archive.extractfile(member).read().decode()
+                    found[name] = _read_member(archive, member).decode()
     if len(found) != 2:
         raise SourceError("smolmachines' guest filesystem has no Alpine package list.")
     return found["etc/alpine-release"].strip(), apk_packages(
@@ -511,7 +519,9 @@ def python_notices(image: Path) -> tuple[dict[str, bytes], list[dict[str, str]]]
     _, files = image_files(image, lambda name: bool(PYTHON_FILES.fullmatch(name)))
     copies, distributions = {}, []
     for name, data in sorted(files.items()):
-        relative = PYTHON_FILES.fullmatch(name).group(1).removeprefix("site-packages/")
+        match = PYTHON_FILES.fullmatch(name)
+        assert match is not None
+        relative = match.group(1).removeprefix("site-packages/")
         if relative.endswith("/METADATA"):
             metadata = email.parser.BytesHeaderParser().parsebytes(data)
             license = metadata.get("License-Expression") or metadata.get("License", "")
@@ -1099,6 +1109,8 @@ def check_sources_archive(tarball: Path, sources: dict, version: str) -> None:
                 seen.add(member.name)
                 want = expected[member.name]
                 stream = archive.extractfile(member)
+                if stream is None:
+                    raise SourceError(f"{member.name} could not be read.")
                 if isinstance(want, bytes):
                     if stream.read(len(want) + 1) != want:
                         raise SourceError(f"{member.name} does not match this release.")
@@ -1109,7 +1121,7 @@ def check_sources_archive(tarball: Path, sources: dict, version: str) -> None:
                     raise SourceError(
                         f"{member.name} does not match its pinned digest."
                     )
-                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                while chunk := stream.read(1024 * 1024):
                     digest.update(chunk)
                 if digest.hexdigest() != want[algorithm]:
                     raise SourceError(
@@ -1153,7 +1165,7 @@ def release_assets(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser(
         "refresh",

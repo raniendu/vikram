@@ -53,7 +53,9 @@ def model_settings(model: str, thinking: ThinkingValue | None) -> dict:
     """Map shared selections to the native adapter without model fallbacks."""
     if ModelRef.parse(model).provider == "ollama":
         return {"extra_body": thinking_request(thinking)}
-    settings = {"openrouter_provider": {"allow_fallbacks": False}}
+    settings: dict[str, dict[str, bool | str]] = {
+        "openrouter_provider": {"allow_fallbacks": False}
+    }
     if thinking is not None:
         settings["openrouter_reasoning"] = (
             {"enabled": thinking}

@@ -66,6 +66,7 @@ async def tool_call(reply, name, args, call_id, *, request_index=0):
     reply.activity.append(record)
     reply.notify("coding")
     approval = ObservedApproval(reply, record)
+    guidance = ""
     try:
         if kind == "coding":
             guidance, must_review = scoped_instructions(

@@ -17,6 +17,7 @@ import sys
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -190,6 +191,9 @@ class _Worker:
             if len(raw) > MAX_FRAME:
                 raise ValueError("This extension request exceeds the frame limit.")
             try:
+                assert (
+                    self.process.stdin is not None and self.process.stdout is not None
+                )
                 async with asyncio.timeout(timeout):
                     self.process.stdin.write(raw)
                     await self.process.stdin.drain()
@@ -837,6 +841,7 @@ class ExtensionManager:
     async def _invoke(
         self, method: str, name: str, arguments: dict, call_id: str
     ) -> dict:
+        package, worker = None, None
         try:
             self._require_normal()
             if not self._started:
@@ -876,14 +881,14 @@ class ExtensionManager:
                 raise ValueError("Invalid extension result.")
             return {**result, "activity": "complete" if result.get("ok") else "failed"}
         except asyncio.CancelledError:
-            if "worker" in locals() and worker is not None:
+            if worker is not None and package is not None:
                 await worker.close()
                 self._errors[package] = (
                     "The extension operation was stopped. Reload extensions to restart its worker."
                 )
             raise
         except Exception:
-            if "worker" in locals() and worker is not None and worker.process is None:
+            if worker is not None and package is not None and worker.process is None:
                 self._errors[package] = (
                     "The extension worker stopped after an error. Reload extensions to restart it."
                 )
@@ -951,7 +956,7 @@ class ExtensionManager:
         if not self._started:
             await self.start()
 
-        def reference(value):
+        def reference(value: Any) -> Any:
             if isinstance(value, dict):
                 return {
                     key: reference(item)

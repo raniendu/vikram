@@ -12,6 +12,7 @@ import json
 import os
 import re
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated, Protocol
 
@@ -143,7 +144,7 @@ def element_line(element: Element) -> str:
     return line
 
 
-def describe_page(page: Page, notices: list[str] = (), lead: str = "") -> str:
+def describe_page(page: Page, notices: Sequence[str] = (), lead: str = "") -> str:
     """The page as the model reads it: where it is, what it can use, what it says.
 
     Page text is labeled untrusted, and everything is bounded so one page cannot
@@ -326,6 +327,7 @@ class HelperEngine:
         except OSError:
             raise BrowserUnavailable("The browser could not start.") from None
         try:
+            assert process.stdout is not None
             async with asyncio.timeout(START_TIMEOUT):
                 ready = json.loads(await process.stdout.readline() or b"{}")
         except (TimeoutError, ValueError, asyncio.LimitOverrunError):
@@ -345,6 +347,7 @@ class HelperEngine:
 
     async def _read(self, process: asyncio.subprocess.Process) -> None:
         try:
+            assert process.stdout is not None
             while line := await process.stdout.readline():
                 try:
                     message = json.loads(line)
@@ -373,6 +376,7 @@ class HelperEngine:
             future = asyncio.get_running_loop().create_future()
             self.pending[key] = future
             try:
+                assert process.stdin is not None
                 process.stdin.write(
                     json.dumps({"id": key, "call": call}).encode() + b"\n"
                 )
@@ -395,7 +399,8 @@ class HelperEngine:
             return
         reader, self.reader = self.reader, None
         with contextlib.suppress(Exception):
-            process.stdin.close()
+            if process.stdin is not None:
+                process.stdin.close()
         try:
             async with asyncio.timeout(3):
                 await process.wait()

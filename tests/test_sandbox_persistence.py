@@ -46,6 +46,8 @@ class PersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.path = state_path(self.root, "a" * 32)
         self.disks, self.backends, self.stops, self.deleted = {}, [], [], []
         self.fail_stop = False
+        self.boot_gate: asyncio.Event | None = None
+        self.boot_started = asyncio.Event()
         self.stop_gate: asyncio.Event | None = None
         self.stop_started = asyncio.Event()
         owner = self
@@ -92,6 +94,9 @@ class PersistenceTests(unittest.IsolatedAsyncioTestCase):
             async def working_dir(self):
                 assert self.backend is not None
                 await self.backend.get_sandbox()
+                owner.boot_started.set()
+                if owner.boot_gate is not None:
+                    await owner.boot_gate.wait()
                 return "/workspace"
 
             async def write_text(self, name, content):
@@ -166,6 +171,52 @@ class PersistenceTests(unittest.IsolatedAsyncioTestCase):
                     await closing
             await stream.aclose()
 
+    async def test_repeated_boot_cancellation_retains_ownership_until_flush(self):
+        self.boot_gate = asyncio.Event()
+        self.stop_gate = gate = asyncio.Event()
+        sandbox = REAL_VM(state_path=self.path)
+        running = asyncio.create_task(sandbox.run("write"))
+        closing = None
+        try:
+            async with asyncio.timeout(3):
+                await self.boot_started.wait()
+                while not self.path.exists():
+                    await asyncio.sleep(0)
+                running.cancel()
+                await self.stop_started.wait()
+                running.cancel()
+                closing = asyncio.create_task(sandbox.close())
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                self.assertFalse(running.done())
+                self.assertFalse(closing.done())
+                self.assertEqual(self.stops, [])
+                with self.assertRaisesRegex(ValueError, "is in use"):
+                    await reset_sandbox(self.path)
+                self.assertEqual(self.deleted, [])
+                pending = load_state(self.path)
+                assert pending is not None
+                self.assertFalse(pending.saved)
+                gate.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await running
+                await closing
+            saved = load_state(self.path)
+            assert saved is not None
+            self.assertTrue(saved.saved)
+            self.assertEqual(self.stops, [saved.ref.id])
+            await reset_sandbox(self.path)
+            self.assertFalse(self.path.exists())
+        finally:
+            self.boot_gate.set()
+            gate.set()
+            if not running.done():
+                running.cancel()
+            await asyncio.gather(running, return_exceptions=True)
+            if closing is not None:
+                await asyncio.gather(closing, return_exceptions=True)
+            await sandbox.close()
+
     async def test_unsaved_reference_failure_destroys_only_the_new_vm(self):
         sandbox = REAL_VM(state_path=self.path)
         with (
@@ -190,6 +241,17 @@ class PersistenceTests(unittest.IsolatedAsyncioTestCase):
             await REAL_SWEEP()
         self.assertTrue(marker.exists())
         self.assertIn(saved.ref.id, self.disks)
+        self.assertEqual(self.deleted, [])
+
+    async def test_crash_sweep_discards_non_object_markers_without_deleting_vms(self):
+        markers = self.root / "markers"
+        markers.mkdir()
+        for value in (None, [], True, 42, "invalid marker"):
+            marker = markers / f"pydantic-ai-{uuid4().hex}.json"
+            marker.write_text(json.dumps(value))
+        with patch.object(vm, "_swept", False):
+            await REAL_SWEEP()
+        self.assertEqual(list(markers.glob("*.json")), [])
         self.assertEqual(self.deleted, [])
 
     def test_library_json_errors_and_sql_identifiers_are_bounded(self):

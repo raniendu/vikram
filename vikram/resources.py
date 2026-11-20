@@ -129,6 +129,7 @@ class ProjectResources:
         keybindings = {}
         for root, source in self._roots():
             boundary = self.settings.workspace if source == "project" else root
+            assert boundary is not None
             for kind, pattern in (
                 ("skills", "*/SKILL.md"),
                 ("templates", "*.md"),
@@ -176,6 +177,7 @@ class ProjectResources:
             if resource.source == "project"
             else self.settings.root
         )
+        assert boundary is not None
         return _text(resource.path, boundary)
 
     def read_skill(self, name: str) -> str:
