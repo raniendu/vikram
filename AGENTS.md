@@ -45,7 +45,12 @@ asked for it to become a native macOS app following Apple's practices; the desig
 is in `docs/superpowers/specs/2026-11-03-native-macos-app-design.md`. The app is
 SwiftUI (`apps/macos`); keep agent behavior in Python, keep the bundle layout
 (`Contents/MacOS/vikram-desktop` and `vikram-sidecar`) and the stdio protocol, and
-do not reintroduce web UI frameworks or other app toolchains without owner direction. The owner approved
+do not reintroduce web UI frameworks or other app toolchains without owner direction. On
+2026-11-16 the owner asked for an Omnigent-style shell around the CLI and chose
+to stay on SwiftUI with SwiftTerm (pinned in `apps/macos/Package.swift`, MIT
+notice bundled) for a per-session Terminal view that runs `vikram --session ID`.
+Chat and Terminal hand a session over; never drive one session from both at
+once. Keep new app surfaces thin views over CLI/service behavior. The owner approved
 document attachments and Parallel web search in
 `docs/superpowers/specs/2026-10-14-documents-and-web-search-design.md`. CLI and
 desktop must share model/tool instructions, capabilities, execution, limits,

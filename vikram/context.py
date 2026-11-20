@@ -95,7 +95,7 @@ def browser_note(actions: list[dict]) -> str:
     return note
 
 
-def activity_note(activity: list[dict]) -> str | None:
+def activity_note(activity: list[dict], *, include_code: bool = True) -> str | None:
     """Questions, the latest plan, recent sandbox runs, and browser actions, for
     follow-up turns."""
     lines = []
@@ -137,11 +137,14 @@ def activity_note(activity: list[dict]) -> str | None:
             "file was saved by run_code. Do not assume these files exist or "
             "rebuild them automatically on a request to open a file."
         )
-    for run in runs[-3:]:
+    for run in runs[-3:] if include_code else runs[-12:]:
+        snippet = (
+            "\n```python\n" + bounded(run["code"], 2_000) + "\n```"
+            if include_code
+            else ""
+        )
         lines.append(
-            f"- Sandbox code ({run.get('status', 'unfinished')}):\n```python\n"
-            + bounded(run["code"], 2_000)
-            + "\n```\n  Output: "
+            f"- Sandbox code ({run.get('status', 'unfinished')}):{snippet}\n  Output: "
             + (bounded(run.get("output") or "", 1_000) or "(none)")
             + ("\n  Error: " + bounded(run["error"], 1_000) if run.get("error") else "")
         )

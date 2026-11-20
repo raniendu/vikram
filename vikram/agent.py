@@ -14,12 +14,15 @@ from pydantic_ai.settings import ModelSettings
 
 from vikram.providers import CredentialError, CredentialStore, ModelRef, model_settings
 from vikram.toolkit import (
+    LIMITS,
+    RUN_CODE,
     SCHEDULED_RUN_PROMPT,
     TEXT_PLAN_PROMPT,
     Mode,
     Reply,
     ReplyPolicy,
     budget_prompt,
+    final_request,
     has_browser,
     has_tasks,
     mode_of,
@@ -156,10 +159,15 @@ def build_agent(
 
     def instructions(ctx: RunContext[Reply]) -> str:
         # Recomputed per request, so an approved plan drops plan-mode guidance.
+        finishing = toolkit and final_request(ctx)
+        sandbox_available = sandbox and (
+            not isinstance(ctx.deps, Reply)
+            or ctx.deps.counts.get(RUN_CODE, 0) < LIMITS[RUN_CODE]
+        )
         prompt = agent_prompt(
-            web=web != "off",
-            toolkit=toolkit,
-            sandbox=sandbox,
+            web=web != "off" and not finishing,
+            toolkit=toolkit and not finishing,
+            sandbox=sandbox_available,
             mode=mode_of(ctx),
             browser=has_browser(ctx),
             tasks=has_tasks(ctx),
@@ -169,17 +177,18 @@ def build_agent(
         coding = getattr(ctx.deps, "coding", None)
         if toolkit and coding is not None and coding.settings.is_trusted():
             prompt = prompt.replace("You have no direct filesystem access. ", "")
-            prompt += (
-                f"\nTrusted host workspace: {coding.workspace}. "
-                "Use read/grep/find/ls to inspect and exact edit/write for changes; "
-                "bash runs host commands under the shared approval policy. "
-                "For persistent files, websites, and project validation, use these "
-                "host tools, not run_code. Verify saved files with read/ls or a "
-                "focused check before claiming completion and return their full "
-                "host paths. If asked to open a file, use the host tool only within "
-                "its approval policy; never substitute the isolated VM. Host tools "
-                "run with the user's privileges and are not sandboxed."
-            )
+            prompt += f"\nTrusted host workspace: {coding.workspace}. "
+            if not finishing:
+                prompt += (
+                    "Use read/grep/find/ls to inspect and exact edit/write for changes; "
+                    "bash runs host commands under the shared approval policy. "
+                    "For persistent files, websites, and project validation, use these "
+                    "host tools, not run_code. Verify saved files with read/ls or a "
+                    "focused check before claiming completion and return their full "
+                    "host paths. If asked to open a file, use the host tool only within "
+                    "its approval policy; never substitute the isolated VM. Host tools "
+                    "run with the user's privileges and are not sandboxed."
+                )
         elif not scheduled_of(ctx):
             prompt += (
                 "\nNo trusted host workspace is available. For a request to build, "

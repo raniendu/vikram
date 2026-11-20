@@ -25,6 +25,32 @@ def offered(body):
 
 
 class ConversationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_token_burst_delivers_bounded_snapshots_and_the_whole_answer(self):
+        def handler(request):
+            packet = sse(
+                {
+                    "id": "r",
+                    "model": "local:1",
+                    "choices": [{"index": 0, "delta": {"content": "x"}}],
+                }
+            )
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text=packet * 300 + "data: [DONE]\n\n",
+            )
+
+        events = [
+            e
+            async for e in conversation.stream_reply(
+                "local:1", None, [], "Hello", transport=httpx.MockTransport(handler)
+            )
+        ]
+        self.assertEqual(events[0]["text"], "x")
+        self.assertEqual(events[-1]["text"], "x" * 300)
+        self.assertEqual(events[-1]["usage"]["requests"], 1)
+        self.assertLess(len(events), 30)
+
     async def test_reasoning_streams_separately_from_the_answer(self):
         async def handler(request):
             chunks = ""

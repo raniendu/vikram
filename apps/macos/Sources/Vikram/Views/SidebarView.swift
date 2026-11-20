@@ -40,25 +40,28 @@ struct SidebarView: View {
         @Bindable var state = state
         List(selection: $state.selection) {
             Section {
+                Button {
+                    state.newChat()
+                } label: {
+                    Label("New Session", systemImage: "square.and.pencil")
+                }
+                .buttonStyle(.plain)
+                .disabled(chats.offline || chats.loading)
                 Label("Home", systemImage: "house")
-                    .badge(bots.attentionCount)
+                    .badge(bots.attentionCount + (state.waitingChat == nil ? 0 : 1))
                     .tag(SidebarItem.home)
                 Label("Bots", systemImage: "sparkles")
                     .badge(bots.bots.count)
                     .tag(SidebarItem.bots)
-                Label {
-                    Text("Scheduled")
-                } icon: {
-                    Image(systemName: "calendar.badge.clock").foregroundStyle(Theme.accent)
-                }
-                .badge(schedules.tasks.count)
+                Label("Schedules", systemImage: "calendar.badge.clock")
+                    .badge(schedules.tasks.count)
                     .tag(SidebarItem.scheduled)
             }
             if !search.isEmpty {
                 Section {
                     ForEach(matching) { row($0) }
                     if matching.isEmpty {
-                        Text("No matching chats.").foregroundStyle(Theme.muted)
+                        Text("No matching sessions.").foregroundStyle(Theme.muted)
                     }
                 } header: {
                     Eyebrow("Results")
@@ -70,7 +73,7 @@ struct SidebarView: View {
                         Text("A little room for your thoughts.").foregroundStyle(Theme.muted)
                     }
                 } header: {
-                    Eyebrow("Default Bot · Conversations")
+                    Eyebrow("Sessions")
                 }
                 ForEach(chats.folders) { folder in
                     Section(
@@ -83,7 +86,7 @@ struct SidebarView: View {
                         let inside = matching.filter { $0.folderId == folder.id }
                         ForEach(inside) { row($0) }
                         if inside.isEmpty {
-                            Text("No chats yet").foregroundStyle(Theme.muted)
+                            Text("No sessions yet").foregroundStyle(Theme.muted)
                         }
                     } header: {
                         Label {
@@ -92,7 +95,7 @@ struct SidebarView: View {
                             Image(systemName: "folder").foregroundStyle(Theme.muted)
                         }
                             .contextMenu {
-                                Button("New Chat in Folder") { state.newChat(folder: folder.id) }
+                                Button("New Session in Folder") { state.newChat(folder: folder.id) }
                                 Button("Rename Folder…") { sheet = .renameFolder(folder) }
                                 Divider()
                                 Button("Delete Folder…", role: .destructive) { deletingFolder = folder }
@@ -102,8 +105,6 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .scrollContentBackground(.hidden)
-        .background(Theme.surface)
         .safeAreaInset(edge: .top, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 BrandMark(size: 22)
@@ -117,7 +118,7 @@ struct SidebarView: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Vikram, local")
         }
-        .searchable(text: $search, placement: .sidebar, prompt: "Search chats")
+        .searchable(text: $search, placement: .sidebar, prompt: "Search sessions")
         .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 380)
         .safeAreaInset(edge: .bottom) {
             HStack {
@@ -129,18 +130,19 @@ struct SidebarView: View {
                 .buttonStyle(.borderless)
                 .disabled(chats.offline)
                 Spacer()
-                Image(systemName: "lock.fill")
-                    .foregroundStyle(Theme.muted)
-                    .help("Conversations stay on this Mac")
-                    .accessibilityLabel("Conversations stay on this Mac")
+                SettingsLink {
+                    Label("Settings", systemImage: "gearshape")
+                }
+                .buttonStyle(.borderless)
+                .help("Settings (⌘,)")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
         .toolbar {
             ToolbarItem {
-                Button("New Chat", systemImage: "square.and.pencil") { state.newChat() }
-                    .help("New chat (⌘N)")
+                Button("New Session", systemImage: "square.and.pencil") { state.newChat() }
+                    .help("New session (⌘N)")
                     .disabled(chats.offline || chats.loading)
             }
         }
@@ -159,10 +161,17 @@ struct SidebarView: View {
 
     private func row(_ chat: ChatSummary) -> some View {
         let running = chats.active?.chatId == chat.id
+        let waiting = state.waitingChat?.id == chat.id
         return HStack(spacing: 6) {
             Text(chat.title).lineLimit(1)
             Spacer(minLength: 0)
-            if running { ActivityDot().help("Reply in progress") }
+            if waiting {
+                Circle().fill(Theme.accent).frame(width: 8, height: 8).help("Waiting for you")
+            } else if running {
+                ActivityDot().help("Reply in progress")
+            } else if state.terminalChat == chat.id {
+                Image(systemName: "terminal").foregroundStyle(Theme.muted).help("Open in the terminal")
+            }
         }
         .tag(SidebarItem.chat(chat.id))
         .contextMenu {
@@ -179,7 +188,8 @@ struct SidebarView: View {
             Button("Delete…", role: .destructive) { deletingChat = chat }
                 .disabled(running || chats.offline || chats.sending || chats.importing)
         }
-        .accessibilityLabel(running ? "\(chat.title), reply in progress" : chat.title)
+        .accessibilityLabel(
+            waiting ? "\(chat.title), waiting for you" : running ? "\(chat.title), reply in progress" : chat.title)
     }
 
     private func move(_ chat: ChatSummary, to folder: String?) {
@@ -216,17 +226,16 @@ struct SidebarSheetView: View {
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
-                    .buttonStyle(.secondary)
+                    .buttonStyle(.glass)
                     .keyboardShortcut(.cancelAction)
                 Button(action: save) { Text(actionTitle) }
-                    .buttonStyle(.primary)
+                    .buttonStyle(.glassProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(working || (needsName && name.trimmingCharacters(in: .whitespaces).isEmpty))
             }
         }
         .padding(20)
         .frame(width: 380)
-        .tint(Theme.accent)
         .onAppear {
             switch sheet {
             case .renameFolder(let value): name = value.name

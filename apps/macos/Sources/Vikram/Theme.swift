@@ -2,11 +2,8 @@ import AppKit
 import CoreText
 import SwiftUI
 
-/// The raniendu.dev look: warm paper and ink with a rust accent in light
-/// appearance, espresso and parchment with an amber accent in dark. Colors
-/// follow the system appearance, or the one chosen in Settings.
+/// Brand colors for content and accents. Window chrome uses system materials.
 enum Theme {
-    static let paper = dynamic(light: 0xFBFAF8, dark: 0x14130F)
     static let surface = dynamic(light: 0xF4F2EC, dark: 0x1C1A16)
     /// Raised surfaces that sit on paper: the composer, cards in dark appearance.
     static let raised = dynamic(light: 0xFFFFFF, dark: 0x1C1A16)
@@ -15,8 +12,6 @@ enum Theme {
     static let rule = dynamic(light: 0xE3E0D8, dark: 0x2B2924)
     static let strongRule = dynamic(light: 0xCFCBC1, dark: 0x3A372F)
     static let accent = dynamic(light: 0xA0552D, dark: 0xD6995F)
-    /// Text and icons on an accent fill.
-    static let onAccent = dynamic(light: 0xFFFFFF, dark: 0x14130F)
     /// Accent-colored text and links on paper.
     static let link = dynamic(light: 0x8A4423, dark: 0xE3B184)
     static let success = dynamic(light: 0x4E7A3E, dark: 0x9BBF7E)
@@ -97,48 +92,6 @@ struct BrandMark: View {
             .foregroundStyle(Theme.accent)
             .accessibilityHidden(true)
     }
-}
-
-/// A filled capsule in the accent: the one action a card or sheet expects.
-struct PrimaryButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var enabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.callout.weight(.semibold))
-            .padding(.horizontal, 16)
-            .frame(minHeight: 30)
-            .foregroundStyle(Theme.onAccent)
-            .background(Theme.accent.opacity(enabled ? 1 : 0.4), in: Capsule())
-            .opacity(configuration.isPressed ? 0.8 : 1)
-            .contentShape(Capsule())
-    }
-}
-
-/// A hairline capsule: the other choices beside a primary action.
-struct SecondaryButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var enabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.callout.weight(.medium))
-            .padding(.horizontal, 14)
-            .frame(minHeight: 30)
-            .foregroundStyle(Theme.ink.opacity(enabled ? 1 : 0.4))
-            .background(
-                configuration.isPressed ? Theme.accent.opacity(0.1) : .clear, in: Capsule()
-            )
-            .overlay { Capsule().strokeBorder(Theme.strongRule) }
-            .contentShape(Capsule())
-    }
-}
-
-extension ButtonStyle where Self == PrimaryButtonStyle {
-    static var primary: PrimaryButtonStyle { PrimaryButtonStyle() }
-}
-
-extension ButtonStyle where Self == SecondaryButtonStyle {
-    static var secondary: SecondaryButtonStyle { SecondaryButtonStyle() }
 }
 
 /// A capsule that shows or hides details below it: thinking, web activity,

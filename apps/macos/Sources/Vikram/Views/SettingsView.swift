@@ -1,17 +1,42 @@
 import SwiftUI
 import VikramKit
 
-/// Settings (⌘,): appearance, models, workbench, privacy, and updates.
+/// Settings (⌘,): the configuration the app shares with the CLI.
 struct SettingsView: View {
+    @Environment(WorkbenchController.self) private var workbench
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if let error = workbench.error {
+                Text(error).font(.callout).foregroundStyle(Theme.danger)
+                    .textSelection(.enabled).padding(12)
+            }
+            TabView {
+                GeneralSettingsView().tabItem { Label("General", systemImage: "gearshape") }
+                ProviderSettingsView().tabItem { Label("Models", systemImage: "cpu") }
+                WorkspaceSettingsView().tabItem { Label("Workspace", systemImage: "folder") }
+                IntegrationsView().tabItem {
+                    Label("Integrations", systemImage: "puzzlepiece.extension")
+                }
+            }
+        }
+        .frame(width: 640, height: 640)
+    }
+}
+
+private struct GeneralSettingsView: View {
     @Environment(AppState.self) private var state
     @Environment(ChatController.self) private var chats
     @Environment(UpdateController.self) private var updates
-    @State private var showsWorkbench = false
 
     var body: some View {
         Form {
-            Section("Default Model") {
+            Section {
                 DefaultModelSettingsView()
+            } header: {
+                Text("Default Model")
+            } footer: {
+                Text("Saved as `model` in settings.json beside your sessions. The vikram CLI reads the same file.")
             }
             Section("Appearance") {
                 Picker(
@@ -39,8 +64,6 @@ struct SettingsView: View {
                             .frame(width: 8, height: 8)
                             .accessibilityHidden(true)
                         Text("localhost:11434").font(.body.monospaced())
-                        Button("Refresh") { Task { await chats.refreshModels() } }
-                            .disabled(chats.refreshing || chats.offline)
                     }
                 }
                 Text(
@@ -71,16 +94,12 @@ struct SettingsView: View {
                     }
                 }
                 Button("Reconnect Chat Service") { Task { await state.reconnect() } }
+                    .buttonStyle(.glass)
                     .disabled(!state.canReconnect)
             } header: {
                 Text("Local Models")
             } footer: {
                 Text("Vikram uses the chat models you installed in Ollama on this Mac.")
-            }
-            Section("Workbench") {
-                Button("Workspace, OpenRouter, and Integrations…") { showsWorkbench = true }
-                Text("Manage project trust, cloud credentials, conversation branches and queues, MCP servers, and Python extensions.")
-                    .foregroundStyle(Theme.muted)
             }
             Section("Web Search") {
                 Text(
@@ -109,8 +128,10 @@ struct SettingsView: View {
                             Text(updates.text).foregroundStyle(Theme.muted)
                             if status.state == "ready" {
                                 Button("Restart") { state.restart() }
+                                    .buttonStyle(.glassProminent)
                             } else if !["checking", "installing"].contains(status.state) {
                                 Button("Check for Updates") { Task { await updates.check() } }
+                                    .buttonStyle(.glass)
                             }
                         }
                     }
@@ -118,9 +139,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .tint(Theme.accent)
-        .frame(width: 560, height: 620)
-        .sheet(isPresented: $showsWorkbench) { WorkbenchView() }
         .task { await state.workbench.refresh(chatId: chats.selected) }
     }
 }

@@ -904,6 +904,10 @@ public struct Bot: Sendable, Hashable, Codable, Identifiable {
     public var name: String
     public var mandate: String
     public var template: String?
+    /// One of the app's bot icons; nil picks one from the name.
+    public var icon: String?
+    /// web_search, web_fetch, sandbox; nil from an older service means all.
+    public var tools: [String]?
     public var description: String
     public var schedule: ScheduleTime
     public var model: String?
@@ -934,7 +938,7 @@ public struct Bot: Sendable, Hashable, Codable, Identifiable {
     public var lastSummary: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, mandate, template, description, schedule, model, cloud, enabled, state
+        case id, name, mandate, template, icon, tools, description, schedule, model, cloud, enabled, state
         case overdue, notify, attention, material, info, held, created, updated, config, findings
         case runs
         case nextRun = "next_run"
@@ -952,6 +956,8 @@ public struct Bot: Sendable, Hashable, Codable, Identifiable {
         name = try c.decode(String.self, forKey: .name)
         mandate = (try c.decodeIfPresent(String.self, forKey: .mandate)) ?? ""
         template = try c.decodeIfPresent(String.self, forKey: .template)
+        icon = try c.decodeIfPresent(String.self, forKey: .icon)
+        tools = try c.decodeIfPresent([String].self, forKey: .tools)
         description = (try c.decodeIfPresent(String.self, forKey: .description)) ?? ""
         schedule = try c.decode(ScheduleTime.self, forKey: .schedule)
         model = try c.decodeIfPresent(String.self, forKey: .model)
@@ -1013,24 +1019,24 @@ public struct Home: Sendable, Decodable {
     public var isCalm: Bool { needsYou.isEmpty && stale.isEmpty }
 }
 
-public struct BotTemplate: Sendable, Hashable, Decodable, Identifiable {
-    public var id: String
-    public var title: String
-    public var summary: String
-    public var available: Bool
-    /// Why an unavailable template cannot be used yet.
-    public var reason: String?
-    /// Server-owned defaults; absent for blocked templates or an older sidecar.
-    public var defaults: JSONValue?
+/// Vikram, the default bot behind every conversation.
+public struct Assistant: Sendable, Hashable, Decodable, Identifiable {
+    public var id: String { name }
+    public var name: String
+    public var icon: String?
+    /// Added to every conversation's system prompt.
+    public var instructions: String
+    /// web_search, web_fetch, sandbox, browser, tasks.
+    public var tools: [String]
+    /// The default model for new conversations.
+    public var model: String
+
+    public static let allTools = ["web_search", "web_fetch", "sandbox", "browser", "tasks"]
 }
 
 public struct BotList: Sendable, Decodable {
     public var bots: [Bot]
     public var background: String
-}
-
-public struct TemplateList: Sendable, Decodable {
-    public var templates: [BotTemplate]
 }
 
 // MARK: Updates

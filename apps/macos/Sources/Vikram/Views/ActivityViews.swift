@@ -166,17 +166,16 @@ private struct QuestionCard: View {
             }
             HStack {
                 Button("Send Answer") { submit() }
-                    .buttonStyle(.primary)
+                    .buttonStyle(.glassProminent)
                     .disabled(!ready || sending)
                 Button("Skip") {
                     send(.skip)
                 }
-                .buttonStyle(.secondary)
+                .buttonStyle(.glass)
                 .disabled(sending)
             }
         }
         .card(highlighted: true)
-        .tint(Theme.accent)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Vikram's question")
     }
@@ -290,23 +289,22 @@ private struct PlanCard: View {
                     Button("Send Changes") {
                         send(.revise(feedback: String(feedback.prefix(2000))))
                     }
-                    .buttonStyle(.primary)
+                    .buttonStyle(.glassProminent)
                     .disabled(
                         feedback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || sending)
-                    Button("Back") { changing = false }.buttonStyle(.secondary).disabled(sending)
+                    Button("Back") { changing = false }.buttonStyle(.glass).disabled(sending)
                 }
             } else {
                 HStack {
                     Button("Approve Plan") { send(.approve) }
-                        .buttonStyle(.primary)
-                    Button("Request Changes…") { changing = true }.buttonStyle(.secondary)
-                    Button("Not Now") { send(.dismiss) }.buttonStyle(.secondary)
+                        .buttonStyle(.glassProminent)
+                    Button("Request Changes…") { changing = true }.buttonStyle(.glass)
+                    Button("Not Now") { send(.dismiss) }.buttonStyle(.glass)
                 }
                 .disabled(sending)
             }
         }
         .card(highlighted: true)
-        .tint(Theme.accent)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Plan for your approval")
     }
@@ -431,13 +429,12 @@ private struct BrowserApproval: View {
             Text((record.approval?.reason ?? "") + (place.isEmpty ? "" : " · \(place)"))
                 .font(.callout).foregroundStyle(Theme.muted)
             HStack {
-                Button("Allow") { send(.approve) }.buttonStyle(.primary)
-                Button("Don’t Allow") { send(.dismiss) }.buttonStyle(.secondary)
+                Button("Allow") { send(.approve) }.buttonStyle(.glassProminent)
+                Button("Don’t Allow") { send(.dismiss) }.buttonStyle(.glass)
             }
             .disabled(sending)
         }
         .card(highlighted: true)
-        .tint(Theme.accent)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Browser action for your approval")
     }
@@ -461,11 +458,10 @@ private struct BrowserPaused: View {
                 .font(.callout).foregroundStyle(Theme.muted)
             if let handBack {
                 Button("Hand Back", systemImage: "arrow.uturn.backward", action: handBack)
-                    .buttonStyle(.primary)
+                    .buttonStyle(.glassProminent)
             }
         }
         .card(highlighted: true)
-        .tint(Theme.accent)
         .accessibilityElement(children: .contain)
     }
 }
@@ -492,13 +488,12 @@ private struct ScheduleApproval: View {
             Text("Vikram will run this on its own, even when the app is closed.")
                 .font(.callout).foregroundStyle(Theme.muted)
             HStack {
-                Button("Save Task") { send(.approve) }.buttonStyle(.primary)
-                Button("Don’t Save") { send(.dismiss) }.buttonStyle(.secondary)
+                Button("Save Task") { send(.approve) }.buttonStyle(.glassProminent)
+                Button("Don’t Save") { send(.dismiss) }.buttonStyle(.glass)
             }
             .disabled(sending)
         }
         .card(highlighted: true)
-        .tint(Theme.accent)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Scheduled task for your approval")
     }

@@ -10,7 +10,8 @@ import Observation
 public final class BotController {
   public private(set) var home = Home.empty
   public private(set) var bots: [Bot] = []
-  public private(set) var templates: [BotTemplate] = []
+  /// Vikram, the default bot; nil until loaded or from an older service.
+  public private(set) var assistant: Assistant?
   /// on, off, unavailable, or failed.
   public private(set) var background = "unavailable"
   public private(set) var bot: Bot?
@@ -20,7 +21,6 @@ public final class BotController {
   public private(set) var loading = false
   public private(set) var openingBot = false
   public private(set) var openError: String?
-  public private(set) var templateError: String?
 
   @ObservationIgnored private let service: ServiceConnection
   @ObservationIgnored private var openBotId: String?
@@ -62,16 +62,7 @@ public final class BotController {
     bots = list.bots
     background = list.background
     loaded = true
-    if templates.isEmpty || templateError != nil {
-      do {
-        templates = try await service.call("bot_templates").decode(TemplateList.self).templates
-        templateError =
-          templates.isEmpty ? "No templates were returned. Refresh or reconnect." : nil
-      } catch {
-        templateError =
-          (error as? ServiceError)?.message ?? "Templates could not be loaded. Try again."
-      }
-    }
+    assistant = try? await service.call("assistant").decode(Assistant.self)
     if let id = openBotId {
       if list.bots.contains(where: { $0.id == id }) {
         await loadBot(id, generation: openGeneration)
@@ -85,20 +76,8 @@ public final class BotController {
     }
   }
 
-  /// Supported templates open a fully seeded draft; blocked ones stay blocked.
-  public func draft(templateId: String? = nil) -> BotDraft? {
-    guard
-      let template = templateId.flatMap({ id in templates.first { $0.id == id } })
-        ?? (templateId == nil ? templates.first(where: \.available) : nil)
-    else {
-      error = "Templates have not loaded. Refresh the Bots page and try again."
-      return nil
-    }
-    do { return try BotDraft(template: template) } catch {
-      fail(error)
-      return nil
-    }
-  }
+  /// A blank bot: every tool allowed, the default model, daily at 09:00.
+  public func draft() -> BotDraft { BotDraft() }
 
   /// Several changes arrive together while a run streams: reload once.
   public func changed() {
@@ -156,11 +135,28 @@ public final class BotController {
     return result
   }
 
-  /// Create a bot from its fields (a template fills the rest); the new bot, or nil.
+  /// Create a bot from its fields; the new bot, or nil.
   public func create(fields: JSONValue) async -> Bot? {
     guard let value = await act({ try await service.call("create_bot", ["fields": fields]) })
     else { return nil }
     return try? value.decode(Bot.self)
+  }
+
+  /// Save Vikram's icon, system prompt, and tools; true when saved.
+  public func saveAssistant(icon: String?, instructions: String, tools: [String]) async -> Bool {
+    guard
+      let value = await act({
+        try await service.call(
+          "update_assistant",
+          [
+            "icon": icon.map(JSONValue.string) ?? .null,
+            "instructions": .string(instructions),
+            "tools": .array(tools.map(JSONValue.string)),
+          ])
+      })
+    else { return false }
+    if let saved = try? value.decode(Assistant.self) { assistant = saved }
+    return true
   }
 
   /// Change any of a bot's fields; true when saved.

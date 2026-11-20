@@ -13,7 +13,7 @@ for your approval before they work, use a private web browser that you can
 watch, stop, or take over, and schedule prompts that run later on their own,
 even while the app is closed.
 
-## Desktop app (Apple Silicon Mac)
+## Desktop app (Apple Silicon, macOS 27 or later)
 
 Install the desktop app and CLI together: open the installer disk image
 (`Vikram-VERSION-macos-arm64.dmg`), then open **Install Vikram.app** inside it.
@@ -43,11 +43,20 @@ Grotesk (bundled, SIL Open Font License) for titles and your messages and the
 system font for everything else. It follows the system's light or dark
 appearance and accessibility settings; Settings (⌘,) can force light or dark.
 
+Each chat is a session the `vikram` CLI shares. The **Chat | Terminal** switch
+in the toolbar runs the open session as `vikram --session ID` in an embedded
+terminal ([SwiftTerm](https://github.com/migueldeicaza/SwiftTerm), MIT) and
+hands it back to the Chat view when you switch again; one of them drives a
+session at a time, and the switch is unavailable during a reply. Home also
+lists a session that is waiting for your answer. Settings (⌘,) holds the
+shared default model, OpenRouter, the workspace, MCP servers, and extensions.
+
 Use your existing Ollama installation and installed models. The picker rejects
 remote/cloud-backed and non-chat models. No model downloads happen automatically.
 One reply runs at a time; other chats keep independent drafts and histories.
 
-Build with native ARM64 Python 3.13+ and Xcode 16 or later (Swift 6):
+Build with native ARM64 Python 3.13+ and Xcode 27 or later. The app uses the
+selected Xcode's macOS SDK for native Liquid Glass controls and navigation.
 
 ```bash
 uv sync --locked
@@ -259,15 +268,22 @@ script events, which a few sites ignore; take over for those. See the
 
 ## Bots and Home
 
-A bot owns an ongoing responsibility, independently of a conversation. In
-**Bots**, click **Use Template** beside Topic Watcher, Page Watcher, or Release
-Watcher (or use **New Bot**). The editor loads that template's responsibility,
-instructions, rubric, schedule, and overdue-check defaults before opening.
-Personalize its name, responsibility, sources, model, budget, and notifications.
-Unavailable templates stay disabled and explain the missing capability. Loading
-failures offer retry controls rather than looking like an empty list. Keep several specialists; the general-purpose default
-bot remains available for chat. Bots inherit the shared default **model** unless
-overridden, but never inherit permission to use cloud inference.
+A bot owns an ongoing responsibility, independently of a conversation. Choose
+**New Bot** on Home or in Bots. A bot is an icon and a name, a system prompt
+(its first sentence becomes the bot's description; put any pages to check in
+it), the tools it may use (web search, reading web pages, the offline Python
+sandbox; at least one web tool, since a run must retrieve evidence before it can
+report quiet), a model, and a schedule. **More** holds notifications, the time
+budget, and the overdue warning. Bots inherit the shared default model unless
+you choose one for the bot. Cloud inference requires explicit permission for
+each bot. The CLI keeps the Topic, Page, and Release Watcher templates
+(`vikram bots templates`).
+
+**Vikram**, the default bot that answers your conversations, is always first in
+Bots. **Edit…** sets its icon, a system prompt added to every desktop
+conversation, its tools (web search, reading web pages, the Python sandbox, the
+browser, scheduled tasks), and the default model. Folder access stays per
+conversation in the Workbench.
 
 **Home** shows what needs you (decisions, failures, blockers, overdue bots),
 material developments, and each bot's health. Findings can be seen, snoozed,

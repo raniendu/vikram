@@ -96,8 +96,11 @@ Interactive replies default to ten model requests (including a final answer) and
 six sandbox code runs. The model sees its remaining budget; exhausted local tools
 are removed, and the last request offers no tools. Smaller caller-supplied request
 budgets retain that final-answer reservation. Unexecuted tool-call markup is
-rejected, never executed as text; a bounded correction is possible while budget
-remains. Truncated model output and exhausted correction attempts are failed,
+rejected, never executed as text. If the model emits call markup after using its
+sandbox allowance, the next available request asks only for a plain-language
+answer from the recorded results. Retry carries forward the user's earlier
+choices and bounded tool results so the model can inspect existing work before
+continuing. Truncated model output and exhausted correction attempts are failed,
 incomplete replies, not successful handoffs. Completed effects are not replayed.
 
 `!command` runs a user-requested command and includes its bounded output in

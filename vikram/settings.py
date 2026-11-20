@@ -8,6 +8,7 @@ import copy
 import fcntl
 import json
 import os
+import re
 import tempfile
 from collections.abc import Mapping
 from contextlib import contextmanager
@@ -27,7 +28,28 @@ DEFAULTS: dict[str, Any] = {
     "keybindings": {},
 }
 PROJECT_KEYS = frozenset(DEFAULTS)
-USER_KEYS = PROJECT_KEYS | {"editor", "context_limit", "mcp_servers", "extensions"}
+USER_KEYS = PROJECT_KEYS | {
+    "editor",
+    "context_limit",
+    "mcp_servers",
+    "extensions",
+    "assistant",
+}
+# The default bot, Vikram: what it may use in a conversation. Folder access is
+# chosen per conversation in the Workbench, not here.
+ASSISTANT_TOOLS = ("web_search", "web_fetch", "sandbox", "browser", "tasks")
+ASSISTANT_KEYS = frozenset({"icon", "instructions", "tools"})
+
+
+def assistant(settings: "Settings") -> dict[str, Any]:
+    """Vikram's icon, system prompt, and tools, with every tool on by default."""
+    value = settings.get("assistant") or {}
+    tools = value.get("tools")
+    return {
+        "icon": value.get("icon"),
+        "instructions": value.get("instructions", ""),
+        "tools": [tool for tool in ASSISTANT_TOOLS if tools is None or tool in tools],
+    }
 
 
 def application_root() -> Path:
@@ -57,6 +79,24 @@ def read_json(path: Path) -> dict[str, Any]:
 def _valid(key: str, value: Any, *, project: bool = False) -> bool:
     if key not in (PROJECT_KEYS if project else USER_KEYS):
         return False
+    if key == "assistant":
+        if not isinstance(value, dict) or not set(value) <= ASSISTANT_KEYS:
+            return False
+        icon = value.get("icon")
+        tools = value.get("tools", [])
+        return (
+            (
+                icon is None
+                or (
+                    isinstance(icon, str)
+                    and re.fullmatch(r"[a-z0-9-]{1,40}", icon) is not None
+                )
+            )
+            and isinstance(value.get("instructions", ""), str)
+            and len(value.get("instructions", "")) <= 6000
+            and isinstance(tools, list)
+            and all(tool in ASSISTANT_TOOLS for tool in tools)
+        )
     if key == "model":
         if value is None:
             return True

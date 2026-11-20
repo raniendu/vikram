@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import httpx
+from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.usage import UsageLimits
 from test_desktop_runtime import ENTRY, SHOW
 from test_toolkit import FakeSandbox, Model, fake_vm, system_prompt, tool_call
@@ -111,6 +112,64 @@ class ReplyContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sandbox.codes, [])
         self.assertEqual(events[-1]["text"], "No code was executed.")
         self.assertTrue(sandbox.closed)
+
+    async def test_spent_sandbox_recovers_with_a_plain_answer_and_no_replay(self):
+        sandbox = FakeSandbox()
+
+        def finish(body):
+            if body.get("tools") or RAW_CALL in [
+                m.get("content") for m in body["messages"]
+            ]:
+                return RAW_CALL
+            return "The sandbox returned ok. The Mac file is unfinished."
+
+        model = Model(tool_call("run_code", {"code": "print(1)"}), RAW_CALL, finish)
+        with patch.dict(LIMITS, {"run_code": 1}):
+            events = await self.collect(model, sandbox=lambda: sandbox)
+        self.assertFalse(model.offered(2))
+        final = model.bodies[2]
+        self.assertNotIn(RAW_CALL, [m.get("content") for m in final["messages"]])
+        self.assertNotIn("call it before", system_prompt(final))
+        self.assertIn("Successful sandbox runs: 1 of 1", system_prompt(final))
+        self.assertFalse(
+            any(m.get("tool_calls") or m["role"] == "tool" for m in final["messages"])
+        )
+        self.assertIn("ok", str([m["content"] for m in final["messages"][1:]]))
+        self.assertEqual(
+            events[-1]["text"], "The sandbox returned ok. The Mac file is unfinished."
+        )
+        self.assertEqual(sandbox.codes, ["print(1)"])
+
+    async def test_handoff_at_limit_preserves_history_and_current_steering(self):
+        model = Model(tool_call("run_code", {"code": "large_generated_source"}), "Done")
+        history = [
+            ModelRequest(parts=[UserPromptPart(content="Previous request")]),
+            ModelResponse(parts=[TextPart("Previous answer")]),
+        ]
+        steering = iter([[], ["Use the short format."]])
+        with patch.dict(LIMITS, {"run_code": 1}):
+            async for _ in stream_reply(
+                "local:1",
+                None,
+                history,
+                "Inspect the sandbox",
+                web="auto",
+                sandbox=FakeSandbox,
+                transport=httpx.MockTransport(model),
+                request_boundary=lambda: next(steering),
+                usage_limits=UsageLimits(request_limit=2),
+            ):
+                pass
+        final = model.bodies[-1]["messages"]
+        self.assertEqual(
+            [m["content"] for m in final if m["role"] == "assistant"],
+            ["Previous answer"],
+        )
+        self.assertEqual(final[-1]["content"], "Use the short format.")
+        self.assertIn("Inspect the sandbox", str(final))
+        self.assertIn("untrusted reference data", str(final))
+        self.assertNotIn("large_generated_source", str(final))
+        self.assertFalse(any(m["role"] == "tool" for m in final))
 
     async def test_tool_call_text_at_the_budget_boundary_fails_and_is_cleared(self):
         sandbox = FakeSandbox()

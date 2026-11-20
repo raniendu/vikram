@@ -34,6 +34,7 @@ from vikram.web import WebSession
 
 DEFAULT_WEB = "auto"
 MAX_REASONING_CHARS = 64_000
+STREAM_UPDATE_SECONDS = 0.1
 
 
 class ObservedStream(httpx.AsyncByteStream):
@@ -82,6 +83,7 @@ async def stream_reply(
     instructions: str = "",
     request_boundary=None,
     usage_limits: UsageLimits | None = None,
+    web_tools: frozenset[str] | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Stream one reply. Tool-capable models (web "auto") also get the toolkit.
 
@@ -94,6 +96,7 @@ async def stream_reply(
     engine, which outlives the reply; `vision` adds screenshots to its pages.
     `tasks` lets the model manage scheduled tasks. `scheduled` marks an
     unattended scheduled run of that task: no questions, browser, or task tools.
+    `web_tools` limits the web tools offered (`web_search`, `web_fetch`).
     """
     queue = asyncio.Queue()
     reported, parts = {}, {}
@@ -101,6 +104,10 @@ async def stream_reply(
     reasoning = ""
     reasoning_truncated = False
     reasoning_boundary = False
+    loop = asyncio.get_running_loop()
+    next_update = 0.0
+    last_phase = ""
+    pending_update: asyncio.TimerHandle | None = None
 
     def append_reasoning(content: str, *, new_part=False):
         nonlocal reasoning, reasoning_truncated, reasoning_boundary
@@ -116,6 +123,12 @@ async def stream_reply(
         reasoning_truncated |= len(content) > remaining
 
     def send(phase="answering", **extra):
+        nonlocal pending_update, next_update, last_phase
+        if pending_update is not None:
+            pending_update.cancel()
+            pending_update = None
+        last_phase = phase
+        next_update = loop.time() + STREAM_UPDATE_SECONDS
         queue.put_nowait(
             {
                 "text": current,
@@ -129,6 +142,15 @@ async def stream_reply(
                 **extra,
             }
         )
+
+    def stream_update(phase):
+        nonlocal pending_update
+        # Both interfaces checkpoint full snapshots. Batch tokens, while
+        # delivering the first token, phase changes and tool activity immediately.
+        if phase != last_phase or loop.time() >= next_update:
+            send(phase)
+        elif pending_update is None:
+            pending_update = loop.call_at(next_update, send, phase)
 
     session = WebSession(session_id, emit=lambda event: send(**event))
     reply = Reply(
@@ -172,12 +194,16 @@ async def stream_reply(
                 from vikram.integrations import lifecycle
                 from vikram.toolkit import toolkit_tools
 
-                web_tools = session.tools() if web == "auto" else []
+                offered = [
+                    tool
+                    for tool in (session.tools() if web == "auto" else [])
+                    if web_tools is None or tool.name in web_tools
+                ]
                 host_tools = (
                     await execution_tools(
                         reply,
                         builtin_tools=[
-                            *web_tools,
+                            *offered,
                             *toolkit_tools(reply.sandbox is not None),
                         ],
                     )
@@ -196,7 +222,7 @@ async def stream_reply(
                     model,
                     http_client=client,
                     web=web,
-                    tools=web_tools,
+                    tools=offered,
                     toolsets=[host_tools] if host_tools is not None else [],
                     toolkit=web == "auto",
                     sandbox=reply.sandbox is not None,
@@ -216,10 +242,10 @@ async def stream_reply(
                             if isinstance(event.part, TextPart):
                                 parts[event.index] = event.part.content
                                 current = "".join(parts.values())
-                                send()
+                                stream_update("answering")
                             elif isinstance(event.part, ThinkingPart):
                                 append_reasoning(event.part.content, new_part=True)
-                                send(phase="thinking")
+                                stream_update("thinking")
                         elif isinstance(event, PartDeltaEvent) and isinstance(
                             event.delta, TextPartDelta
                         ):
@@ -227,12 +253,12 @@ async def stream_reply(
                                 parts.get(event.index, "") + event.delta.content_delta
                             )
                             current = "".join(parts.values())
-                            send()
+                            stream_update("answering")
                         elif isinstance(event, PartDeltaEvent) and isinstance(
                             event.delta, ThinkingPartDelta
                         ):
                             append_reasoning(event.delta.content_delta or "")
-                            send(phase="thinking")
+                            stream_update("thinking")
                         elif isinstance(event, FunctionToolResultEvent):
                             parts.clear()
                         elif isinstance(event, AgentRunResultEvent):
@@ -292,6 +318,8 @@ async def stream_reply(
             error.__cause__ = exc
             failure = error
         finally:
+            if pending_update is not None:
+                send(last_phase)
             if reply.sandbox is not None:
                 # Do not release chat ownership while a second Stop cancels the
                 # wait: Smol must finish stopping/flushing the persistent disk.

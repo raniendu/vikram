@@ -31,12 +31,11 @@ struct WorkbenchView: View {
             }
         }
         .frame(width: 690, height: 650)
-        .tint(Theme.accent)
         .task(id: chats.selected) { await workbench.refresh(chatId: chats.selected) }
     }
 }
 
-private struct WorkspaceSettingsView: View {
+struct WorkspaceSettingsView: View {
     @Environment(ChatController.self) private var chats
     @Environment(WorkbenchController.self) private var workbench
     @State private var confirmSandboxReset = false

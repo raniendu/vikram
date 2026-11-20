@@ -218,19 +218,32 @@ struct TranscriptView: View {
     @State private var following = true
 
     private var lastAttempt: Attempt? { chat.messages.last?.attempts.last }
+    private static let lazyThreshold = 40
+
+    @ViewBuilder private var turns: some View {
+        ForEach(Array(chat.messages.enumerated()), id: \.element.id) { index, message in
+            TurnView(
+                chat: chat, message: message, isFirst: index == 0,
+                isLast: index == chat.messages.count - 1,
+                respond: respond, handBack: handBack, openTask: openTask,
+                canRetry: canRetry, retry: retry)
+        }
+        Color.clear.frame(height: 1).id("end")
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 30) {
-                    ForEach(Array(chat.messages.enumerated()), id: \.element.id) { index, message in
-                        TurnView(
-                            chat: chat, message: message, isFirst: index == 0,
-                            isLast: index == chat.messages.count - 1,
-                            respond: respond, handBack: handBack, openTask: openTask,
-                            canRetry: canRetry, retry: retry)
+                // A lazy stack estimates the height of rows it has not drawn,
+                // so jumping to the end of a few very tall turns could land on
+                // blank space. Draw ordinary conversations in full; only very
+                // long ones stay lazy.
+                Group {
+                    if chat.messages.count > Self.lazyThreshold {
+                        LazyVStack(alignment: .leading, spacing: 30) { turns }
+                    } else {
+                        VStack(alignment: .leading, spacing: 30) { turns }
                     }
-                    Color.clear.frame(height: 1).id("end")
                 }
                 .scrollTargetLayout()
                 .frame(maxWidth: 700)
@@ -257,8 +270,7 @@ struct TranscriptView: View {
                         following = true
                         withAnimation { proxy.scrollTo("end", anchor: .bottom) }
                     }
-                    .buttonStyle(.secondary)
-                    .background(Theme.raised, in: Capsule())
+                    .buttonStyle(.glass)
                     .padding(8)
                 }
             }
@@ -297,7 +309,7 @@ private struct TurnView: View {
                 && !message.attempts.contains(where: { ["running", "complete"].contains($0.status) })
             {
                 Button("Retry with Selected Model", systemImage: "arrow.counterclockwise", action: retry)
-                    .buttonStyle(.secondary)
+                    .buttonStyle(.glass)
                     .disabled(!canRetry)
             }
         }
@@ -331,9 +343,11 @@ struct UserMessage: View {
         VStack(alignment: .leading, spacing: 8) {
             Eyebrow(label)
             if !text.isEmpty {
+                // Same face, size and leading as reply paragraphs, so a long
+                // pasted brief reads at the same scale as the answer to it.
                 Text(text)
-                    .font(Theme.display(19, weight: .regular, relativeTo: .title3))
-                    .lineSpacing(4)
+                    .font(.body)
+                    .lineSpacing(3)
                     .foregroundStyle(Theme.ink)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)

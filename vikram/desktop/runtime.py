@@ -435,6 +435,22 @@ class Runtime:
                 from vikram.sandbox_session import state_path
 
                 extra["sandbox_state"] = state_path(self.store.root, attempt["chat_id"])
+            from vikram.settings import Settings, assistant
+
+            vikram = assistant(Settings(root=self.store.root))
+            if vikram["instructions"] and "instructions" in parameters:
+                extra["instructions"] = "\n\n".join(
+                    part
+                    for part in (vikram["instructions"], extra.get("instructions", ""))
+                    if part
+                )
+            if "web_tools" in parameters:
+                extra["web_tools"] = frozenset(vikram["tools"]) & {
+                    "web_search",
+                    "web_fetch",
+                }
+            if "sandbox" not in vikram["tools"] and "sandbox" in parameters:
+                extra["sandbox"] = lambda: None
             if "request_boundary" in parameters:
                 extra["request_boundary"] = lambda: self.workbench.boundary(
                     attempt["chat_id"], attempt["id"]
@@ -448,7 +464,7 @@ class Runtime:
                 session_id=attempt["chat_id"],
                 mode=attempt["mode"],
                 interaction=DesktopInteraction(self, route),
-                browser=self.browser,
+                browser=self.browser if "browser" in vikram["tools"] else None,
                 vision=bool(model.get("vision")),
                 tasks=(
                     TaskBook(
@@ -458,7 +474,7 @@ class Runtime:
                         origin="chat",
                         changed=self.tasks_changed,
                     )
-                    if self.tasks
+                    if self.tasks and "tasks" in vikram["tools"]
                     else None
                 ),
                 **extra,
@@ -768,6 +784,8 @@ class Runtime:
             "finding_feedback",
         }:
             return await self.bot_command(method, p)
+        if method in {"assistant", "update_assistant"}:
+            return self.assistant_command(method, p)
         if method == "hello":
             self.updater.watch()
             return {"protocol": 1, **self.snapshot()}
@@ -810,6 +828,17 @@ class Runtime:
         elif method == "delete_chat":
             if self.active and self.active["chat_id"] == p["chat_id"]:
                 raise ValueError("Stop the active reply before deleting this chat.")
+            if p.get("discard_sandbox"):
+                # Deleting the chat was confirmed together with its sandbox
+                # files, so reset the sandbox first; otherwise the store
+                # refuses to orphan it.
+                from vikram.sandbox_session import reset_sandbox, state_path
+
+                sandbox = state_path(self.store.root, p["chat_id"])
+                if sandbox.exists() or sandbox.is_symlink():
+                    with self.store.mutation(p["chat_id"]):
+                        self.store._require_idle(p["chat_id"])
+                        await reset_sandbox(sandbox)
             self.store.delete_chat(p["chat_id"])
         elif method in {"import_image", "import_attachment"}:
             try:
@@ -873,6 +902,25 @@ class Runtime:
             m["name"] == model and m["available"] for m in self.models
         ):
             raise ValueError("Choose an available model.")
+
+    def assistant_command(self, method: str, p: dict) -> dict:
+        """Vikram, the default bot: its icon, system prompt, tools, and model."""
+        from vikram.settings import Settings, assistant
+
+        settings = Settings(root=self.store.root)
+        if method == "update_assistant":
+            value = {
+                "icon": p.get("icon"),
+                "instructions": p.get("instructions", "").strip(),
+                "tools": list(p.get("tools", [])),
+            }
+            settings.set("assistant", value)
+            self.event("workbench")
+        return {
+            "name": "Vikram",
+            **assistant(settings),
+            "model": self.workbench.default_model(),
+        }
 
     async def bot_command(self, method: str, p: dict):
         """The window's Home and bot commands; runs happen in the background."""

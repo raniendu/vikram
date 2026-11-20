@@ -31,6 +31,7 @@ struct DefaultModelSettingsView: View {
         Text("Used for new CLI and desktop conversations. Choosing a model in a conversation also remembers it as the default on this Mac.")
             .font(.callout).foregroundStyle(Theme.muted)
         Button("Refresh Models") { Task { await chats.refreshModels() } }
+            .buttonStyle(.glass)
             .disabled(chats.refreshing || chats.offline)
     }
 

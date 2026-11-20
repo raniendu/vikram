@@ -482,7 +482,11 @@ public final class ChatController {
 
     @discardableResult
     public func deleteChat(_ id: String) async -> Bool {
-        guard await manage("delete_chat", ["chat_id": .string(id)]) else { return false }
+        // The confirmation names the sandbox files, so they go with the chat.
+        guard
+            await manage(
+                "delete_chat", ["chat_id": .string(id), "discard_sandbox": .bool(true)])
+        else { return false }
         timers.removeValue(forKey: id)?.cancel()
         draftRecords.removeValue(forKey: id)
         cache.removeValue(forKey: id)

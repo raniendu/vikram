@@ -24,15 +24,12 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Theme.paper)
             .safeAreaInset(edge: .top, spacing: 0) { banners }
         }
         .inspector(isPresented: state.browserShown) {
             BrowserPanel()
                 .inspectorColumnWidth(min: 360, ideal: 560, max: 1000)
         }
-        .tint(Theme.accent)
-        .foregroundStyle(Theme.ink)
         .sheet(item: $sheet) { SidebarSheetView(sheet: $0) }
         .sheet(isPresented: Binding(get: { state.showsWorkbench }, set: { state.showsWorkbench = $0 })) {
             WorkbenchView()
@@ -60,7 +57,7 @@ struct ContentView: View {
             }
         } message: {
             Text(
-                "Its messages and imported file copies will be permanently removed. Your original files stay where they are."
+                "Its messages, imported file copies, and Python sandbox files will be permanently removed. Your original files stay where they are."
             )
         }
         .onChange(of: state.appearance, initial: true) { state.applyAppearance() }
@@ -71,7 +68,7 @@ struct ContentView: View {
             if let error = chats.error {
                 Banner(text: error, tint: Theme.danger) {
                     Button("Reconnect") { Task { await state.reconnect() } }
-                        .buttonStyle(.secondary)
+                        .buttonStyle(.glass)
                         .disabled(!state.canReconnect)
                     Button("Dismiss", systemImage: "xmark") { chats.error = nil }
                         .labelStyle(.iconOnly)
@@ -84,7 +81,7 @@ struct ContentView: View {
                     systemImage: "arrow.down.circle.fill"
                 ) {
                     Button("Restart") { state.restart() }
-                        .buttonStyle(.primary)
+                        .buttonStyle(.glassProminent)
                     Button("Dismiss", systemImage: "xmark") { updates.dismiss() }
                         .labelStyle(.iconOnly)
                         .buttonStyle(.borderless)
@@ -93,7 +90,7 @@ struct ContentView: View {
             if let connection = chats.connection, !chats.offline {
                 Banner(text: connection, systemImage: "bolt.horizontal.circle") {
                     Button("Refresh") { Task { await chats.refreshModels() } }
-                        .buttonStyle(.secondary)
+                        .buttonStyle(.glass)
                         .disabled(chats.refreshing)
                 }
             }
@@ -114,6 +111,17 @@ private struct ChatDetail: View {
             if chats.loading && chats.chat == nil {
                 ProgressView("Opening your conversations…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let chat = chats.chat, state.terminalChat == chat.id {
+                TerminalPane(
+                    chatId: chat.id, directory: state.workbench.status?.workspace,
+                    ended: { state.showTerminal(false) }
+                )
+                .id(chat.id)
+                .padding(10)
+                .background(Theme.surface)
+                .navigationTitle(chat.title)
+                .navigationSubtitle("vikram --session \(chat.id.prefix(8))…")
+                .toolbar { ChatToolbar(chat: chat, sheet: $sheet, deletingChat: $deletingChat) }
             } else if let chat = chats.chat {
                 Group {
                     if chat.messages.isEmpty {
@@ -147,16 +155,17 @@ private struct ChatDetail: View {
                         .padding(.vertical, 6)
                     }
                 }
-                .safeAreaInset(edge: .bottom, spacing: 0) { ComposerView(chat: chat) }
-                .displayTitle(chat.title, subtitle: chats.model.map { "\($0.displayName) · \($0.providerLabel)" })
+                .safeAreaBar(edge: .bottom, spacing: 0) { ComposerView(chat: chat) }
+                .navigationTitle(chat.title)
+                .navigationSubtitle(chats.model.map { "\($0.displayName) · \($0.providerLabel)" } ?? "")
                 .toolbar { ChatToolbar(chat: chat, sheet: $sheet, deletingChat: $deletingChat) }
             } else {
                 Welcome(
-                    title: "A thought starts here.",
-                    text: "Your models. Your conversations. A quiet space, right on your Mac."
+                    title: "What should Vikram do?",
+                    text: "Each session is the same one the vikram CLI opens. Chat here, or switch it to the terminal."
                 ) {
-                    Button("Start a Conversation") { state.newChat() }
-                        .buttonStyle(.primary)
+                    Button("New Session") { state.newChat() }
+                        .buttonStyle(.glassProminent)
                         .disabled(chats.offline || chats.loading)
                 }
             }
@@ -190,15 +199,16 @@ struct Welcome<Actions: View>: View {
 }
 
 private struct EmptyChat: View {
+    @Environment(AppState.self) private var state
     @Environment(ChatController.self) private var chats
 
     var body: some View {
-        Welcome(title: "A thought starts here.", text: description) {
+        Welcome(title: "What should Vikram do?", text: description) {
             if !chats.models.contains(where: \.available) {
                 Button("Refresh Models", systemImage: "arrow.clockwise") {
                     Task { await chats.refreshModels() }
                 }
-                .buttonStyle(.secondary)
+                .buttonStyle(.glass)
                 .disabled(chats.refreshing || chats.offline)
             } else if let model = chats.model {
                 HStack(spacing: 6) {
@@ -208,6 +218,22 @@ private struct EmptyChat: View {
                 }
                 .font(.callout)
                 .foregroundStyle(Theme.muted)
+                Text("vikram --model \(model.name)")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(Theme.muted)
+                    .textSelection(.enabled)
+                    .help("The command that starts this session in a terminal")
+                HStack(spacing: 10) {
+                    if let last = chats.chats.first(where: { $0.id != chats.selected }) {
+                        Button("Continue Last Session") { state.openChat(last.id) }
+                    }
+                    Button("Create a Bot") { state.selection = .bots }
+                    if VikramCLI.command([]) != nil {
+                        Button("Open in Terminal") { state.showTerminal(true) }
+                    }
+                }
+                .buttonStyle(.glass)
+                .padding(.top, 8)
             }
         }
     }
@@ -223,35 +249,6 @@ private struct EmptyChat: View {
     }
 }
 
-extension View {
-    /// The window title in the display face where the system allows replacing
-    /// it (macOS 15 and later); the standard title elsewhere.
-    @ViewBuilder
-    func displayTitle(_ title: String, subtitle: String?) -> some View {
-        if #available(macOS 15.0, *) {
-            self
-                .navigationTitle(title)
-                .toolbar(removing: .title)
-                .toolbar {
-                    ToolbarItem(placement: .navigation) {
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(title)
-                                .font(Theme.display(17, weight: .medium, relativeTo: .headline))
-                                .lineLimit(1)
-                            if let subtitle {
-                                Text(subtitle).font(.caption).foregroundStyle(Theme.muted)
-                            }
-                        }
-                        .padding(.leading, 4)
-                        .accessibilityElement(children: .combine)
-                    }
-                }
-        } else {
-            self.navigationTitle(title).navigationSubtitle(subtitle ?? "")
-        }
-    }
-}
-
 /// A toolbar menu labelled with a small caption and its value: MODEL Gemma 4.
 /// One text, because toolbar menus keep only the first text of a label.
 private struct LabeledMenuTitle: View {
@@ -259,11 +256,11 @@ private struct LabeledMenuTitle: View {
     let value: String
 
     var body: some View {
-        Text(caption.uppercased())
+        let label = Text(caption.uppercased())
             .font(.system(size: 10, weight: .semibold))
             .tracking(1.3)
             .foregroundStyle(Theme.muted)
-            + Text("  ") + Text(value).font(.callout)
+        Text("\(label)  \(Text(value).font(.callout))")
     }
 }
 
@@ -278,6 +275,22 @@ private struct ChatToolbar: ToolbarContent {
     private var model: LocalModel? { chats.model }
 
     var body: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            Picker(
+                "View",
+                selection: Binding(
+                    get: { state.terminalChat == chat.id },
+                    set: { state.showTerminal($0) })
+            ) {
+                Text("Chat").tag(false)
+                Text("Terminal").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .help("Chat here, or run this session in the vikram CLI")
+            .disabled(
+                VikramCLI.command([]) == nil || chats.active?.chatId == chat.id || chats.sending
+                    || chats.offline)
+        }
         ToolbarItemGroup(placement: .primaryAction) {
             Menu {
                 Picker(
@@ -307,8 +320,9 @@ private struct ChatToolbar: ToolbarContent {
             }
             .help(chat.model ?? "Choose a model")
             .accessibilityLabel("Model: \(chat.model.map(formatModelName) ?? "none")")
-            .disabled(chats.offline || chats.loading || chats.sending)
-            if let model, model.thinking.contains(where: { $0 != thinkingOn(model) }) {
+            .disabled(
+                chats.offline || chats.loading || chats.sending || state.terminalChat == chat.id)
+            if let model, state.terminalChat != chat.id, model.thinking.contains(where: { $0 != thinkingOn(model) }) {
                 ThinkingMenu(chat: chat, model: model, on: thinkingOn(model))
             }
             Menu {

@@ -6,6 +6,13 @@ from pathlib import Path
 
 
 def main() -> int:
+    from vikram.installation import InstallError, check_macos
+
+    try:
+        check_macos()
+    except InstallError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 1
     if sys.argv[1:2] == ["--check-sandbox"]:
         from vikram.sandbox import check_sandbox
 
@@ -24,7 +31,7 @@ def main() -> int:
 
         return cli_main(sys.argv[2:])
     if sys.argv[1:2] == ["--install-bundle"]:
-        from vikram.installation import InstallError, Layout, install_bundle
+        from vikram.installation import Layout, install_bundle
 
         if len(sys.argv) != 3:
             sys.stderr.write("Expected an application bundle to install.\n")
