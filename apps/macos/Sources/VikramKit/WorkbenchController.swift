@@ -32,6 +32,13 @@ public final class WorkbenchController {
         self.error = (error as? ServiceError)?.message ?? "This workbench action could not finish. Try again."
     }
 
+    public func estimatedContextTokens(for chatId: String) -> Int? {
+        guard statusChatId == chatId,
+            let count = status?.context["estimated_tokens"]?.number, count >= 0
+        else { return nil }
+        return Int(exactly: count)
+    }
+
     public func refresh(chatId: String?) async {
         if statusChatId != chatId {
             status = nil

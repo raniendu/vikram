@@ -113,8 +113,11 @@ test library.
 Attach up to four files per message, 10 MiB each. Images retain the 24-megapixel limit. Images in
 saved history are omitted with a marker when a text-only model is selected.
 Unsupported draft images must be removed or used with an image-capable model.
-When Ollama returns thinking text, a collapsed **Thinking** row lets you inspect
-it live or after the reply. Thinking has its own copy action and is saved with
+The Mac composer shows the estimated percentage of the selected model’s context
+window used by the saved conversation. Hover over it for the token counts.
+Each timed reply shows **Working for…** while it runs. Expand **Worked for…**
+afterward to see its timing and recorded activity. The **Thinking** row lets you
+inspect model thinking live or after the reply. Thinking has its own copy action and is saved with
 the desktop reply, up to 64,000 characters; longer traces show a limit notice.
 It is never added to later conversation context, logs, or evaluation records.
 Old replies cannot recover thinking that was previously discarded.

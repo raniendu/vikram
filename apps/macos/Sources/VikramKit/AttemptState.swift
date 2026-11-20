@@ -39,6 +39,7 @@ private func merged(_ a: Attempt, _ event: RuntimeEvent) -> Attempt {
     a.reasoningTruncated = event.reasoningTruncated ?? a.reasoningTruncated
     a.actualModel = event.actualModel ?? a.actualModel
     a.status = event.status ?? a.status
+    a.updated = event.updated ?? a.updated
     a.error = event.error ?? a.error
     a.unsaved = event.unsaved ?? a.unsaved
     a.phase = event.phase ?? a.phase

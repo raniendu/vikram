@@ -7,23 +7,33 @@ struct AnswerView: View {
     var respond: Respond?
     var handBack: (() -> Void)?
     var openTask: ((String) -> Void)?
-
-    private var hasChips: Bool {
-        attempt.reasoning?.isEmpty == false || !(attempt.searches ?? []).isEmpty
-    }
+    @State private var showsWork = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             byline
-            if hasChips {
-                HStack(alignment: .top, spacing: 6) {
-                    ThinkingChip(attempt: attempt)
-                    WebActivityChip(searches: attempt.searches ?? [])
+            if let start = attempt.created, let end = attempt.updated, end > start,
+                ["complete", "failed", "stopped"].contains(attempt.status)
+            {
+                ChipDisclosure(isExpanded: $showsWork) {
+                    Text("Worked for \(workDuration(end - start))")
+                } content: {
+                    let clock = Date.FormatStyle.dateTime.hour().minute().second()
+                    Text("Started \(Date(timeIntervalSince1970: start), format: clock) · Finished \(Date(timeIntervalSince1970: end), format: clock)")
+                        .font(.caption)
+                        .foregroundStyle(Theme.muted)
+                    workDetails
                 }
-            }
-            if attempt.activity?.isEmpty == false {
-                ActivityList(
-                    attempt: attempt, respond: respond, handBack: handBack, openTask: openTask)
+            } else {
+                if attempt.status == "running", let start = attempt.created {
+                    TimelineView(.periodic(from: Date(timeIntervalSince1970: start), by: 1)) { tick in
+                        Text("Working for \(workDuration(tick.date.timeIntervalSince1970 - start))")
+                            .font(.caption)
+                            .monospacedDigit()
+                            .foregroundStyle(Theme.muted)
+                    }
+                }
+                workDetails
             }
             if !attempt.content.isEmpty {
                 MarkdownView(attempt.content)
@@ -68,6 +78,24 @@ struct AnswerView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private var workDetails: some View {
+        if attempt.reasoning?.isEmpty == false || !(attempt.searches ?? []).isEmpty {
+            HStack(alignment: .top, spacing: 6) {
+                ThinkingChip(attempt: attempt)
+                WebActivityChip(searches: attempt.searches ?? [])
+            }
+        }
+        if attempt.activity?.isEmpty == false {
+            ActivityList(attempt: attempt, respond: respond, handBack: handBack, openTask: openTask)
+        }
+    }
+
+    private func workDuration(_ elapsed: TimeInterval) -> String {
+        Duration.seconds(max(0, elapsed)).formatted(
+            .units(allowed: [.hours, .minutes, .seconds], width: .narrow, maximumUnitCount: 2,
+                   fractionalPart: .hide(rounded: .towardZero)))
     }
 
     private var byline: some View {

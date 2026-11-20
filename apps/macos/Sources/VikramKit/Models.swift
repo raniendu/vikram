@@ -247,6 +247,8 @@ public struct Attempt: Sendable, Hashable, Codable, Identifiable {
     public var messageId: String
     public var requestId: String
     public var requestedModel: String
+    public var created: TimeInterval?
+    public var updated: TimeInterval?
     public var actualModel: String?
     public var thinking: Thinking?
     public var status: AttemptStatus
@@ -293,7 +295,7 @@ public struct Attempt: Sendable, Hashable, Codable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id, thinking, status, content, error, activity, mode, reasoning, revision
-        case sources, searches, unsaved, phase
+        case sources, searches, unsaved, phase, created, updated
         case chatId = "chat_id"
         case messageId = "message_id"
         case requestId = "request_id"
@@ -309,6 +311,8 @@ public struct Attempt: Sendable, Hashable, Codable, Identifiable {
         messageId = try c.decode(String.self, forKey: .messageId)
         requestId = try c.decode(String.self, forKey: .requestId)
         requestedModel = (try? c.decode(String.self, forKey: .requestedModel)) ?? ""
+        created = try c.decodeIfPresent(Double.self, forKey: .created)
+        updated = try c.decodeIfPresent(Double.self, forKey: .updated)
         actualModel = try c.decodeIfPresent(String.self, forKey: .actualModel)
         thinking = try? c.decodeIfPresent(Thinking.self, forKey: .thinking)
         status = try c.decode(String.self, forKey: .status)
@@ -567,6 +571,7 @@ public struct Snapshot: Sendable, Decodable {
 /// A runtime event: a reply's progress, a mode change, a notice, or a lost service.
 public struct RuntimeEvent: Sendable, Decodable {
     public var event: String
+    public var updated: TimeInterval?
     public var chatId: String?
     public var attemptId: String?
     public var requestId: String?
@@ -610,7 +615,7 @@ public struct RuntimeEvent: Sendable, Decodable {
 
     enum CodingKeys: String, CodingKey {
         case event, control, activity, mode, reasoning, revision, sources, searches
-        case status, content, phase, error, unsaved, message
+        case status, content, phase, error, unsaved, message, updated
         case chatId = "chat_id"
         case attemptId = "attempt_id"
         case requestId = "request_id"
@@ -621,6 +626,7 @@ public struct RuntimeEvent: Sendable, Decodable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         event = try c.decode(String.self, forKey: .event)
+        updated = try? c.decodeIfPresent(Double.self, forKey: .updated)
         chatId = try? c.decodeIfPresent(String.self, forKey: .chatId)
         attemptId = try? c.decodeIfPresent(String.self, forKey: .attemptId)
         requestId = try? c.decodeIfPresent(String.self, forKey: .requestId)
