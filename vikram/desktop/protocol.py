@@ -21,6 +21,11 @@ class Chat(Params):
     chat_id: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 
+class DeleteChat(Chat):
+    # The person confirmed that the chat's saved sandbox files go with it.
+    discard_sandbox: StrictBool = False
+
+
 class NewChat(Params):
     folder_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
 
@@ -168,6 +173,14 @@ class UpdateBot(Bot):
     fields: dict[str, Any]
 
 
+class AssistantFields(Params):
+    """Vikram, the default bot: validated by `vikram.settings`."""
+
+    icon: str | None = None
+    instructions: str = Field(default="", max_length=6000)
+    tools: list[str] = Field(default_factory=list, max_length=10)
+
+
 class ImportBot(Params):
     """An exported bot; its cloud grant never travels with it."""
 
@@ -208,7 +221,7 @@ PARAMS = {
     "create_folder": Name,
     "rename_folder": RenameFolder,
     "delete_folder": Folder,
-    "delete_chat": Chat,
+    "delete_chat": DeleteChat,
     "import_image": ImportImage,
     "import_attachment": ImportImage,
     "attachment": Image,
@@ -231,6 +244,8 @@ PARAMS = {
     "bots": Params,
     "bot": Bot,
     "bot_templates": Params,
+    "assistant": Params,
+    "update_assistant": AssistantFields,
     "create_bot": BotFields,
     "update_bot": UpdateBot,
     "delete_bot": Bot,

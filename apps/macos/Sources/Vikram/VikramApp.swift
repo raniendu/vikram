@@ -42,7 +42,7 @@ struct AppCommands: Commands {
                 .disabled(state.updates.status?.state == "unavailable")
         }
         CommandGroup(replacing: .newItem) {
-            Button("New Chat") { state.newChat() }
+            Button("New Session") { state.newChat() }
                 .keyboardShortcut("n")
                 .disabled(state.chats.offline || state.chats.loading)
         }

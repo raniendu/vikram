@@ -34,7 +34,7 @@ TOOL_CASES = ("sandbox-computation", "clarifying-question", "plan-approval")
 TOOL_SUITE = "551cd06b07b55d93294cbb814c63b7f05819aefc5dd9849a14c2e392ef5e99e8"
 TOOL_PROTOCOL = "4908b19ba4618d7ebaa29d81b69fad191e2c99b89884103e57a63d701045cdaf"
 TOOL_AGENT = {
-    True: "26dbd28f401421f82b309497953c08cc4af973e5fa839a9760f200d88ecd8061",
+    True: "99edd19bf550b2a645ba67ac0025b7257cf87ffaf05437e3526ac709b8ab26f9",
     False: "9694d982b5558f477b9efa1ba4479bd0fa289da9b1252ec3587ede320ce10961",
 }
 
@@ -140,7 +140,7 @@ class ToolCaseTests(unittest.IsolatedAsyncioTestCase):
                     c.model,
                     web="off",
                     toolkit=True,
-                    sandbox=c.sandbox,
+                    sandbox=bool(c.sandbox),
                     http_client=client,
                 ),
                 None,
@@ -286,8 +286,8 @@ class EvalCliTests(unittest.TestCase):
         for case, expected in (("plan-approval", 1), ("clarifying-question", 0)):
             runs, errors = [], io.StringIO()
 
-            async def benchmark(configs, *args):
-                runs.extend(configs)
+            async def benchmark(configs, *args, target=runs):
+                target.extend(configs)
                 return 0
 
             with (

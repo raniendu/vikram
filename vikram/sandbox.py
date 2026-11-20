@@ -1,9 +1,9 @@
 """Run model-written Python in a local microVM, isolated from this Mac.
 
-Each reply that runs code gets its own VM, booted on first use from a bundled,
-digest-pinned Python image and deleted when the reply ends. It uses Pydantic AI
-Harness `SmolSandbox` (smolvm on Apple's Hypervisor framework): its own Linux
-kernel, no network, nothing from the Mac mounted, and no host environment.
+Saved conversations reuse a private Pydantic WorkspaceRef. Each reply stops the
+VM to flush its disk; only explicit reset destroys it. Temporary replies and
+composition still get disposable VMs. All boot from the bundled, digest-pinned
+image with no network, mounts, host tools, or host environment.
 """
 
 import asyncio
@@ -16,9 +16,17 @@ import platform
 import shutil
 import sys
 import tarfile
+from contextlib import AbstractContextManager, suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+from pydantic_ai.workspaces import Workspace
+
+from vikram.sandbox_session import load_state, save_state, state_lock
+
+if TYPE_CHECKING:
+    from pydantic_ai_harness.smol_sandbox import SmolSandboxBackend
 
 IMAGE_REPOSITORY = "library/python"
 IMAGE_TAG = "3.13-alpine"
@@ -71,6 +79,7 @@ class CodeRun:
     output: str
     error: str
     timed_out: bool = False
+    notice: str | None = None
 
 
 class Sandbox(Protocol):
@@ -82,8 +91,9 @@ class Sandbox(Protocol):
 def image_path() -> Path | None:
     """The bundled image in an installed app, or the one fetched in a checkout."""
     candidates = [Path(__file__).resolve().parents[1] / "build/sandbox" / IMAGE_FILE]
-    if getattr(sys, "frozen", False):
-        candidates.insert(0, Path(sys._MEIPASS) / "sandbox" / IMAGE_FILE)
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if getattr(sys, "frozen", False) and isinstance(bundle_root, str):
+        candidates.insert(0, Path(bundle_root) / "sandbox" / IMAGE_FILE)
     return next((path for path in candidates if path.is_file()), None)
 
 
@@ -91,11 +101,14 @@ def verify_archive(path: Path) -> bool:
     """Every file matches the pinned registry manifest, digest by digest."""
     try:
         with tarfile.open(path) as archive:
-            files = {
-                member.name: archive.extractfile(member).read()
-                for member in archive.getmembers()
-                if member.isfile()
-            }
+            files = {}
+            for member in archive.getmembers():
+                if member.isfile():
+                    source = archive.extractfile(member)
+                    if source is None:
+                        return False
+                    with source:
+                        files[member.name] = source.read()
         registry = files[REGISTRY_MANIFEST]
         if f"sha256:{hashlib.sha256(registry).hexdigest()}" != IMAGE_MANIFEST:
             return False
@@ -126,10 +139,11 @@ def _pin_guest_rootfs() -> None:
     time, and a frozen app unpacks its files with new times at every launch, so
     each launch that ran code would leave another copy behind.
     """
-    if not getattr(sys, "frozen", False):
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if not getattr(sys, "frozen", False) or not isinstance(bundle_root, str):
         return
     for name in ("agent-rootfs.tar.zst", "agent-rootfs.tar"):
-        path = Path(sys._MEIPASS) / "smol" / name
+        path = Path(bundle_root) / "smol" / name
         if path.is_file():
             digest = hashlib.sha256(path.read_bytes()).digest()
             stamp = 1_000_000_000 + int.from_bytes(digest[:4]) % 10**9
@@ -166,7 +180,7 @@ def unavailable_reason() -> str | None:
 
 
 def _markers() -> Path:
-    # Vikram's own record of the VMs it created, so a crash leaves nothing behind.
+    # Disposable orphans may be swept; persistent disks belong to private chat refs.
     return Path.home() / "Library/Caches/dev.raniendu.vikram/sandbox-vms"
 
 
@@ -184,7 +198,7 @@ _swept = False
 
 
 async def _sweep() -> None:
-    """Delete VMs that a crashed Vikram process left behind, once per process."""
+    """Delete disposable VMs left by a crashed process; never conversation disks."""
     global _swept
     if _swept:
         return
@@ -194,7 +208,12 @@ async def _sweep() -> None:
 
     for marker in _markers().glob("*.json"):
         try:
-            pid = json.loads(marker.read_text())["pid"]
+            record = json.loads(marker.read_text())
+            if record.get("persistent") is True:
+                continue  # Conversation-owned disks are never crash garbage.
+            pid = record["pid"]
+            if type(pid) is not int or pid <= 0:
+                raise ValueError("Invalid sandbox process marker.")
             ref = WorkspaceRef(provider="smol", id=marker.stem)
         except (OSError, ValueError, KeyError, TypeError):
             marker.unlink(missing_ok=True)  # Unreadable: there is nothing to delete.
@@ -220,57 +239,88 @@ def _describe(error: BaseException) -> str:
 
 
 class VmSandbox:
-    """One microVM for one reply: booted on first use, deleted by `close()`."""
+    """A bounded Smol workspace, optionally persisted in a private chat library."""
 
-    def __init__(self) -> None:
-        self._backend = None
-        self._workspace = None
+    def __init__(self, *, state_path: Path | None = None) -> None:
+        self.state_path = state_path
+        self._backend: SmolSandboxBackend | None = None
+        self._workspace: Workspace | None = None
         self._broken: str | None = None
         self._boot: asyncio.Task | None = None
-        # One snippet at a time: each run rewrites the same file in the VM.
+        self._lease: AbstractContextManager | None = None
+        self._persisted = False
+        self._notice: str | None = None
         self._lock = asyncio.Lock()
 
-    async def _start(self):
+    async def _start(self) -> Workspace:
         from pydantic_ai.workspaces import Workspace
         from pydantic_ai_harness.smol_sandbox import SmolSandboxBackend
 
         if shutil.disk_usage(Path.home()).free - 2 * VM_DISK_GB * 1024**3 < RESERVE:
             raise SandboxUnavailable(
-                "The Python sandbox needs more free disk space to keep the 20 GiB "
-                "reserve."
+                "The Python sandbox needs more free disk space to keep the 20 GiB reserve."
             )
-        await _sweep()
-        backend = SmolSandboxBackend(
-            image=str(image_path()), cpus=VM_CPUS, memory_mb=VM_MEMORY_MB
-        )
-        # The Harness leaves disk sizes to smolvm; Harness 0.56 keeps the machine's
-        # resources here. Refuse to boot rather than run with the default disks.
-        resources = getattr(backend, "_resources", None)
-        if not dataclasses.is_dataclass(resources) or not hasattr(
-            resources, "storage_gb"
-        ):
-            raise SandboxUnavailable("The Python sandbox cannot limit its disk size.")
-        backend._resources = dataclasses.replace(
-            resources, storage_gb=VM_DISK_GB, overlay_gb=VM_DISK_GB
-        )
-        self._backend = backend
-        workspace = Workspace(backend)
-        boot = self._boot = asyncio.ensure_future(workspace.working_dir())
+        boot = None
         marked = False
         try:
-            await asyncio.sleep(0)  # The ref exists once the boot has started.
+            stored = None
+            if self.state_path is not None:
+                self._lease = state_lock(self.state_path)
+                self._lease.__enter__()
+                stored = load_state(self.state_path)
+                self._persisted = stored is not None
+                if stored is not None and not stored.saved:
+                    self._notice = (
+                        "The previous sandbox shutdown was interrupted. Recent writes "
+                        "may be missing. Inspect the current files before continuing; "
+                        "do not replay earlier effects automatically."
+                    )
+            await _sweep()
+            backend = SmolSandboxBackend(
+                ref=stored.ref if stored else None,
+                image=str(image_path()),
+                cpus=VM_CPUS,
+                memory_mb=VM_MEMORY_MB,
+            )
+            resources = getattr(backend, "_resources", None)
+            if (
+                not dataclasses.is_dataclass(resources)
+                or isinstance(resources, type)
+                or not hasattr(resources, "storage_gb")
+            ):
+                raise SandboxUnavailable(
+                    "The Python sandbox cannot limit its disk size."
+                )
+            backend._resources = dataclasses.replace(
+                backend._resources, storage_gb=VM_DISK_GB, overlay_gb=VM_DISK_GB
+            )
+            self._backend = backend
+            workspace = Workspace(backend)
+            boot = self._boot = asyncio.ensure_future(workspace.working_dir())
+            await asyncio.sleep(0)  # The native ref exists before boot finishes.
             self._mark()
             marked = True
             await boot
         except BaseException as error:
-            boot.cancel()
-            await asyncio.gather(boot, return_exceptions=True)
+            if boot is not None:
+                boot.cancel()
+                await asyncio.gather(boot, return_exceptions=True)
             self._boot = None
             if not marked or isinstance(error, asyncio.CancelledError):
-                await self.close()
+                with suppress(Exception):
+                    await self.close()
             if isinstance(error, asyncio.CancelledError):
                 raise
-            self._broken = f"The Python sandbox could not start ({_describe(error)})."
+            self._broken = (
+                str(error)
+                if isinstance(error, (SandboxUnavailable, ValueError))
+                else f"The Python sandbox could not start ({_describe(error)})."
+            )
+            if self._persisted:
+                self._broken += (
+                    " The saved sandbox was not recreated. Inspect or explicitly "
+                    "reset it in Workbench or with `vikram sandbox reset`."
+                )
             raise SandboxUnavailable(self._broken) from None
         finally:
             self._boot = None
@@ -279,9 +329,17 @@ class VmSandbox:
 
     def _mark(self) -> None:
         ref = self._backend.ref if self._backend else None
-        if ref is not None:
-            _markers().mkdir(parents=True, exist_ok=True)
-            (_markers() / f"{ref.id}.json").write_text(json.dumps({"pid": os.getpid()}))
+        if ref is None:
+            raise SandboxUnavailable(
+                "The Python sandbox did not provide a workspace reference."
+            )
+        if self.state_path is not None:
+            save_state(self.state_path, ref, saved=False)
+            self._persisted = True
+        _markers().mkdir(parents=True, exist_ok=True)
+        (_markers() / f"{ref.id}.json").write_text(
+            json.dumps({"pid": os.getpid(), "persistent": self._persisted})
+        )
 
     async def run(self, code: str, /) -> CodeRun:
         async with self._lock:
@@ -309,27 +367,43 @@ class VmSandbox:
         except WorkspaceUnavailableError:
             self._broken = "The Python sandbox stopped unexpectedly."
             raise SandboxUnavailable(self._broken) from None
-        return CodeRun(result.exit_code, result.stdout, result.stderr)
+        notice, self._notice = self._notice, None
+        return CodeRun(result.exit_code, result.stdout, result.stderr, notice=notice)
 
     async def close(self) -> None:
+        """Stop/flush a saved workspace; destroy only an ephemeral or unsaved VM."""
         boot, self._boot = self._boot, None
         if boot is not None and not boot.done():
             boot.cancel()
             await asyncio.gather(boot, return_exceptions=True)
         backend, self._backend, self._workspace = self._backend, None, None
-        if backend is None or backend.ref is None:
-            return
-        ref = backend.ref
-        from pydantic_ai_harness.smol_sandbox import SmolSandbox
+        try:
+            if backend is None or backend.ref is None:
+                return
+            ref = backend.ref
+            if self.state_path is not None and self._persisted:
+                try:
+                    machine = await backend.get_sandbox()
+                    await machine.stop()  # Native Smol persistence requires a flush.
+                    save_state(self.state_path, ref, saved=self._broken is None)
+                except Exception:
+                    raise SandboxUnavailable(
+                        "The conversation sandbox could not be safely saved. Its reference "
+                        "was retained, but recent writes are uncertain. Inspect it before continuing."
+                    ) from None
+            else:
+                from pydantic_ai_harness.smol_sandbox import SmolSandbox
 
-        try:
-            await SmolSandbox().destroy(ref)
-        except Exception:
-            return  # Keep the marker: the next process sweeps it.
-        try:
-            (_markers() / f"{ref.id}.json").unlink(missing_ok=True)
-        except OSError:
-            pass  # A startup failure may mean the marker directory is inaccessible.
+                try:
+                    await SmolSandbox().destroy(ref)
+                except Exception:
+                    return  # Leave the crash marker for the next sweep.
+                with suppress(OSError):
+                    (_markers() / f"{ref.id}.json").unlink(missing_ok=True)
+        finally:
+            lease, self._lease = self._lease, None
+            if lease is not None:
+                lease.__exit__(None, None, None)
 
 
 COMPOSITION_FRAME_LIMIT = 1024 * 1024
@@ -387,8 +461,11 @@ class CompositionSandbox(VmSandbox):
             WorkspaceTimeoutError,
         )
 
+        workspace = self._workspace
+        if workspace is None:
+            raise SandboxUnavailable("The composition workspace is not prepared.")
         try:
-            result = await self._workspace.run(
+            result = await workspace.run(
                 ["python", f"{self._control}/runner.py", self._control], timeout=30 * 60
             )
         except WorkspaceTimeoutError:
@@ -398,7 +475,10 @@ class CompositionSandbox(VmSandbox):
         return CodeRun(result.exit_code, result.stdout, result.stderr)
 
     async def poll_requests(self) -> list[dict]:
-        result = await self._workspace.run(
+        workspace = self._workspace
+        if workspace is None:
+            raise SandboxUnavailable("The composition workspace is not prepared.")
+        result = await workspace.run(
             [
                 "python",
                 "-c",
@@ -412,7 +492,10 @@ class CompositionSandbox(VmSandbox):
             raise ValueError(
                 "The composition broker received an invalid or oversized frame."
             )
-        frames = json.loads(result.stdout)
+        try:
+            frames = json.loads(result.stdout)
+        except (json.JSONDecodeError, TypeError):
+            raise ValueError("The composition broker received invalid JSON.") from None
         if not isinstance(frames, list) or len(frames) > 5:
             raise ValueError("The composition broker received an invalid batch.")
         return frames
@@ -428,14 +511,15 @@ class CompositionSandbox(VmSandbox):
         if len(encoded.encode()) > COMPOSITION_FRAME_LIMIT:
             raise ValueError("The composition result exceeds the frame limit.")
         # Workspace writes publish atomically through its guest filesystem API.
-        await self._workspace.write_text(
-            f"{self._control}/{identifier}.response", encoded
-        )
+        workspace = self._workspace
+        if workspace is None:
+            raise SandboxUnavailable("The composition workspace is not prepared.")
+        await workspace.write_text(f"{self._control}/{identifier}.response", encoded)
 
 
-def host_sandbox() -> Sandbox | None:
-    """A new VM sandbox for one reply, or `None` when this host cannot run one."""
-    return VmSandbox() if unavailable_reason() is None else None
+def host_sandbox(*, state_path: Path | None = None) -> Sandbox | None:
+    """A lazy saved workspace, or a disposable VM for a temporary reply."""
+    return VmSandbox(state_path=state_path) if unavailable_reason() is None else None
 
 
 def check_sandbox() -> int:

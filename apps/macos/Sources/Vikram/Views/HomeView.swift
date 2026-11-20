@@ -14,7 +14,9 @@ struct HomeView: View {
       VStack(alignment: .leading, spacing: 26) {
         Text(
           !bots.loaded
-            ? "Your bots" : bots.home.isCalm ? "You're caught up." : "A few things need you."
+            ? "Your bots"
+            : bots.home.isCalm && state.waitingChat == nil
+              ? "You're caught up." : "A few things need you."
         )
           .font(Theme.display(32, relativeTo: .largeTitle))
           .accessibilityAddTraits(.isHeader)
@@ -27,6 +29,15 @@ struct HomeView: View {
         } else {
           VStack(alignment: .leading, spacing: 12) {
             Eyebrow("Needs you")
+            if let chat = state.waitingChat {
+              HStack {
+                Image(systemName: "hand.raised").foregroundStyle(Theme.accent)
+                Text("\(chat.title) is waiting for your answer.")
+                Spacer()
+                Button("Open Session") { state.openChat(chat.id) }
+              }
+              .card(highlighted: true)
+            }
             ForEach(bots.home.stale) { bot in
               HStack {
                 Image(systemName: "clock.badge.exclamationmark")
@@ -40,7 +51,7 @@ struct HomeView: View {
               .card()
             }
             ForEach(bots.home.needsYou) { FindingCard(finding: $0) }
-            if bots.home.isCalm {
+            if bots.home.isCalm && state.waitingChat == nil {
               Text("No decisions, blockers, or failures waiting for you.")
                 .foregroundStyle(Theme.muted)
             }
@@ -54,6 +65,23 @@ struct HomeView: View {
           }
           VStack(alignment: .leading, spacing: 12) {
             Eyebrow("Your bots")
+            if let vikram = bots.assistant {
+              Button {
+                state.selection = .bots
+              } label: {
+                HStack(alignment: .center, spacing: 8) {
+                  BotIcon(icon: vikram.icon, name: "Vikram", size: 20)
+                  Text("Vikram").fontWeight(.medium)
+                  Text("Default · answers your conversations").foregroundStyle(Theme.muted)
+                  Spacer()
+                }
+                .padding(.vertical, 5)
+                .contentShape(Rectangle())
+              }
+              .buttonStyle(.plain)
+              .accessibilityLabel("Vikram, your default bot")
+              Divider()
+            }
             ForEach(bots.home.bots) { bot in
               Button {
                 state.openBot(bot.id)
@@ -64,26 +92,27 @@ struct HomeView: View {
               Divider()
             }
             if bots.home.bots.isEmpty {
-              Text("Create a bot to monitor a topic on a schedule.")
+              Text("Create a bot to watch something on a schedule.")
                 .foregroundStyle(Theme.muted)
             }
           }
           HStack(spacing: 10) {
             if bots.home.bots.isEmpty {
-              Button("Create Bot", systemImage: "plus") { editor = bots.draft() }
-                .buttonStyle(.glassProminent)
-                .disabled(chats.offline || bots.working || !bots.templates.contains(where: \.available))
+              Button("New Bot", systemImage: "plus") { editor = bots.draft() }
+                .disabled(chats.offline || bots.working)
             } else {
-              Button("Manage Bots") { state.selection = .bots }
-                .buttonStyle(.glass)
+              Button("Manage Bots", systemImage: "sparkles") { state.selection = .bots }
             }
-            Button("New Chat", systemImage: "square.and.pencil") { state.newChat() }
-              .buttonStyle(.glass)
+            Button("New Session", systemImage: "square.and.pencil") { state.newChat() }
               .disabled(chats.offline)
           }
           .controlSize(.large)
         }
       }
+      // One button style for the whole page: every action, including the
+      // ones inside cards, reads as the same kind of control.
+      .buttonStyle(.glass)
+      .menuStyle(.button)
       .frame(maxWidth: 850, alignment: .leading)
       .padding(30)
       .frame(maxWidth: .infinity)
@@ -131,9 +160,13 @@ struct BotHealthRow: View {
 
   var body: some View {
     HStack(alignment: .firstTextBaseline) {
-      Image(systemName: bot.enabled ? "sparkles" : "pause.circle")
-        .foregroundStyle(bot.overdue ? Theme.danger : Theme.accent)
+      BotIcon(bot, size: 20)
+        .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 5 }
       Text(bot.name).fontWeight(.medium)
+      if bot.overdue {
+        Image(systemName: "clock.badge.exclamationmark").foregroundStyle(Theme.danger)
+          .help("No completed run in its expected window")
+      }
       if let last = bot.lastRun {
         Text(botOutcome(last.outcome ?? last.status))
           .foregroundStyle(Theme.muted)
@@ -161,7 +194,12 @@ struct FindingCard: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       HStack(alignment: .firstTextBaseline) {
-        Text(finding.botName).font(.caption).foregroundStyle(Theme.accent)
+        HStack(spacing: 6) {
+          BotIcon(
+            icon: bots.bots.first(where: { $0.id == finding.taskId })?.icon,
+            name: finding.botName, size: 16)
+          Text(finding.botName).font(.caption).foregroundStyle(Theme.accent)
+        }
         if finding.held { Text("Held · uncertain").font(.caption) }
         if finding.state == "seen" { Text("Seen").font(.caption).foregroundStyle(Theme.muted) }
         Spacer()

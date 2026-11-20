@@ -46,6 +46,8 @@ final class AppState {
     /// Home first: the window opens on what the bots need from the person.
     var screen: Screen = .home
     var showsWorkbench = false
+    /// The chat whose Terminal view is open: the CLI runs it instead of the app.
+    private(set) var terminalChat: String?
     var schedulePath: [ScheduleRoute] = []
     var botPath: [BotRoute] = []
 
@@ -150,6 +152,31 @@ final class AppState {
                 break
             }
         }
+    }
+
+    /// Switch the open session between its Chat view and the CLI in a terminal.
+    /// One controller runs a session at a time, so the views hand it over.
+    func showTerminal(_ shown: Bool) {
+        guard let id = chats.selected else { return }
+        if shown {
+            Task {
+                try? await chats.flushDrafts()
+                terminalChat = id
+            }
+        } else if terminalChat != nil {
+            terminalChat = nil
+            // The CLI may have added turns; read the session again.
+            Task { await chats.select(id) }
+        }
+    }
+
+    /// The session whose running reply waits for an answer or approval.
+    var waitingChat: ChatSummary? {
+        guard let id = chats.active?.chatId,
+            let attempt = chats.cache[id]?.messages.last?.attempts.last,
+            attempt.activity?.contains(where: { $0.status == "waiting" }) == true
+        else { return nil }
+        return chats.chats.first { $0.id == id }
     }
 
     func newChat(folder: String? = nil) {

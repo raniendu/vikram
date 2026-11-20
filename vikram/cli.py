@@ -173,9 +173,11 @@ def _task_book():
     book = schedules.TaskBook(
         origin="cli", opener=lambda: schedules.ScheduleStore(schedules.data_root())
     )
-    book.changed = lambda: schedules.ensure_agent(
-        book.store, schedules.installed_agent()
-    )
+
+    def changed() -> None:
+        schedules.ensure_agent(book.open(), schedules.installed_agent())
+
+    book.changed = changed
     return book
 
 
@@ -272,6 +274,7 @@ def _chat(
                 )
                 != "regular",
             )
+            waiter = None
             if getattr(options, "resume", False):
 
                 async def resume():
@@ -282,7 +285,7 @@ def _chat(
             try:
                 await app.run()
             finally:
-                if getattr(options, "resume", False):
+                if waiter is not None:
                     waiter.cancel()
 
         try:
@@ -405,6 +408,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return update_main(argv[1:])
     if argv[:1] == ["schedules"]:
         return schedules_main(argv[1:])
+    if argv[:1] == ["sandbox"]:
+        from vikram.sandbox_cli import sandbox_main
+
+        return sandbox_main(argv[1:])
     if argv[:1] in (["home"], ["bots"], ["findings"]):
         from vikram import bots_cli
 

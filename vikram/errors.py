@@ -1,17 +1,47 @@
 """Actionable model failure messages without prompts or provider response bodies."""
 
+import re
+
 import httpx
 from openai import APIConnectionError, APITimeoutError
-from pydantic_ai.exceptions import AgentRunError, ModelHTTPError
+from pydantic_ai.exceptions import AgentRunError, ModelHTTPError, UsageLimitExceeded
 
 
 class ReplyError(Exception):
     """A conversation failure containing only a safe user-facing description."""
 
 
+def has_tool_call_text(text: str) -> bool:
+    """Detect an unexecuted XML call, not quoted documentation or inline examples.
+
+    Never turn answer text into executable calls. The provider must return a
+    structured tool call through the ordinary validation and approval path.
+    """
+    fenced = False
+    fence = ""
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith(("```", "~~~")):
+            marker = stripped[:3]
+            if not fenced:
+                fenced, fence = True, marker
+            elif marker == fence:
+                fenced = False
+            continue
+        if not fenced and re.match(r"<(?:tool_call(?:\s|>)|function=)", stripped):
+            return True
+    return False
+
+
 def reply_error(error: Exception, *, provider: str = "ollama") -> str:
     if isinstance(error, ReplyError):
         return str(error)
+    if isinstance(error, UsageLimitExceeded):
+        return (
+            "This reply reached its execution budget and is incomplete. "
+            "Inspect any saved workspace files before continuing; completed actions "
+            "have not been replayed."
+        )
     if provider == "openrouter":
         if isinstance(error, ModelHTTPError):
             if error.status_code in (401, 403):

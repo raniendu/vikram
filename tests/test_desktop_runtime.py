@@ -115,6 +115,89 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             "stopped",
         )
 
+    async def test_vikram_is_the_default_bot_with_its_own_prompt_and_tools(self):
+        default = await self.runtime.command("assistant", {}, "a1")
+        self.assertEqual(default["name"], "Vikram")
+        self.assertEqual(
+            default["tools"], ["web_search", "web_fetch", "sandbox", "browser", "tasks"]
+        )
+        saved = await self.runtime.command(
+            "update_assistant",
+            {"icon": "orb-2", "instructions": " Be brief. ", "tools": ["web_search"]},
+            "a2",
+        )
+        self.assertEqual(
+            (saved["icon"], saved["instructions"], saved["tools"]),
+            ("orb-2", "Be brief.", ["web_search"]),
+        )
+        with self.assertRaises(ValueError):
+            await self.runtime.command("update_assistant", {"tools": ["bash"]}, "a3")
+        seen = {}
+
+        async def explicit(
+            model,
+            thinking,
+            history,
+            prompt,
+            *,
+            instructions="",
+            web_tools=None,
+            sandbox=None,
+            browser=None,
+            tasks=None,
+            **options,
+        ):
+            seen.update(
+                instructions=instructions,
+                web_tools=web_tools,
+                sandbox=sandbox,
+                browser=browser,
+                tasks=tasks,
+            )
+            self.started.set()
+            yield {"text": "ok", "phase": "answering"}
+
+        self.runtime.streamer = explicit
+        self.runtime.browser = object()
+        await self.send()
+        self.assertEqual(seen["instructions"], "Be brief.")
+        self.assertEqual(seen["web_tools"], frozenset({"web_search"}))
+        self.assertIsNone(seen["sandbox"]())
+        self.assertIsNone(seen["browser"])
+        self.assertIsNone(seen["tasks"])
+
+    async def test_deleting_a_chat_takes_its_confirmed_sandbox_with_it(self):
+        from vikram.sandbox_session import state_path
+
+        sandbox = state_path(self.store.root, self.chat["id"])
+        sandbox.parent.mkdir(parents=True, exist_ok=True)
+        sandbox.write_text("{}")
+        # Without the confirmation the store refuses to orphan the sandbox.
+        with self.assertRaisesRegex(ValueError, "persistent sandbox"):
+            await self.runtime.command(
+                "delete_chat", {"chat_id": self.chat["id"]}, "d1"
+            )
+
+        async def reset(path):
+            path.unlink()
+
+        with patch("vikram.sandbox_session.reset_sandbox", side_effect=reset) as done:
+            await self.runtime.command(
+                "delete_chat",
+                {"chat_id": self.chat["id"], "discard_sandbox": True},
+                "d2",
+            )
+        done.assert_called_once_with(sandbox)
+        self.assertFalse(sandbox.exists())
+        self.assertNotIn(
+            self.chat["id"], [c["id"] for c in self.store.snapshot()["chats"]]
+        )
+        # A chat that never ran code has no sandbox and deletes as before.
+        plain = self.store.create_chat("local:1")
+        await self.runtime.command(
+            "delete_chat", {"chat_id": plain["id"], "discard_sandbox": True}, "d3"
+        )
+
     async def test_waiting_for_ollama_is_not_reported_as_thinking(self):
         await self.send()
         first = next(e for e in self.events if e["event"] == "attempt")
@@ -240,6 +323,58 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             any(isinstance(p, BinaryContent) for p in history[0].parts[0].content)
         )
+
+    async def test_retry_carries_earlier_decisions_and_tool_receipts(self):
+        cid = self.chat["id"]
+        self.store.save_draft(cid, "Build the portfolio", 1)
+        first = self.store.begin(cid, "local:1", None, "first")
+        self.store.checkpoint(
+            first["id"],
+            "invalid fragment",
+            None,
+            reasoning="private trace",
+            activity=[
+                {
+                    "kind": "question",
+                    "status": "answered",
+                    "questions": [{"header": "Style", "question": "Which style?"}],
+                    "answers": {"Style": ["Editorial"]},
+                },
+                {
+                    "kind": "code",
+                    "status": "complete",
+                    "persistent": True,
+                    "code": "large_source" * 1500,
+                    "output": "wrote index.html",
+                },
+            ],
+        )
+        self.store.finish(first["id"], "failed")
+        second = self.store.begin(cid, "local:1", None, "second", retry=True)
+        self.store.checkpoint(
+            second["id"],
+            "",
+            None,
+            activity=[
+                {
+                    "kind": "coding",
+                    "tool": "edit",
+                    "status": "stopped",
+                    "path": "style.css",
+                }
+            ],
+        )
+        self.store.finish(second["id"], "stopped")
+        third = self.store.begin(cid, "local:1", None, "third", retry=True)
+        history, prompt = inference_messages(
+            self.store, cid, third["message_id"], False
+        )
+        self.assertEqual(history, [])
+        recovery = str(prompt)
+        for receipt in ("Editorial", "wrote index.html", "style.css", "Inspect"):
+            self.assertIn(receipt, recovery)
+        for private in ("large_source", "invalid fragment", "private trace"):
+            self.assertNotIn(private, recovery)
 
     async def test_text_model_rejects_draft_images_before_persisting_user(self):
         self.store.import_image(self.chat["id"], "photo.png", png())

@@ -58,6 +58,51 @@ outside-workspace access, credential access, installation and remote mutations
 require approval. Plan mode permits inspection and waits for an approved plan
 before effects. Stop terminates command process groups.
 
+Persistent deliverables (websites, documents, and project files) use these trusted
+host tools, not `run_code`. Without a trusted workspace, Vikram explains how to
+select one rather than pretending to save or open a local file. On the Mac, use
+**Workbench → Workspace → Choose Folder… → Trust this workspace**. Trust is always
+your decision; a prompt or project file cannot grant it.
+
+`run_code` is for isolated calculations and data processing. Saved conversations
+reuse their own native Pydantic Smol `WorkspaceRef`: `/workspace` files survive
+replies and clean app/CLI restarts. The VM stops after each reply to flush its disk;
+Python variables do not survive because each snippet is a fresh process. No host
+mounts, environment, network, or automatic file export are added. Linux paths are
+not Mac paths. Old disposable runs remain labeled as deleted in follow-up context;
+new persistent runs are labeled separately, including failures.
+
+Forks, clones, and imports start fresh sandboxes; branch navigation within one
+conversation shares its current sandbox and never rolls back files. `--no-session`,
+bot/scheduled runs, evaluations, and tool-composition VMs stay disposable. A missing
+saved VM is reported, never silently replaced. After an interrupted shutdown, inspect
+files before continuing; recent writes may not have reached disk.
+
+Use **Workbench → Workspace → Reset Sandbox…** for explicit, confirmed deletion.
+From the CLI, close the conversation's active controller first, then use:
+
+```sh
+vikram sandbox status --session ID
+vikram sandbox reset --session ID --yes
+```
+
+Both accept `--session-dir DIRECTORY`. Reset removes only that conversation's
+sandbox and saved reference, not its transcript or trusted host workspace. Reset
+before deleting a chat that owns a sandbox. A save/flush failure is a failed reply,
+not a completed handoff. Keep private `sandboxes/*.json` references with the chat
+library; transcript exports do not contain or grant sandbox authority.
+
+Interactive replies default to ten model requests (including a final answer) and
+six sandbox code runs. The model sees its remaining budget; exhausted local tools
+are removed, and the last request offers no tools. Smaller caller-supplied request
+budgets retain that final-answer reservation. Unexecuted tool-call markup is
+rejected, never executed as text. If the model emits call markup after using its
+sandbox allowance, the next available request asks only for a plain-language
+answer from the recorded results. Retry carries forward the user's earlier
+choices and bounded tool results so the model can inspect existing work before
+continuing. Truncated model output and exhausted correction attempts are failed,
+incomplete replies, not successful handoffs. Completed effects are not replayed.
+
 `!command` runs a user-requested command and includes its bounded output in
 context; `!!command` displays it without adding it to context. These commands
 never imply that host execution is sandboxed. Interrupted effects are retained

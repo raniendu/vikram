@@ -35,9 +35,10 @@ struct WorkbenchView: View {
     }
 }
 
-private struct WorkspaceSettingsView: View {
+struct WorkspaceSettingsView: View {
     @Environment(ChatController.self) private var chats
     @Environment(WorkbenchController.self) private var workbench
+    @State private var confirmSandboxReset = false
 
     var body: some View {
         Form {
@@ -60,9 +61,26 @@ private struct WorkspaceSettingsView: View {
                     .disabled(workbench.working || chats.active != nil)
                 }
                 Text(
-                    "Trust enables host coding tools with your user privileges. Vikram asks before operations outside the workspace, destructive actions, credential access, package installation, and remote changes. Plan mode allows inspection only."
+                    "Trust enables host coding tools with your user privileges. "
+                    + "Vikram asks before operations outside the workspace, destructive actions, "
+                    + "credential access, package installation, and remote changes. Plan mode allows inspection only."
                 )
                 .font(.callout).foregroundStyle(Theme.muted)
+            }
+            Section("Conversation Sandbox") {
+                LabeledContent("State", value: workbench.status?.sandbox["state"]?.string ?? "not_created")
+                Text(
+                    "Isolated Linux files persist across replies and clean restarts. The VM stops after each reply. "
+                    + "These are not Mac files; resetting deletes only this conversation’s sandbox, not the chat or host workspace."
+                )
+                    .font(.callout).foregroundStyle(Theme.muted)
+                Button("Reset Sandbox…", role: .destructive) { confirmSandboxReset = true }
+                    .disabled(workbench.working || chats.active != nil || chats.selected == nil)
+                    .confirmationDialog("Delete this conversation’s sandbox files?", isPresented: $confirmSandboxReset) {
+                        Button("Reset Sandbox", role: .destructive) {
+                            Task { await workbench.perform("sandbox_reset", options: ["confirmed": .bool(true)]) }
+                        }
+                    }
             }
             Section("Project Resources") {
                 Text(

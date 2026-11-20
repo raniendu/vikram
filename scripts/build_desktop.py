@@ -221,6 +221,14 @@ def build_app(version: str, notices: Path, extension_python: Path) -> None:
             "The exact vendored Python sources are in `extension-python/sources/`; "
             "the interpreter metadata is in [PYTHON.json](extension-python/PYTHON.json).\n"
         )
+        document.write(
+            "\n## SwiftTerm\n\n"
+            "The Terminal view uses SwiftTerm, under the "
+            "[MIT license](swiftterm/LICENSE).\n"
+        )
+    swiftterm = contents / "Resources/notices/swiftterm"
+    swiftterm.mkdir()
+    shutil.copy2(PACKAGE / ".build/checkouts/SwiftTerm/LICENSE", swiftterm / "LICENSE")
     from scripts.third_party import add_extension_sources
 
     add_extension_sources(contents / "Resources/notices", runtime, version)

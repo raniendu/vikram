@@ -3,78 +3,39 @@ import Testing
 
 @testable import VikramKit
 
-private func template(_ id: String = "page-watcher") throws -> BotTemplate {
-  let value: JSONValue = [
-    "id": .string(id), "title": "Page Watcher", "summary": "Watch pages.", "available": true,
-    "defaults": [
-      "mandate": "Tell me when these pages change.", "charter": "Ignore cosmetic changes.",
-      "schedule": ["repeat": "daily", "time": "09:00"],
-      "materiality": ["rubric": "Only substantive changes.", "keywords": ["visa"]],
-      "expected_days": 3,
-      // Even an accidentally supplied grant is not a grant for a new draft.
-      "cloud": true, "model": "openrouter:example/model",
-    ],
-  ]
-  return try value.decode(BotTemplate.self)
-}
-
 @Suite struct BotDraftTests {
-  @Test func supportedTemplateSeedsTheWholeVisibleFormWithoutCloudPermission() throws {
-    let draft = try BotDraft(template: template())
-    #expect(draft.name == "Page Watcher")
-    #expect(draft.mandate == "Tell me when these pages change.")
-    #expect(draft.charter == "Ignore cosmetic changes.")
-    #expect(draft.rubric == "Only substantive changes.")
-    #expect(draft.keywords == "visa")
-    #expect(draft.repeatKind == "daily")
-    #expect(draft.expectedDays == 3)
+  @Test func aNewBotIsAPromptToolsAModelAndASchedule() {
+    var draft = BotDraft()
+    #expect(draft.botId == nil && !draft.cloud && !draft.originallyAllowedCloud)
+    #expect(draft.fields["tools"] == ["web_search", "web_fetch", "sandbox"])
     #expect(draft.fields["schedule"] == ["repeat": "daily", "time": "09:00"])
-    #expect(draft.fields["template"] == "page-watcher")
     #expect(draft.fields["model"] == .null)
-    #expect(!draft.cloud && !draft.originallyAllowedCloud)
+    #expect(draft.fields["icon"] == .null)
+    #expect(draft.fields["template"] == nil)
+    draft.name = " Swift "
+    draft.charter = "Watch Swift Evolution.\n"
+    draft.icon = "orb-3"
+    draft.tools = ["sandbox", "web_search"]
     #expect(draft.validationMessage == nil)
+    #expect(draft.fields["name"] == "Swift")
+    #expect(draft.fields["charter"] == "Watch Swift Evolution.")
+    // The service derives the description from the prompt.
+    #expect(draft.fields["mandate"] == "")
+    #expect(draft.fields["icon"] == "orb-3")
+    #expect(draft.fields["tools"] == ["web_search", "sandbox"])
+    draft.tools = ["sandbox"]
+    #expect(draft.validationMessage?.contains("web") == true)
   }
 
-  @Test func changingTemplateChangesDefaultsButPreservesPersonalChoices() throws {
-    var draft = try BotDraft(template: template())
-    draft.name = "My monitor"
-    draft.sources = "https://example.gov"
-    draft.model = "local:1"
-    draft.budget = 7
-    var other = try template("release-watcher")
-    other.defaults = [
-      "mandate": "Watch releases.", "charter": "Breaking changes first.",
-      "schedule": ["repeat": "weekly", "days": ["fri"], "time": "08:30"],
-      "materiality": ["rubric": "Security changes are material."], "expected_days": 10,
-    ]
-    try draft.apply(other)
-    #expect(draft.name == "My monitor")
-    #expect(draft.sources == "https://example.gov")
-    #expect(draft.model == "local:1" && draft.budget == 7)
-    #expect(draft.mandate == "Watch releases.")
-    #expect(draft.charter == "Breaking changes first.")
-    #expect(draft.days == ["fri"])
-    #expect(draft.fields["schedule"] == ["repeat": "weekly", "days": ["fri"], "time": "08:30"])
-  }
-
-  @Test func blockedAndMissingDefaultsCannotOpenACreationDraft() throws {
-    var blocked = try template()
-    blocked.available = false
-    blocked.reason = "Repository sandbox required."
-    #expect(throws: ServiceError.self) { try BotDraft(template: blocked) }
-    var missing = try template()
-    missing.defaults = nil
-    #expect(throws: ServiceError.self) { try BotDraft(template: missing) }
-  }
-
-  @Test func invalidFormExplainsWhySaveIsDisabled() throws {
-    var draft = try BotDraft(template: template())
+  @Test func invalidFormExplainsWhySaveIsDisabled() {
+    var draft = BotDraft()
     draft.name = "  "
     #expect(draft.validationMessage == "Enter a name for this bot.")
     draft.name = "Watch"
-    draft.mandate = ""
-    #expect(draft.validationMessage == "Describe the bot's responsibility.")
-    draft.mandate = "Watch."
+    #expect(draft.validationMessage == "Write the bot's system prompt.")
+    draft.charter = String(repeating: "x", count: 6001)
+    #expect(draft.validationMessage?.contains("6,000") == true)
+    draft.charter = "Watch."
     draft.repeatKind = "weekly"
     draft.days = []
     #expect(draft.validationMessage == "Choose at least one day.")
@@ -83,25 +44,55 @@ private func template(_ id: String = "page-watcher") throws -> BotTemplate {
     #expect(draft.validationMessage?.contains("explicitly") == true)
   }
 
-  @Test func editingKeepsMonthlyScheduleAndDisabledLivenessWithoutGrantingAnything() throws {
+  @Test func editingKeepsScheduleToolsAndSavedSettingsWithoutGrantingAnything() throws {
     let value: JSONValue = [
-      "id": "b1", "name": "Watcher", "mandate": "Watch.", "cloud": false,
-      "expected_days": nil,
+      "id": "b1", "name": "Watcher", "mandate": "Tell me when pages change.", "cloud": false,
+      "expected_days": nil, "icon": "orb-7", "tools": ["web_fetch"],
       "schedule": ["repeat": "monthly", "day_of_month": 31, "time": "17:45"],
       "config": [
-        "charter": "My charter", "sources": ["https://example.gov"],
+        "charter": "Ignore cosmetic edits.", "sources": ["https://example.gov"],
         "materiality": ["rubric": "My rubric", "examples": ["Keep this example"]],
       ],
     ]
     var draft = BotDraft(bot: try value.decode(Bot.self))
     draft.name = "Renamed"
     #expect(draft.botId == "b1")
+    #expect(draft.icon == "orb-7")
+    #expect(draft.tools == ["web_fetch"])
     #expect(draft.fields["schedule"] == value["schedule"])
     #expect(draft.fields["expected_days"] == .null)
-    #expect(draft.fields["charter"] == "My charter")
+    // An older bot's responsibility leads its prompt, so saving loses nothing.
+    #expect(draft.charter == "Tell me when pages change.\n\nIgnore cosmetic edits.")
+    // Settings the editor does not show are left for the service to keep.
+    #expect(draft.fields["sources"] == nil)
+    #expect(draft.fields["materiality"] == nil)
     #expect(draft.fields["template"] == nil)
-    // Omitting unchanged advanced fields lets the backend preserve them.
-    #expect(draft.fields["materiality"]?["examples"] == nil)
-    #expect(throws: ServiceError.self) { try draft.apply(template()) }
+  }
+
+  @Test func aPromptThatAlreadyStartsWithTheDescriptionIsNotRepeated() throws {
+    let value: JSONValue = [
+      "id": "b2", "name": "Swift", "mandate": "Watch Swift Evolution.", "cloud": false,
+      "schedule": ["repeat": "daily", "time": "09:00"],
+      "config": ["charter": "Watch Swift Evolution. Report accepted proposals."],
+    ]
+    let draft = BotDraft(bot: try value.decode(Bot.self))
+    #expect(draft.charter == "Watch Swift Evolution. Report accepted proposals.")
+    // A service without per-bot tools allows all of them.
+    #expect(draft.tools == Set(BotDraft.allTools))
+  }
+}
+
+@Suite struct AssistantTests {
+  @Test func vikramDecodesWithItsPromptToolsAndModel() throws {
+    let value: JSONValue = [
+      "name": "Vikram", "icon": "orb-2", "instructions": "Be brief.",
+      "tools": ["web_search", "browser"], "model": "local:qwen3:8b",
+    ]
+    let vikram = try value.decode(Assistant.self)
+    #expect(vikram.id == "Vikram" && vikram.icon == "orb-2")
+    #expect(vikram.instructions == "Be brief.")
+    #expect(vikram.tools == ["web_search", "browser"])
+    #expect(vikram.model == "local:qwen3:8b")
+    #expect(Assistant.allTools.count == 5)
   }
 }

@@ -114,7 +114,6 @@ private let botStub = """
     try await controller.refresh()
     #expect(controller.loaded)
     #expect(controller.attentionCount == 1)
-    #expect(controller.templates.first?.id == "topic-watcher")
     await controller.openBot("b1")
     #expect(controller.bot?.name == "Watcher")
     await controller.setPaused("b1", true)

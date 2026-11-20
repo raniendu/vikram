@@ -57,7 +57,7 @@ struct ContentView: View {
             }
         } message: {
             Text(
-                "Its messages and imported file copies will be permanently removed. Your original files stay where they are."
+                "Its messages, imported file copies, and Python sandbox files will be permanently removed. Your original files stay where they are."
             )
         }
         .onChange(of: state.appearance, initial: true) { state.applyAppearance() }
@@ -111,6 +111,17 @@ private struct ChatDetail: View {
             if chats.loading && chats.chat == nil {
                 ProgressView("Opening your conversations…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let chat = chats.chat, state.terminalChat == chat.id {
+                TerminalPane(
+                    chatId: chat.id, directory: state.workbench.status?.workspace,
+                    ended: { state.showTerminal(false) }
+                )
+                .id(chat.id)
+                .padding(10)
+                .background(Theme.surface)
+                .navigationTitle(chat.title)
+                .navigationSubtitle("vikram --session \(chat.id.prefix(8))…")
+                .toolbar { ChatToolbar(chat: chat, sheet: $sheet, deletingChat: $deletingChat) }
             } else if let chat = chats.chat {
                 Group {
                     if chat.messages.isEmpty {
@@ -150,10 +161,10 @@ private struct ChatDetail: View {
                 .toolbar { ChatToolbar(chat: chat, sheet: $sheet, deletingChat: $deletingChat) }
             } else {
                 Welcome(
-                    title: "A thought starts here.",
-                    text: "Your models. Your conversations. A quiet space, right on your Mac."
+                    title: "What should Vikram do?",
+                    text: "Each session is the same one the vikram CLI opens. Chat here, or switch it to the terminal."
                 ) {
-                    Button("Start a Conversation") { state.newChat() }
+                    Button("New Session") { state.newChat() }
                         .buttonStyle(.glassProminent)
                         .disabled(chats.offline || chats.loading)
                 }
@@ -188,10 +199,11 @@ struct Welcome<Actions: View>: View {
 }
 
 private struct EmptyChat: View {
+    @Environment(AppState.self) private var state
     @Environment(ChatController.self) private var chats
 
     var body: some View {
-        Welcome(title: "A thought starts here.", text: description) {
+        Welcome(title: "What should Vikram do?", text: description) {
             if !chats.models.contains(where: \.available) {
                 Button("Refresh Models", systemImage: "arrow.clockwise") {
                     Task { await chats.refreshModels() }
@@ -206,6 +218,22 @@ private struct EmptyChat: View {
                 }
                 .font(.callout)
                 .foregroundStyle(Theme.muted)
+                Text("vikram --model \(model.name)")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(Theme.muted)
+                    .textSelection(.enabled)
+                    .help("The command that starts this session in a terminal")
+                HStack(spacing: 10) {
+                    if let last = chats.chats.first(where: { $0.id != chats.selected }) {
+                        Button("Continue Last Session") { state.openChat(last.id) }
+                    }
+                    Button("Create a Bot") { state.selection = .bots }
+                    if VikramCLI.command([]) != nil {
+                        Button("Open in Terminal") { state.showTerminal(true) }
+                    }
+                }
+                .buttonStyle(.glass)
+                .padding(.top, 8)
             }
         }
     }
@@ -247,6 +275,22 @@ private struct ChatToolbar: ToolbarContent {
     private var model: LocalModel? { chats.model }
 
     var body: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            Picker(
+                "View",
+                selection: Binding(
+                    get: { state.terminalChat == chat.id },
+                    set: { state.showTerminal($0) })
+            ) {
+                Text("Chat").tag(false)
+                Text("Terminal").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .help("Chat here, or run this session in the vikram CLI")
+            .disabled(
+                VikramCLI.command([]) == nil || chats.active?.chatId == chat.id || chats.sending
+                    || chats.offline)
+        }
         ToolbarItemGroup(placement: .primaryAction) {
             Menu {
                 Picker(
@@ -276,8 +320,9 @@ private struct ChatToolbar: ToolbarContent {
             }
             .help(chat.model ?? "Choose a model")
             .accessibilityLabel("Model: \(chat.model.map(formatModelName) ?? "none")")
-            .disabled(chats.offline || chats.loading || chats.sending)
-            if let model, model.thinking.contains(where: { $0 != thinkingOn(model) }) {
+            .disabled(
+                chats.offline || chats.loading || chats.sending || state.terminalChat == chat.id)
+            if let model, state.terminalChat != chat.id, model.thinking.contains(where: { $0 != thinkingOn(model) }) {
                 ThinkingMenu(chat: chat, model: model, on: thinkingOn(model))
             }
             Menu {

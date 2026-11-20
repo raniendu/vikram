@@ -3,7 +3,9 @@
 import asyncio
 import contextlib
 import json
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
+from pathlib import Path
+from typing import Any, cast
 
 import httpx
 from pydantic_ai import AgentRunResultEvent
@@ -17,11 +19,12 @@ from pydantic_ai.messages import (
     ThinkingPart,
     ThinkingPartDelta,
 )
+from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 
 from vikram.agent import build_agent
 from vikram.browser import BrowserEngine
-from vikram.errors import ReplyError, reply_error
+from vikram.errors import ReplyError, has_tool_call_text, reply_error
 from vikram.interaction import Interaction, Unattended
 from vikram.providers import ModelRef, model_settings
 from vikram.sandbox import Sandbox, host_sandbox
@@ -31,6 +34,7 @@ from vikram.web import WebSession
 
 DEFAULT_WEB = "auto"
 MAX_REASONING_CHARS = 64_000
+STREAM_UPDATE_SECONDS = 0.1
 
 
 class ObservedStream(httpx.AsyncByteStream):
@@ -70,6 +74,7 @@ async def stream_reply(
     mode: Mode = "normal",
     interaction: Interaction | None = None,
     sandbox: Callable[[], Sandbox | None] | None = None,
+    sandbox_state: Path | None = None,
     browser: BrowserEngine | None = None,
     vision: bool = False,
     tasks: TaskBook | None = None,
@@ -78,17 +83,20 @@ async def stream_reply(
     instructions: str = "",
     request_boundary=None,
     usage_limits: UsageLimits | None = None,
-) -> AsyncIterator[dict]:
+    web_tools: frozenset[str] | None = None,
+) -> AsyncGenerator[dict, None]:
     """Stream one reply. Tool-capable models (web "auto") also get the toolkit.
 
     `interaction` is the person who answers questions, reviews plans, and
     approves browser actions; without one, questions are declined, plans stay
     unapproved, and consequential browser actions are declined. `sandbox` makes
-    this reply's code sandbox, by default a new microVM when this host can run
-    one; the reply deletes it when it ends. `browser` is the interface's browser
+    this reply's code sandbox. A private `sandbox_state` path reattaches to a saved
+    Pydantic workspace and stops/flushes it at reply end; without one the VM is
+    disposable. Scheduled runs never inherit persistence. `browser` is the interface's browser
     engine, which outlives the reply; `vision` adds screenshots to its pages.
     `tasks` lets the model manage scheduled tasks. `scheduled` marks an
     unattended scheduled run of that task: no questions, browser, or task tools.
+    `web_tools` limits the web tools offered (`web_search`, `web_fetch`).
     """
     queue = asyncio.Queue()
     reported, parts = {}, {}
@@ -96,6 +104,10 @@ async def stream_reply(
     reasoning = ""
     reasoning_truncated = False
     reasoning_boundary = False
+    loop = asyncio.get_running_loop()
+    next_update = 0.0
+    last_phase = ""
+    pending_update: asyncio.TimerHandle | None = None
 
     def append_reasoning(content: str, *, new_part=False):
         nonlocal reasoning, reasoning_truncated, reasoning_boundary
@@ -111,6 +123,12 @@ async def stream_reply(
         reasoning_truncated |= len(content) > remaining
 
     def send(phase="answering", **extra):
+        nonlocal pending_update, next_update, last_phase
+        if pending_update is not None:
+            pending_update.cancel()
+            pending_update = None
+        last_phase = phase
+        next_update = loop.time() + STREAM_UPDATE_SECONDS
         queue.put_nowait(
             {
                 "text": current,
@@ -125,6 +143,15 @@ async def stream_reply(
             }
         )
 
+    def stream_update(phase):
+        nonlocal pending_update
+        # Both interfaces checkpoint full snapshots. Batch tokens, while
+        # delivering the first token, phase changes and tool activity immediately.
+        if phase != last_phase or loop.time() >= next_update:
+            send(phase)
+        elif pending_update is None:
+            pending_update = loop.call_at(next_update, send, phase)
+
     session = WebSession(session_id, emit=lambda event: send(**event))
     reply = Reply(
         mode=mode,
@@ -138,6 +165,7 @@ async def stream_reply(
         coding=coding if not scheduled else None,
         instructions=instructions,
         request_boundary=request_boundary,
+        sandbox_persistent=sandbox_state is not None and not scheduled,
     )
 
     async def observe(response):
@@ -145,9 +173,16 @@ async def stream_reply(
 
     async def produce():
         nonlocal current
+        failure = None
         try:
             if web == "auto":
-                reply.sandbox = (sandbox or host_sandbox)()
+                reply.sandbox = (
+                    sandbox()
+                    if sandbox is not None
+                    else host_sandbox(
+                        state_path=sandbox_state if not scheduled else None
+                    )
+                )
             async with httpx.AsyncClient(
                 trust_env=False,
                 follow_redirects=False,
@@ -156,14 +191,19 @@ async def stream_reply(
                 event_hooks={"response": [observe]},
             ) as client:
                 from vikram.execution import execution_tools
+                from vikram.integrations import lifecycle
                 from vikram.toolkit import toolkit_tools
 
-                web_tools = session.tools() if web == "auto" else []
+                offered = [
+                    tool
+                    for tool in (session.tools() if web == "auto" else [])
+                    if web_tools is None or tool.name in web_tools
+                ]
                 host_tools = (
                     await execution_tools(
                         reply,
                         builtin_tools=[
-                            *web_tools,
+                            *offered,
                             *toolkit_tools(reply.sandbox is not None),
                         ],
                     )
@@ -175,8 +215,6 @@ async def stream_reply(
                     and not scheduled
                     and hasattr(coding, "extensions")
                 ):
-                    from vikram.integrations import lifecycle
-
                     await lifecycle(
                         reply, "before_reply", {"model": model, "prompt": prompt}
                     )
@@ -184,17 +222,16 @@ async def stream_reply(
                     model,
                     http_client=client,
                     web=web,
-                    tools=web_tools,
+                    tools=offered,
                     toolsets=[host_tools] if host_tools is not None else [],
                     toolkit=web == "auto",
                     sandbox=reply.sandbox is not None,
                 )
-                agent.model.client.max_retries = 0
                 async with agent.run_stream_events(
                     prompt,
                     deps=reply,
                     message_history=history,
-                    model_settings=model_settings(model, thinking),
+                    model_settings=cast(ModelSettings, model_settings(model, thinking)),
                     usage_limits=usage_limits
                     or UsageLimits(request_limit=REQUEST_LIMIT),
                 ) as events:
@@ -205,10 +242,10 @@ async def stream_reply(
                             if isinstance(event.part, TextPart):
                                 parts[event.index] = event.part.content
                                 current = "".join(parts.values())
-                                send()
+                                stream_update("answering")
                             elif isinstance(event.part, ThinkingPart):
                                 append_reasoning(event.part.content, new_part=True)
-                                send(phase="thinking")
+                                stream_update("thinking")
                         elif isinstance(event, PartDeltaEvent) and isinstance(
                             event.delta, TextPartDelta
                         ):
@@ -216,18 +253,18 @@ async def stream_reply(
                                 parts.get(event.index, "") + event.delta.content_delta
                             )
                             current = "".join(parts.values())
-                            send()
+                            stream_update("answering")
                         elif isinstance(event, PartDeltaEvent) and isinstance(
                             event.delta, ThinkingPartDelta
                         ):
                             append_reasoning(event.delta.content_delta or "")
-                            send(phase="thinking")
+                            stream_update("thinking")
                         elif isinstance(event, FunctionToolResultEvent):
                             parts.clear()
                         elif isinstance(event, AgentRunResultEvent):
                             current = event.result.output
                             usage = event.result.usage
-                            counts = {
+                            counts: dict[str, Any] = {
                                 "input_tokens": usage.input_tokens,
                                 "output_tokens": usage.output_tokens,
                                 "requests": usage.requests,
@@ -244,7 +281,13 @@ async def stream_reply(
                                     for cost in reported_costs
                                 ):
                                     counts.update(
-                                        cost_usd=str(sum(reported_costs)),
+                                        cost_usd=str(
+                                            sum(
+                                                cost
+                                                for cost in reported_costs
+                                                if isinstance(cost, (int, float))
+                                            )
+                                        ),
                                         cost_estimated=False,
                                     )
                                 elif getattr(usage, "cost", None) is not None:
@@ -263,18 +306,42 @@ async def stream_reply(
                                 )
                             send(usage=counts)
         except Exception as exc:
+            if has_tool_call_text(current):
+                # Do not persist unexecuted tool syntax as a usable partial answer.
+                current = ""
+            send()
             error = ReplyError(
                 reply_error(exc, provider=ModelRef.parse(model).provider)
             )
             # Preserve the typed cause for unattended budget handling without
             # exposing provider exception text in the transcript.
             error.__cause__ = exc
-            queue.put_nowait(error)
+            failure = error
         finally:
+            if pending_update is not None:
+                send(last_phase)
             if reply.sandbox is not None:
-                # Shielded: a second stop must not leave the VM running.
-                with contextlib.suppress(Exception, asyncio.CancelledError):
-                    await asyncio.shield(reply.sandbox.close())
+                # Do not release chat ownership while a second Stop cancels the
+                # wait: Smol must finish stopping/flushing the persistent disk.
+                closing = asyncio.create_task(reply.sandbox.close())
+                while not closing.done():
+                    try:
+                        await asyncio.shield(closing)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                try:
+                    closing.result()
+                except (Exception, asyncio.CancelledError):
+                    if reply.sandbox_persistent and failure is None:
+                        failure = ReplyError(
+                            "The conversation sandbox could not be safely saved. "
+                            "Its reference was retained; recent writes are uncertain. "
+                            "Inspect the files before continuing."
+                        )
+            if failure is not None:
+                queue.put_nowait(failure)
             queue.put_nowait(None)
 
     task = asyncio.create_task(produce())

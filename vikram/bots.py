@@ -53,6 +53,10 @@ Outcome = Literal[
 ]
 State = Literal["new", "seen", "snoozed", "resolved", "dismissed"]
 Notify = Literal["attention", "findings", "never"]
+# What an unattended run may use. Questions, the browser, task tools, host
+# tools, and integrations are never offered to a bot.
+BotTool = Literal["web_search", "web_fetch", "sandbox"]
+BOT_TOOLS: tuple[str, ...] = ("web_search", "web_fetch", "sandbox")
 
 OPEN = ("new", "seen", "snoozed")
 Example = Annotated[str, Field(min_length=1, max_length=300)]
@@ -106,8 +110,13 @@ class BotConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     version: Literal[1] = 1
     name: str = Field(min_length=1, max_length=MAX_NAME)
-    mandate: str = Field(min_length=1, max_length=400)
+    # A one-line description; derived from the charter when left empty.
+    mandate: str = Field(default="", max_length=400)
+    # The bot's system prompt.
     charter: str = Field(default="", max_length=6000)
+    tools: list[BotTool] = Field(default_factory=lambda: list(BOT_TOOLS))
+    # One of the app's bot icons, e.g. "orb-3"; None picks one from the name.
+    icon: str | None = Field(default=None, max_length=40, pattern=r"^[a-z0-9-]+$")
     sources: list[Source] = Field(default_factory=list, max_length=20)
     schedule: Schedule
     # None inherits the shared default model (the default bot's choice).
@@ -136,9 +145,16 @@ class BotConfig(BaseModel):
                     "OpenRouter model."
                 )
         self.name = _clean(self.name, MAX_NAME)
-        self.mandate = _clean(self.mandate, 400)
+        self.mandate = _clean(self.mandate, 400) or _summary_line(self.charter)
+        self.tools = [tool for tool in BOT_TOOLS if tool in self.tools]
+        if not {"web_search", "web_fetch"} & set(self.tools):
+            # A run must retrieve evidence before it can claim quiet.
+            raise ValueError(
+                "Allow web search or reading web pages: a bot must check the web "
+                "before it can report."
+            )
         if not self.name or not self.mandate:
-            raise ValueError("A bot needs a name and a mandate.")
+            raise ValueError("A bot needs a name and instructions.")
         return self
 
 
@@ -181,6 +197,13 @@ def _clean(text: str, limit: int) -> str:
         c for c in str(text).replace("\t", " ") if c == "\n" or c.isprintable()
     )
     return text.strip()[:limit]
+
+
+def _summary_line(text: str) -> str:
+    """The first sentence of a system prompt, as the bot's one-line description."""
+    first = _clean(text, 6000)
+    match = re.match(r"(.+?[.!?])(\s|$)", first)
+    return _clean(match.group(1) if match else first, 400)
 
 
 def slug(text: str) -> str:
@@ -356,7 +379,7 @@ def config_from(fields: dict, *, now: datetime | None = None) -> BotConfig:
         if not entry["available"]:
             raise ValueError(f"{entry['title']} is not available: {entry['reason']}")
         base = copy.deepcopy(entry["config"])
-    nullable = {"model", "thinking", "expected_days"}
+    nullable = {"model", "thinking", "expected_days", "icon"}
     merged = {
         **base,
         **{k: v for k, v in fields.items() if v is not None or k in nullable},
@@ -451,6 +474,8 @@ class BotStore:
             "name": config.name,
             "mandate": config.mandate,
             "template": config.template,
+            "icon": config.icon,
+            "tools": list(config.tools),
             "description": task["description"],
             "schedule": task["schedule"],
             "model": config.model,
@@ -557,7 +582,8 @@ class BotStore:
                 **{
                     k: v
                     for k, v in fields.items()
-                    if v is not None or k in ("model", "thinking", "expected_days")
+                    if v is not None
+                    or k in ("model", "thinking", "expected_days", "icon")
                 },
             }
             if isinstance(fields.get("materiality"), dict):
@@ -1264,7 +1290,7 @@ async def execute_bot(
         )
         if web != "auto":
             raise ValueError(
-                "This model cannot use tools, so the bot cannot check its sources. "
+                "This model cannot use tools, so the bot cannot check the web. "
                 "Choose a tool-capable model."
             )
         instructions, prompt = bots.run_prompt(task["id"], config)
@@ -1282,6 +1308,9 @@ async def execute_bot(
             session_id=run["id"],
             mode="normal",
             interaction=Unattended(),
+            # No sandbox unless the bot is allowed one.
+            sandbox=None if "sandbox" in config.tools else (lambda: None),
+            web_tools=frozenset(config.tools) & {"web_search", "web_fetch"},
             browser=None,
             vision=bool(selected.get("vision")),
             scheduled=bot_context(config),

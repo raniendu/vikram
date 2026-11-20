@@ -9,6 +9,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -36,7 +37,11 @@ REAL_VM, REAL_REASON = vm.VmSandbox, vm.unavailable_reason
 class FakeSandbox:
     """Stands in for the VM: returns scripted results and never runs the code."""
 
-    def __init__(self, *results):
+    def __init__(
+        self,
+        *results: CodeRun | BaseException | Callable[[], Awaitable[CodeRun]],
+        state_path: Path | None = None,
+    ):
         self.results, self.codes, self.closed = list(results), [], False
 
     async def run(self, code, /):
@@ -86,7 +91,7 @@ def tool_call(name, arguments, call_id="c1"):
 class Model:
     """A scripted OpenAI-compatible stream; each step sees the request body."""
 
-    def __init__(self, *steps):
+    def __init__(self, *steps: dict | str | Callable[[dict], dict | str]):
         self.steps, self.bodies = list(steps), []
 
     def offered(self, index):
@@ -114,7 +119,9 @@ class Model:
         )
 
 
-async def reply(model, *, mode="normal", interaction=None, prompt="Go", sandbox=None):
+async def reply(
+    model, *, mode: toolkit.Mode = "normal", interaction=None, prompt="Go", sandbox=None
+):
     return [
         event
         async for event in stream_reply(
@@ -214,16 +221,17 @@ class SandboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1]["text"], "I could not compute it in the sandbox.")
 
     async def test_code_run_budget_is_enforced_per_reply(self):
-        model = Model(
-            *(
-                tool_call("run_code", {"code": f"{i} + 1"}, f"c{i}")
-                for i in range(toolkit.LIMITS["run_code"] + 1)
-            ),
-            "Answer",
-        )
+        def step(body):
+            if "run_code" in model.offered(-1):
+                return tool_call("run_code", {"code": "1"}, f"c{len(model.bodies)}")
+            return "Answer"
+
+        model = Model(*([step] * (toolkit.LIMITS["run_code"] + 1)))
         events = await reply(model)
         self.assertEqual(len(events[-1]["activity"]), toolkit.LIMITS["run_code"])
-        self.assertIn("limit", tool_results(model.bodies[-1])[-1])
+        self.assertNotIn("run_code", model.offered(-1))
+        self.assertIn("0 sandbox code runs left", system_prompt(model.bodies[-1]))
+        self.assertEqual(events[-1]["text"], "Answer")
 
     async def test_final_request_offers_no_tools(self):
         def step(body):
@@ -251,9 +259,10 @@ class SandboxTests(unittest.IsolatedAsyncioTestCase):
     async def test_stopping_a_reply_deletes_its_vm(self):
         started = asyncio.Event()
 
-        async def hang():
+        async def hang() -> CodeRun:
             started.set()
             await asyncio.Event().wait()
+            raise AssertionError("The fake sandbox should have been cancelled.")
 
         sandbox = FakeSandbox(hang)
         stream = stream_reply(
@@ -267,7 +276,7 @@ class SandboxTests(unittest.IsolatedAsyncioTestCase):
             ),
             sandbox=lambda: sandbox,
         )
-        async for event in stream:
+        async for _event in stream:
             if started.is_set():
                 break
         await stream.aclose()
@@ -297,6 +306,7 @@ class SandboxTests(unittest.IsolatedAsyncioTestCase):
                 None,
             )
         self.assertEqual(prepared.web, "auto")
+        assert prepared.notice is not None
         self.assertIn(reason, prepared.notice)
         self.assertIn(
             "Questions, plan mode, and web search still work.", prepared.notice
@@ -346,7 +356,10 @@ class RunnerTests(unittest.TestCase):
 def image_archive(root, *, tamper=False):
     """A tiny image archive in the bundled layout, with its manifest digest."""
     config, layer = b'{"architecture":"arm64"}', b"layer bytes"
-    digest = lambda data: f"sha256:{hashlib.sha256(data).hexdigest()}"
+
+    def digest(data):
+        return f"sha256:{hashlib.sha256(data).hexdigest()}"
+
     registry = json.dumps(
         {
             "config": {"digest": digest(config)},
@@ -451,13 +464,17 @@ class ImageAndCleanupTests(unittest.IsolatedAsyncioTestCase):
             patch("pydantic_ai_harness.smol_sandbox.SmolSandbox", Smol),
         ):
             sandbox = REAL_VM()
-            with patch.object(vm.shutil, "disk_usage", return_value=tight):
-                with self.assertRaisesRegex(SandboxUnavailable, "20 GiB reserve"):
-                    await sandbox.run("1")
+            with (
+                patch.object(vm.shutil, "disk_usage", return_value=tight),
+                self.assertRaisesRegex(SandboxUnavailable, "20 GiB reserve"),
+            ):
+                await sandbox.run("1")
             self.assertEqual(created, [])
-            with patch.object(vm.shutil, "disk_usage", return_value=plenty):
-                with self.assertRaises(SandboxUnavailable) as failed:
-                    await sandbox.run("1")
+            with (
+                patch.object(vm.shutil, "disk_usage", return_value=plenty),
+                self.assertRaises(SandboxUnavailable) as failed,
+            ):
+                await sandbox.run("1")
             self.assertEqual(
                 str(failed.exception),
                 "The Python sandbox could not start (HYPERVISOR_DENIED).",
@@ -560,7 +577,9 @@ class MicroVmTests(unittest.IsolatedAsyncioTestCase):
             with patch.object(vm, "RUN_TIMEOUT", 2):
                 stuck = await sandbox.run("while True: pass")
             self.assertTrue(stuck.timed_out)
+            assert sandbox._backend is not None
             ref = sandbox._backend.ref
+            assert ref is not None
             self.assertTrue((vm._markers() / f"{ref.id}.json").is_file())
         finally:
             del os.environ["VIKRAM_HOST_ONLY"]
@@ -644,14 +663,21 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1]["text"], "I chose CSV.")
 
     async def test_scripted_person_prefers_matching_options_then_typed_answer(self):
-        from pydantic_ai_harness.ask_user import AskUserRequest, Question
+        from pydantic_ai_harness.ask_user import (
+            AskUserRequest,
+            Question,
+            QuestionOption,
+        )
 
         request = AskUserRequest(
             questions=(
                 Question(
                     header="Scale",
                     question="Which scale?",
-                    options=({"label": "Celsius"}, {"label": "Fahrenheit"}),
+                    options=(
+                        QuestionOption(label="Celsius"),
+                        QuestionOption(label="Fahrenheit"),
+                    ),
                 ),
             )
         )
@@ -803,11 +829,14 @@ class FollowUpContextTests(unittest.TestCase):
             {"kind": "code", "status": "failed", "code": "oops(", "output": ""},
         ]
         note = activity_note(activity)
+        assert note is not None
         self.assertIn("Which unit?", note)
         self.assertIn("Miles", note)
         self.assertIn("approved by the user", note)
         self.assertIn("10 / 1.609", note)
-        self.assertNotIn("oops(", note)
+        self.assertIn("oops(", note)
+        self.assertIn("Sandbox code (failed)", note)
+        self.assertIn("files were deleted", note)
         turns = [
             {"prompt": ["Convert"], "answer": "6.21 mi", "activity": activity},
             {"prompt": ["Again"], "answer": None, "activity": activity},

@@ -62,27 +62,16 @@ private let recoveryStub = """
     return service
   }
 
-  @Test func templateFailuresAreVisibleAndRetryableWithoutHidingSavedBots() async throws {
-    let connection = try await service("templates-once")
+  @Test func newBotsNeedNothingFromTheServiceBeyondSavedBots() async throws {
+    let connection = try await service()
     defer { connection.shutDown() }
     let controller = BotController(service: connection)
     try await controller.refresh()
     #expect(controller.loaded && controller.bots.count == 2)
-    #expect(controller.templates.isEmpty)
-    #expect(controller.templateError == "Templates unavailable.")
-    #expect(controller.draft() == nil)
-    #expect(controller.error != nil)
-    try await controller.refresh()
-    #expect(controller.templateError == nil)
     let newBot = controller.draft()
-    #expect(newBot?.name == "")
-    #expect(newBot?.mandate == "")
-    #expect(newBot?.fields["schedule"] == ["repeat": "daily", "time": "09:00"])
-    #expect(newBot?.cloud == false)
-    let draft = controller.draft(templateId: "page-watcher")
-    #expect(draft?.repeatKind == "daily")
-    #expect(controller.draft(templateId: "blocked") == nil)
-    #expect(controller.error == "Sandbox required.")
+    #expect(newBot.name == "" && newBot.charter == "")
+    #expect(newBot.fields["schedule"] == ["repeat": "daily", "time": "09:00"])
+    #expect(newBot.cloud == false)
   }
 
   @Test func acknowledgedCreationSurvivesRefreshFailureWithoutInvitingDuplicates() async throws {

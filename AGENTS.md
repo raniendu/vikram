@@ -45,7 +45,12 @@ asked for it to become a native macOS app following Apple's practices; the desig
 is in `docs/superpowers/specs/2026-11-03-native-macos-app-design.md`. The app is
 SwiftUI (`apps/macos`); keep agent behavior in Python, keep the bundle layout
 (`Contents/MacOS/vikram-desktop` and `vikram-sidecar`) and the stdio protocol, and
-do not reintroduce web UI frameworks or other app toolchains without owner direction. The owner approved
+do not reintroduce web UI frameworks or other app toolchains without owner direction. On
+2026-11-16 the owner asked for an Omnigent-style shell around the CLI and chose
+to stay on SwiftUI with SwiftTerm (pinned in `apps/macos/Package.swift`, MIT
+notice bundled) for a per-session Terminal view that runs `vikram --session ID`.
+Chat and Terminal hand a session over; never drive one session from both at
+once. Keep new app surfaces thin views over CLI/service behavior. The owner approved
 document attachments and Parallel web search in
 `docs/superpowers/specs/2026-10-14-documents-and-web-search-design.md`. CLI and
 desktop must share model/tool instructions, capabilities, execution, limits,
@@ -79,10 +84,14 @@ publish a release without its notices and verified sources.
 The owner requested clarifying questions, plan mode, and a Python sandbox built
 on Pydantic libraries; the design is in
 `docs/superpowers/specs/2026-10-20-questions-plan-mode-sandbox-design.md`.
-Keep them in the shared toolkit with CLI/desktop parity. The sandbox is a local
-microVM per reply (Harness SmolSandbox on smolvm) booted from a bundled,
-digest-pinned image. Never run model code outside a VM, and keep the VM free of
-mounts, host environment, host tools, and network without owner direction.
+Keep them in the shared toolkit with CLI/desktop parity. The owner subsequently
+requested Pydantic Smol persistence: saved conversations keep a private native
+WorkspaceRef and stop/flush the VM after each reply, retaining files across clean
+restarts until explicit confirmed reset. Never silently replace a missing VM.
+Forks/clones/imports receive no sandbox authority; temporary chats, unattended
+runs, evaluations, and composition remain disposable. The sandbox boots from a
+bundled, digest-pinned image. Never run model code outside a VM, and keep the VM
+free of mounts, host environment, host tools, and network without owner direction.
 The owner requested an agent-controlled browser and chose its engine, safety
 policy, and CLI behavior; the design is in
 `docs/superpowers/specs/2026-10-21-agent-browser-design.md`. The engine is a
@@ -123,7 +132,8 @@ or public server surfaces.
 - `vikram/conversation.py`, `context.py`, `models.py`, `web.py`: shared model/tool behavior.
 - `vikram/toolkit.py`, `interaction.py`: sandbox, questions, plan mode, browser
   tools, and the answer/review/approval contract each interface implements.
-- `vikram/sandbox.py`: the per-reply Python microVM, its pinned image, and cleanup.
+- `vikram/sandbox.py`: bounded Python microVMs, native Smol reattachment, and disk flush.
+- `vikram/sandbox_session.py`, `sandbox_cli.py`: private conversation refs and explicit reset.
 - `vikram/bots.py`, `bots_cli.py`: specialist configuration, templates, Home,
   findings/materiality, feedback, delivery receipts and unattended bot runs;
   bots share `schedules.sqlite3` and the LaunchAgent. Native surfaces are

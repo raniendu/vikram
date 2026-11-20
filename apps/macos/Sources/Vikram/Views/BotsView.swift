@@ -10,11 +10,17 @@ struct BotsView: View {
   @Environment(ScheduleController.self) private var schedules
   @Environment(ChatController.self) private var chats
   @State private var editor: BotDraft?
+  @State private var editingVikram: Assistant?
 
   var body: some View {
     @Bindable var state = state
     NavigationStack(path: $state.botPath) {
       List {
+        if let vikram = bots.assistant {
+          Section {
+            VikramRow(assistant: vikram) { editingVikram = vikram }
+          }
+        }
         Section {
           if !bots.loaded {
             if bots.loading || bots.error == nil {
@@ -23,11 +29,18 @@ struct BotsView: View {
               Text("Bots could not be loaded. Your saved bots have not been removed.")
               Button("Try Again") { refresh() }
             }
-          } else {
-            Text(backgroundNote).foregroundStyle(Theme.muted)
-            if bots.bots.isEmpty {
-            Text("No bots yet. Create one to monitor a topic on a schedule.")
+          } else if bots.bots.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+              Text("No scheduled bots yet").font(Theme.display(18, relativeTo: .headline))
+              Text("A bot watches something on a schedule and tells you only what matters.")
+                .foregroundStyle(Theme.muted)
+              Button("New Bot", systemImage: "plus") { create() }
+                .buttonStyle(.glass)
+                .controlSize(.large)
+                .disabled(!canCreate)
             }
+            .padding(.vertical, 8)
+          } else {
             ForEach(bots.bots) { bot in
               NavigationLink(value: BotRoute.bot(bot.id)) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -37,14 +50,11 @@ struct BotsView: View {
               }
             }
           }
-        }
-        BotTemplatesSection(templates: bots.templates, enabled: !chats.offline && !bots.working) {
-          editor = bots.draft(templateId: $0.id)
-        }
-        if let error = bots.templateError {
-          Section("Templates unavailable") {
-            Text(error).foregroundStyle(Theme.danger)
-            Button("Reload Templates") { refresh() }.disabled(bots.loading)
+        } header: {
+          if bots.assistant != nil { Text("Scheduled bots") }
+        } footer: {
+          if bots.loaded {
+            Text(backgroundNote).font(.caption).foregroundStyle(Theme.muted)
           }
         }
       }
@@ -61,13 +71,13 @@ struct BotsView: View {
           .disabled(chats.offline || bots.loading)
         Button("Import Bot", systemImage: "square.and.arrow.down") { importBot() }
           .disabled(chats.offline || bots.working)
-        Button("New Bot", systemImage: "plus") { editor = bots.draft() }
-          .disabled(chats.offline || bots.working || !bots.templates.contains(where: \.available))
+        Button("New Bot", systemImage: "plus") { create() }
+          .disabled(!canCreate)
           .accessibilityIdentifier("new-bot")
       }
     }
     .task(id: chats.offline) {
-      if !chats.offline && (!bots.loaded || bots.templates.isEmpty) { try? await bots.refresh() }
+      if !chats.offline && !bots.loaded { try? await bots.refresh() }
     }
     .task(id: state.botPath) {
       switch state.botPath.last {
@@ -79,10 +89,17 @@ struct BotsView: View {
       }
     }
     .sheet(item: $editor) { BotEditor(draft: $0) }
+    .sheet(item: $editingVikram) { VikramEditor(assistant: $0) }
     .safeAreaInset(edge: .top, spacing: 0) { BotErrorBanner() }
   }
 
   private func refresh() { Task { try? await bots.refresh() } }
+
+  private func create() { editor = bots.draft() }
+
+  private var canCreate: Bool {
+    !chats.offline && !bots.working
+  }
 
   private var backgroundNote: String {
     switch bots.background {
@@ -92,7 +109,7 @@ struct BotsView: View {
     case "unavailable":
       "Background runs need the installed app. In development use `vikram bots run NAME`."
     default:
-      "Create a bot to begin. Unattended runs use search, page fetching, and the offline sandbox only."
+      "Unattended runs use search, page fetching, and the offline sandbox only."
     }
   }
 
@@ -114,48 +131,42 @@ struct BotsView: View {
   }
 }
 
-/// Real controls, not informational rows. Unavailable templates remain visibly
-/// disabled, with a reason, and cannot bypass the server's capability policy.
-struct BotTemplatesSection: View {
-  let templates: [BotTemplate]
-  let enabled: Bool
-  let select: (BotTemplate) -> Void
+/// Vikram, the default bot, always first: it answers every conversation.
+private struct VikramRow: View {
+  @Environment(BotController.self) private var bots
+  @Environment(ChatController.self) private var chats
+  let assistant: Assistant
+  let edit: () -> Void
 
   var body: some View {
-    Section("Templates") {
-      ForEach(templates) { template in
-        Button {
-          guard template.available && enabled else { return }
-          select(template)
-        } label: {
-          HStack(spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-              Text(template.title).fontWeight(.medium)
-              Text(template.summary).foregroundStyle(Theme.muted)
-              if let reason = template.reason {
-                Text("Unavailable: \(reason)").font(.caption).foregroundStyle(Theme.muted)
-              }
-            }
-            Spacer()
-            Label(
-              template.available ? "Use Template" : "Unavailable",
-              systemImage: template.available ? "plus.circle" : "lock"
-            )
-            .foregroundStyle(template.available ? Theme.accent : Theme.muted)
-          }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .contentShape(Rectangle())
-          .padding(.vertical, 8)
+    HStack(spacing: 12) {
+      BotIcon(icon: assistant.icon, name: "Vikram", size: 34)
+      VStack(alignment: .leading, spacing: 3) {
+        HStack(spacing: 6) {
+          Text("Vikram").fontWeight(.semibold)
+          Text("Default").font(.caption).foregroundStyle(Theme.muted)
+            .padding(.horizontal, 6).padding(.vertical, 1)
+            .overlay { Capsule().strokeBorder(Theme.rule) }
         }
-        .buttonStyle(.plain)
-        .disabled(!template.available || !enabled)
-        .accessibilityIdentifier("bot-template-\(template.id)")
-        .accessibilityLabel(
-          template.available ? "Use \(template.title) template" : "\(template.title), unavailable"
-        )
-        .help(template.reason ?? "Configure a new \(template.title) bot")
+        Text(summary).font(.callout).foregroundStyle(Theme.muted).lineLimit(2)
       }
+      Spacer()
+      Button("Edit…", action: edit)
+        .buttonStyle(.glass)
+        .disabled(bots.working || chats.offline)
+        .accessibilityIdentifier("edit-vikram")
     }
+    .padding(.vertical, 6)
+    .contentShape(Rectangle())
+    .onTapGesture(count: 2, perform: edit)
+  }
+
+  private var summary: String {
+    let prompt = assistant.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+    let first = prompt.split(whereSeparator: \.isNewline).first.map(String.init)
+    let model = assistant.model.isEmpty ? "No default model" : formatModelName(assistant.model)
+    let tools = "\(assistant.tools.count) of \(Assistant.allTools.count) tools"
+    return [first ?? "Answers your conversations", model, tools].joined(separator: " · ")
   }
 }
 
@@ -180,9 +191,37 @@ private struct BotDetail: View {
       let running = bot.runs?.contains { $0.status == "running" } ?? false
       List {
         Section("Overview") {
-          Text(bot.mandate).font(Theme.display(18, relativeTo: .headline))
+          HStack(spacing: 12) {
+            BotIcon(bot, size: 40)
+            Text(bot.mandate).font(Theme.display(18, relativeTo: .headline))
+          }
           LabeledContent("Schedule", value: bot.description)
+          LabeledContent("CLI") {
+            Text("vikram bots show \(bot.name.contains(" ") ? "\"\(bot.name)\"" : bot.name)")
+              .font(.callout.monospaced()).textSelection(.enabled)
+          }
           if let summary = bot.lastSummary { Text(summary).textSelection(.enabled) }
+        }
+        Section {
+          if let prompt = bot.config?["charter"]?.string, !prompt.isEmpty {
+            DisclosureGroup("System prompt") {
+              Text(prompt).font(.callout).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+          }
+          LabeledContent("Tools", value: toolsLabel(bot.tools))
+          LabeledContent("Model", value: bot.model.map(formatModelName) ?? "Default model")
+          LabeledContent("OpenRouter", value: bot.cloud ? "Explicitly allowed" : "Not allowed")
+          LabeledContent("Time budget", value: "\(bot.budgetMinutes) minutes per run")
+          LabeledContent("Notifications", value: notifyLabel(bot.notify))
+        } header: {
+          HStack {
+            Text("Configuration")
+            Spacer()
+            Button("Edit…") { edit(bot) }
+              .buttonStyle(.glass).controlSize(.small)
+              .disabled(running || bots.working || chats.offline)
+          }
         }
         Section("Findings") {
           ForEach(bot.findings ?? []) { FindingCard(finding: $0) }
@@ -202,12 +241,6 @@ private struct BotDetail: View {
                   Text(report).lineLimit(3).font(.callout).foregroundStyle(Theme.muted)
                 }
               }
-        DisclosureGroup("Settings") {
-          LabeledContent("Model", value: bot.model.map(formatModelName) ?? "Inherit default")
-          LabeledContent("OpenRouter", value: bot.cloud ? "Explicitly allowed" : "Not allowed")
-          LabeledContent("Time budget", value: "\(bot.budgetMinutes) minutes per run")
-          LabeledContent("Notifications", value: bot.notify)
-        }
             }
           }
           if bot.runs?.isEmpty ?? true { Text("No runs yet.").foregroundStyle(Theme.muted) }
@@ -248,6 +281,17 @@ private struct BotDetail: View {
     } else {
       ProgressView("Opening bot…")
     }
+  }
+
+  private func toolsLabel(_ tools: [String]?) -> String {
+    let names = ["web_search": "Web search", "web_fetch": "Read web pages", "sandbox": "Python sandbox"]
+    let chosen = (tools ?? BotDraft.allTools).compactMap { names[$0] }
+    return chosen.isEmpty ? "None" : ListFormatter.localizedString(byJoining: chosen)
+  }
+
+  private func notifyLabel(_ value: String) -> String {
+    ["attention": "Only needs attention", "findings": "Any new finding", "never": "Home only"][value]
+      ?? value
   }
 
   private func export(_ bot: Bot) {

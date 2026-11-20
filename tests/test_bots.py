@@ -62,6 +62,46 @@ def finding(key, title, severity="material", **extra):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_a_bot_is_a_system_prompt_tools_and_a_model(self):
+        config = config_from(
+            {
+                "name": "Swift",
+                "charter": "Watch Swift Evolution. Report accepted proposals.",
+                "schedule": {"repeat": "daily", "time": "09:00"},
+                "tools": ["sandbox", "web_search", "web_search"],
+                "icon": "orb-3",
+            }
+        )
+        # The description is the prompt's first sentence; tools keep one order.
+        self.assertEqual(config.mandate, "Watch Swift Evolution.")
+        self.assertEqual(config.tools, ["web_search", "sandbox"])
+        self.assertEqual(config.icon, "orb-3")
+        self.assertIsNone(config.template)
+        default = config_from(
+            {
+                "name": "All",
+                "charter": "Anything",
+                "schedule": {"repeat": "daily", "time": "09:00"},
+            }
+        )
+        self.assertEqual(default.tools, ["web_search", "web_fetch", "sandbox"])
+        for bad in (
+            {"tools": ["browser"]},
+            {"tools": ["sandbox"]},
+            {"tools": []},
+            {"icon": "../x"},
+            {"charter": ""},
+        ):
+            with self.assertRaises(ValueError):
+                config_from(
+                    {
+                        "name": "Bad",
+                        "charter": "Watch.",
+                        "schedule": {"repeat": "daily", "time": "09:00"},
+                        **bad,
+                    }
+                )
+
     def test_templates_fill_defaults_and_blocked_ones_refuse(self):
         config = config_from({"template": "topic-watcher", "name": "Immigration"})
         self.assertEqual(config.schedule.repeat, "weekly")
@@ -116,7 +156,7 @@ class ConfigTests(unittest.TestCase):
         self.assertIsNone(config_from(fields).model)
 
     def test_invalid_fields_fail_with_a_precise_message(self):
-        with self.assertRaisesRegex(ValueError, "name and a mandate"):
+        with self.assertRaisesRegex(ValueError, "name and instructions"):
             config_from(
                 {
                     "name": " ",
@@ -708,6 +748,26 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         [run] = self.bots.bot(bot["id"])["runs"]
         self.assertEqual(run["outcome"], "needs-attention")
         self.assertEqual(self.store.run(run["id"])["searches"][0]["status"], "complete")
+
+    async def test_runs_offer_only_the_tools_the_bot_allows(self):
+        import httpx
+        from test_toolkit import Model, fake_vm
+
+        from vikram.conversation import stream_reply
+
+        bot = self.bot(tools=["web_search"])
+        self.assertEqual(self.bots.bot(bot["id"])["tools"], ["web_search"])
+        model = Model(report("quiet", "Nothing new."))
+        with fake_vm():
+            await self.run_due(
+                lambda *a, **kw: stream_reply(
+                    *a, transport=httpx.MockTransport(model), **kw
+                )
+            )
+        offered = model.offered(0)
+        self.assertIn("web_search", offered)
+        self.assertNotIn("web_fetch", offered)
+        self.assertNotIn("run_code", offered)
 
     async def test_a_missing_report_fails_the_run_and_surfaces_on_home(self):
         self.bot()

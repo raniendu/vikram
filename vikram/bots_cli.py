@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from vikram import schedules
-from vikram.bots import BotStore, importable, templates
+from vikram.bots import BotStore, State, importable, templates
 from vikram.schedules import ScheduleStore, local_zone, repair_schedule
 
 SNOOZE = {"day": 1, "week": 7, "month": 30}
@@ -347,7 +347,11 @@ def findings_main(argv: list[str]) -> int:
                 )
                 result = bots.set_finding(finding["id"], "snoozed", until=until)
             else:
-                state = {"resolve": "resolved", "dismiss": "dismissed", "reopen": "new"}
+                state: dict[str, State] = {
+                    "resolve": "resolved",
+                    "dismiss": "dismissed",
+                    "reopen": "new",
+                }
                 result = bots.set_finding(finding["id"], state.get(args.action, "seen"))
             print(f"{result['title']}: {result['state']}.")
             return 0
