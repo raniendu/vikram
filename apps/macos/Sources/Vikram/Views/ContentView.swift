@@ -242,8 +242,8 @@ private struct EmptyChat: View {
         if chats.model != nil { return "Ask a question. Explore an idea. Make a little room for what comes next." }
         if !chats.models.contains(where: \.available) {
             return chats.connection != nil
-                ? "Open Ollama to see your local models."
-                : "Install a chat model in Ollama, or connect OpenRouter in Workbench, then refresh."
+                ? "Open Ollama or Magnitude to see your local models."
+                : "Install a chat model in Ollama or Magnitude, or connect OpenRouter in Workbench, then refresh."
         }
         return "Choose a model in the toolbar to start a conversation."
     }

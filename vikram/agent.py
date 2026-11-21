@@ -7,12 +7,20 @@ import httpx
 import pydantic_ai
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.ollama import OllamaModel
+from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.models.openrouter import OpenRouterModel
 from pydantic_ai.providers.ollama import OllamaProvider
+from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 from pydantic_ai.settings import ModelSettings
 
-from vikram.providers import CredentialError, CredentialStore, ModelRef, model_settings
+from vikram.providers import (
+    MAGNITUDE_BASE,
+    CredentialError,
+    CredentialStore,
+    ModelRef,
+    model_settings,
+)
 from vikram.toolkit import (
     LIMITS,
     RUN_CODE,
@@ -122,7 +130,7 @@ def build_agent(
     sandbox: bool = False,
     credentials: CredentialStore | None = None,
 ) -> Agent[Reply, str]:
-    """Build the shared agent using local Ollama or explicitly selected OpenRouter.
+    """Build the shared agent using the selected local or cloud provider.
 
     `toolkit` adds questions, plan mode, and the browser and scheduled-task
     tools, which are offered only to replies with a browser or tasks; `sandbox`
@@ -142,6 +150,13 @@ def build_agent(
             reference.model_id,
             provider=OpenRouterProvider(api_key=key, http_client=http_client),
             settings=cast(ModelSettings, model_settings(reference.qualified_id, None)),
+        )
+    elif reference.provider == "magnitude":
+        backend = OpenAIChatModel(
+            reference.model_id,
+            provider=OpenAIProvider(
+                base_url=MAGNITUDE_BASE, api_key="magnitude", http_client=http_client
+            ),
         )
     else:
         backend = OllamaModel(

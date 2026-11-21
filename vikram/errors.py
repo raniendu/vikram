@@ -59,6 +59,7 @@ def reply_error(error: Exception, *, provider: str = "ollama") -> str:
             return "Could not connect to OpenRouter. Check your network connection."
         if isinstance(error, AgentRunError):
             return "OpenRouter could not complete this reply. Retry or select another model."
+    server = "Magnitude" if provider == "magnitude" else "Ollama"
     causes, seen = [], set()
     current = error
     while current is not None and id(current) not in seen:
@@ -70,29 +71,29 @@ def reply_error(error: Exception, *, provider: str = "ollama") -> str:
         for c in causes
     ):
         return (
-            "Ollama timed out while Vikram was waiting for a reply. It may be busy "
+            f"{server} timed out while Vikram was waiting for a reply. It may be busy "
             "with another app or loading the model. Let other model requests finish "
             "and retry, or choose a smaller model."
         )
     if isinstance(error, ModelHTTPError):
         if error.status_code == 404:
             return (
-                "The selected model is not available in Ollama. Refresh the model "
-                "list, install it in Ollama, or choose another local model."
+                f"The selected model is not available in {server}. Refresh the model "
+                f"list, install it in {server}, or choose another local model."
             )
         if error.status_code in (429, 503):
             return (
-                "Ollama is busy and could not accept this request. "
+                f"{server} is busy and could not accept this request. "
                 "Let other model requests finish, then retry."
             )
         return (
-            f"Ollama rejected this request (HTTP {error.status_code}). "
-            "Check Ollama and retry, or choose another model."
+            f"{server} rejected this request (HTTP {error.status_code}). "
+            f"Check {server} and retry, or choose another model."
         )
     if any(isinstance(c, (httpx.ConnectError, APIConnectionError)) for c in causes):
-        return "Could not connect to local Ollama. Open Ollama, then retry."
+        return f"Could not connect to local {server}. Open {server}, then retry."
     if isinstance(error, AgentRunError):
-        return "Ollama could not complete this reply. Retry or choose another model."
+        return f"{server} could not complete this reply. Retry or choose another model."
     return (
         f"Vikram encountered an internal error ({type(error).__name__}). "
         "Quit and restart the installed app, then retry. "

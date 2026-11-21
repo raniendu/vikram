@@ -422,7 +422,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         }[argv[0]]
         return command(argv[1:])
     parser = argparse.ArgumentParser(
-        description="Chat with local Ollama using the same model/tools as the app. Supported models automatically use Parallel web search, Python in an isolated VM, and clarifying questions when needed; /plan toggles plan mode and /exit ends interactive chat.",
+        description="Chat with local Ollama or Magnitude using the same model and tools as the app. Supported models automatically use Parallel web search, Python in an isolated VM, and clarifying questions when needed; /plan toggles plan mode and /exit ends interactive chat.",
         epilog="Use `vikram update` to update the CLI and Mac app, or `vikram update --check` to check for a release. `vikram home` shows what your bots need from you; `vikram bots` and `vikram findings` manage them. `vikram schedules` lists scheduled tasks. Use `vikram -- update` to send 'update' as a prompt.",
     )
     parser.add_argument(
@@ -438,7 +438,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--model",
         default=default_model,
         metavar="MODEL_ID",
-        help=f"local Ollama model ID (default: {format_model_name(default_model)}; ID: %(default)s; honors OLLAMA_MODEL)",
+        help=f"model ID, optionally qualified as magnitude:<id> or openrouter:<id> (default: {format_model_name(default_model)}; ID: %(default)s; honors OLLAMA_MODEL)",
     )
     parser.add_argument(
         "--thinking",

@@ -127,7 +127,7 @@ struct AnswerView: View {
             !attempt.content.isEmpty
                 ? "Writing…"
                 : attempt.phase == "thinking"
-                    ? "Thinking…" : attempt.phase == "loading" ? "Waiting for Ollama…" : "Preparing reply…"
+                    ? "Thinking…" : attempt.phase == "loading" ? "Waiting for the model…" : "Preparing reply…"
         }
     }
 }

@@ -11,6 +11,7 @@ from vikram import sandbox
 from vikram.ollama import ThinkingControls, ThinkingValue, thinking_on
 from vikram.providers import (
     CLOUD_DISCLOSURE,
+    MAGNITUDE_BASE,
     OPENROUTER_BASE,
     CredentialError,
     CredentialStore,
@@ -74,6 +75,38 @@ def parse_model(entry: dict, shown: dict) -> dict:
     }
 
 
+def parse_magnitude_model(entry: dict) -> dict | None:
+    """Use the local serving catalog, excluding configured external endpoints."""
+    model_id = entry.get("id")
+    if not isinstance(model_id, str) or not model_id:
+        return None
+    if not (
+        model_id.startswith(("hf:", "local:"))
+        or (entry.get("owned_by") == "magnitude" and ":gguf:" in model_id)
+    ):
+        return None
+    ref = ModelRef.parse(f"magnitude:{model_id}")
+    reasoning = entry.get("reasoning") or {}
+    efforts = reasoning.get("supported_efforts") or []
+    parameters = entry.get("supported_parameters") or []
+    architecture = entry.get("architecture") or {}
+    return {
+        "name": ref.qualified_id,
+        "provider": ref.provider,
+        "model_id": ref.model_id,
+        "advertised_name": entry.get("name"),
+        "available": True,
+        "reason": None,
+        "vision": "image" in (architecture.get("input_modalities") or []),
+        "tools": "tools" in parameters,
+        "can_think": bool(efforts),
+        "thinking": [False if effort == "none" else effort for effort in efforts],
+        "thinking_default": reasoning.get("default_effort"),
+        "size": None,
+        "context_length": entry.get("context_length"),
+    }
+
+
 class ModelCatalog:
     def __init__(
         self,
@@ -101,13 +134,28 @@ class ModelCatalog:
             return await self._refresh(client, include_cloud, force)
 
     async def _refresh(self, client, include_cloud: bool, force: bool) -> list[dict]:
+        models = []
         try:
             models = await self._local(client)
         except ValueError as error:
             self.errors["ollama"] = str(error)
-            if not include_cloud:
-                raise
-            models = []
+        try:
+            response = await client.get(f"{MAGNITUDE_BASE}/models", timeout=3)
+            response.raise_for_status()
+            entries = response.json()["data"]
+            if not isinstance(entries, list):
+                raise ValueError("Invalid Magnitude model catalog.")
+            models.extend(
+                model
+                for entry in entries
+                if isinstance(entry, dict) and (model := parse_magnitude_model(entry))
+            )
+        except (httpx.HTTPError, ValueError, TypeError, KeyError, AttributeError):
+            self.errors["magnitude"] = (
+                "Cannot refresh Magnitude models. Open Magnitude, then choose Refresh."
+            )
+        if "ollama" in self.errors and not models and not include_cloud:
+            raise ValueError(self.errors["ollama"])
         if include_cloud:
             models.extend(await self._cloud(client, force=force))
         return sorted(models, key=lambda m: m["name"].casefold())

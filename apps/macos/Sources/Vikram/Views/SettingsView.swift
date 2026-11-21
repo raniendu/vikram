@@ -57,7 +57,7 @@ private struct GeneralSettingsView: View {
                 .pickerStyle(.segmented)
             }
             Section {
-                LabeledContent("Ollama") {
+                LabeledContent("Local inference") {
                     HStack {
                         Circle()
                             .fill(chats.connection == nil && !chats.offline ? Theme.success : Theme.danger)
@@ -99,7 +99,7 @@ private struct GeneralSettingsView: View {
             } header: {
                 Text("Local Models")
             } footer: {
-                Text("Vikram uses the chat models you installed in Ollama on this Mac.")
+                Text("Vikram can use chat models installed in Ollama or Magnitude on this Mac.")
             }
             Section("Web Search") {
                 Text(

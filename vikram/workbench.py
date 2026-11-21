@@ -4,15 +4,13 @@ import asyncio
 from pathlib import Path
 
 from vikram.coding import CodingSession
-from vikram.providers import CredentialError, CredentialStore
+from vikram.providers import CredentialError, CredentialStore, ModelRef
 from vikram.resources import ProjectResources
 from vikram.settings import Settings
 
 
 class Workbench:
     def __init__(self, runtime):
-        from vikram.providers import ModelRef
-
         self.runtime = runtime
         default = Settings(root=runtime.store.root).get("model")
         self.cloud_enabled = bool(default and ModelRef.parse(default).is_cloud)
@@ -36,7 +34,6 @@ class Workbench:
         )
 
     def context(self, chat_id, *, selected=None):
-        from vikram.providers import ModelRef
         from vikram.session import Session, stored_turns
 
         chat = self.runtime.store.chat(chat_id)
@@ -220,11 +217,9 @@ class Workbench:
                 "workspace": str(settings.workspace) if settings.workspace else None,
                 "sandbox": {"state": sandbox_status},
                 "trusted": settings.is_trusted() if settings.workspace else False,
-                "provider": (
-                    "openrouter"
-                    if context and context.model.startswith("openrouter:")
-                    else "ollama"
-                ),
+                "provider": ModelRef.parse(
+                    context.model if context else self.default_model()
+                ).provider,
                 "cloud_enabled": self.cloud_enabled,
                 "credentials": credential_source,
                 "context": context.context_state() if context else {},
@@ -246,7 +241,6 @@ class Workbench:
                 ),
             }
         if action == "default_model":
-            from vikram.providers import ModelRef
 
             if not any(
                 ModelRef.parse(item["name"]) == ModelRef.parse(value)

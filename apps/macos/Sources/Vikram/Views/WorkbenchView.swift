@@ -126,9 +126,10 @@ struct ProviderSettingsView: View {
             Section("Default Model") {
                 DefaultModelSettingsView()
             }
-            Section("Local Ollama") {
-                LabeledContent("Endpoint", value: "localhost:11434")
-                Text("Ollama remains the default. Local models never fall back to a cloud provider.")
+            Section("Local Models") {
+                LabeledContent("Ollama", value: "localhost:11434")
+                LabeledContent("Magnitude", value: "127.0.0.1:10100")
+                Text("Select a model installed in either local provider.")
                     .foregroundStyle(Theme.muted)
                 Button("Refresh Models", systemImage: "arrow.clockwise") {
                     Task { await chats.refreshModels() }
