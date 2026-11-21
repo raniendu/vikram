@@ -179,9 +179,13 @@ chat and attempt. Switching views does not cancel a reply or send its chunks
 to another conversation.
 
 One reply may run at a time within this app. The owner can browse other chats
-and compose drafts while it runs. Their Send control explains which chat is
-busy; v1 has no background send queue. This limit does not control other apps
-or CLI processes that use Ollama.
+and compose drafts while it runs. Sending from another chat then queues the
+draft (text only) as that chat's follow-up; when any reply ends, the oldest
+queued message across all chats starts. A reply waiting for the person still
+holds the slot, and a stopped or failed chat's own queue stays paused until the
+person resumes it or that chat's next reply finishes. The queue is in memory
+only and is discarded when the app quits (owner request, 2026-11-21). This limit
+does not control other apps or CLI processes that use Ollama.
 
 Stop cancels the active request and leaves any received text marked Stopped.
 Do not append late chunks after cancellation. Keep the app's generation slot

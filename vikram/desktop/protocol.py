@@ -76,6 +76,8 @@ class Image(Chat):
 class Send(Chat):
     retry: bool = False
     request_id: str = Field(min_length=1, max_length=80)
+    # While another chat's reply runs, queue the draft instead of refusing it.
+    queue_if_busy: bool = False
 
 
 class Answer(Params):

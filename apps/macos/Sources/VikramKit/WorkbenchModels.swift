@@ -10,6 +10,11 @@ public struct QueuedInput: Sendable, Hashable, Codable, Identifiable {
     public var id: String
     public var text: String
     public var kind: QueueKind
+    /// Paused after its reply stopped or failed, or when it could not start: it
+    /// waits for the person instead of the next free reply slot.
+    public var held: Bool?
+
+    public var isPaused: Bool { held == true }
 }
 
 public struct ConversationBranch: Sendable, Hashable, Decodable, Identifiable {
@@ -76,6 +81,8 @@ public struct WorkbenchStatus: Sendable, Decodable {
     public var credentials: String?
     public var context: [String: JSONValue]
     public var queue: [QueuedInput]
+    /// Messages queued in every chat; the service keeps them only while it runs.
+    public var queueTotal: Int
     public var resources: [String: JSONValue]
     public var mcp: [IntegrationStatus]
     public var extensions: [IntegrationStatus]
@@ -84,6 +91,7 @@ public struct WorkbenchStatus: Sendable, Decodable {
         case workspace, sandbox, trusted, provider, credentials, context, queue, resources, mcp, extensions
         case cloudEnabled = "cloud_enabled"
         case defaultModel = "default_model"
+        case queueTotal = "queue_total"
     }
 
     public init(from decoder: Decoder) throws {
@@ -97,6 +105,7 @@ public struct WorkbenchStatus: Sendable, Decodable {
         credentials = try container.decodeIfPresent(String.self, forKey: .credentials)
         context = try container.decodeIfPresent([String: JSONValue].self, forKey: .context) ?? [:]
         queue = try container.decodeIfPresent([QueuedInput].self, forKey: .queue) ?? []
+        queueTotal = try container.decodeIfPresent(Int.self, forKey: .queueTotal) ?? queue.count
         resources = try container.decodeIfPresent([String: JSONValue].self, forKey: .resources) ?? [:]
         mcp = try container.decodeIfPresent([IntegrationStatus].self, forKey: .mcp) ?? []
         extensions = try container.decodeIfPresent([IntegrationStatus].self, forKey: .extensions) ?? []

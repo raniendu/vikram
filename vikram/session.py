@@ -2,6 +2,7 @@
 
 import asyncio
 import inspect
+import itertools
 import json
 import math
 import os
@@ -20,6 +21,10 @@ from vikram.models import ModelCatalog, prepare_model, thinking_selection
 from vikram.toolkit import bounded
 
 Summarizer = Callable[[list[dict], str], Awaitable[str]]
+
+# One order for queued messages across every conversation in this process, so the
+# desktop service can start them in the order they were queued.
+_QUEUE_ORDER = itertools.count(1)
 
 
 def stored_turns(store: Store, chat_id: str, *, vision: bool = True) -> list[dict]:
@@ -482,9 +487,21 @@ class Session:
             raise ValueError("Enter a nonempty steering message or follow-up.")
         if len(self._queue) >= 100:
             raise ValueError("The input queue is full.")
-        item = {"id": uuid4().hex, "text": text, "kind": kind}
+        item = {
+            "id": uuid4().hex,
+            "text": text,
+            "kind": kind,
+            "order": next(_QUEUE_ORDER),
+            "held": False,
+        }
         self._queue.append(item)
         return dict(item)
+
+    def hold_queued(self, held: bool = True, item_id: str | None = None) -> None:
+        """Pause (or resume) unsent entries so they wait for the person, not the slot."""
+        for item in self._queue:
+            if item_id is None or item["id"] == item_id:
+                item["held"] = held
 
     def edit_queued(self, item_id: str, text: str) -> None:
         if not text.strip() or len(text) > 1_000_000:

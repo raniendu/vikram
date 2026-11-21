@@ -64,11 +64,12 @@ struct SessionWorkbenchView: View {
             Section("Queued Input") {
                 if workbench.status?.queue.isEmpty != false {
                     Text(
-                        "While a reply is running, steer its next request or queue a follow-up from the composer."
+                        "While a reply is running, steer its next request or queue a follow-up from the composer. In other chats, Return queues the message to send after that reply."
                     )
                     .foregroundStyle(Theme.muted)
                 }
                 ForEach(workbench.status?.queue ?? []) { item in QueueEntryView(item: item) }
+                QueueFootnote(runningElsewhere: nil)
             }
             Section("Local Files") {
                 HStack {
@@ -150,6 +151,23 @@ struct SessionWorkbenchView: View {
     }
 }
 
+/// When queued messages start, and that they last only while Vikram runs.
+struct QueueFootnote: View {
+    /// The title of the chat whose reply runs now, when it is another one.
+    let runningElsewhere: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let runningElsewhere {
+                Text("Sends after the reply in “\(runningElsewhere)” finishes. Queued messages start one at a time, oldest first.")
+            }
+            Text("Queued messages aren't saved: quitting Vikram discards them.")
+        }
+        .font(.caption)
+        .foregroundStyle(Theme.muted)
+    }
+}
+
 struct QueueEntryView: View {
     @Environment(WorkbenchController.self) private var workbench
     let item: QueuedInput
@@ -160,7 +178,17 @@ struct QueueEntryView: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
                 Text(item.kind.label).font(.caption.weight(.semibold)).foregroundStyle(Theme.accent)
+                if item.isPaused {
+                    Text("Paused").font(.caption).foregroundStyle(Theme.muted)
+                        .help("Its reply stopped or failed, or it could not start. Resume to send it when no reply is running.")
+                }
                 Spacer()
+                if item.isPaused {
+                    Button("Resume") {
+                        Task { await workbench.perform("queue_resume", value: item.id) }
+                    }
+                    .help("Send when no reply is running")
+                }
                 Button(editing ? "Save" : "Edit") {
                     if editing {
                         Task {

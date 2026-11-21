@@ -319,12 +319,25 @@ final class AppState {
     /// Ask before stopping a running reply, save drafts, and stop the service.
     func prepareToQuit(restarting: Bool) async -> Bool {
         let verb = restarting ? "Restart" : "Quit"
+        // Queued messages live only in the running service.
+        let queued = workbench.status?.queueTotal ?? 0
+        let discards =
+            queued == 0
+            ? "" : " \(queued == 1 ? "1 queued message" : "\(queued) queued messages") will be discarded."
         if chats.active != nil || chats.sending {
             let alert = NSAlert()
             alert.messageText = "Stop the reply and \(verb.lowercased())?"
             alert.informativeText =
                 "The active reply will stop. Saved messages and its last saved partial answer will be here when you return."
+                + discards
             alert.addButton(withTitle: "Stop and \(verb)")
+            alert.addButton(withTitle: "Keep Open")
+            guard alert.runModal() == .alertFirstButtonReturn else { return false }
+        } else if queued > 0 {
+            let alert = NSAlert()
+            alert.messageText = "\(verb) and discard queued messages?"
+            alert.informativeText = "Queued messages aren't saved." + discards
+            alert.addButton(withTitle: "Discard and \(verb)")
             alert.addButton(withTitle: "Keep Open")
             guard alert.runModal() == .alertFirstButtonReturn else { return false }
         }

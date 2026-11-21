@@ -357,18 +357,30 @@ public final class ChatController {
 
     // MARK: Replies
 
-    /// Whether the open chat can send its draft now.
+    /// The chat whose reply holds the service's single reply slot, when it is
+    /// not the open one: sending from the open chat then queues the draft.
+    public var busyElsewhere: Bool { active != nil && active?.chatId != selected }
+
+    /// Whether the open chat can send its draft now, or queue it while another
+    /// chat's reply runs (text only: attachments cannot wait in the queue).
     public var canSend: Bool {
-        guard let chat, model != nil, !offline, !sending, !importing, active == nil else {
+        guard let chat, model != nil, !offline, !sending, !importing,
+            active == nil || busyElsewhere
+        else {
             return false
         }
         let pending = chat.attachments.filter { $0.messageId == nil }
+        if busyElsewhere && !pending.isEmpty { return false }
         if pending.contains(where: { !$0.isDocument }) && model?.vision != true { return false }
         return !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pending.isEmpty
     }
 
+    /// Send the draft, or, while another chat's reply runs, have the service
+    /// queue it as a follow-up that starts after that reply.
     public func send(retry: Bool = false) async {
-        guard let id = selected, active == nil, !sendLock, !importing else { return }
+        guard let id = selected, active == nil || (!retry && busyElsewhere), !sendLock,
+            !importing
+        else { return }
         sendLock = true
         sending = true
         error = nil
@@ -386,7 +398,10 @@ public final class ChatController {
             }
             let result = try await rpc(
                 "send",
-                ["chat_id": .string(id), "retry": .bool(retry), "request_id": .string(requestId)])
+                [
+                    "chat_id": .string(id), "retry": .bool(retry), "request_id": .string(requestId),
+                    "queue_if_busy": .bool(!retry),
+                ])
             let chat = try result["chat"].orThrow().decode(Chat.self)
             submissions.removeValue(forKey: id)
             if !retry {
@@ -395,7 +410,10 @@ public final class ChatController {
                 drafts[id] = chat.summary.draft
             }
             put(chat)
-            active = reconcileActive(try? result["active"]?.decode(Active.self), events)
+            // A queued draft leaves the running reply, which events track, as it is.
+            if result["queued"] == nil {
+                active = reconcileActive(try? result["active"]?.decode(Active.self), events)
+            }
             if let models = try? result["models"]?.decode([LocalModel].self) {
                 self.models = models
             }
