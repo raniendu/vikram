@@ -250,7 +250,9 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
             catalog = ModelCatalog(credentials=store, http_client=client)
             local = await catalog.refresh()
             self.assertEqual([m["name"] for m in local], ["local:1"])
-            self.assertTrue(all(r.url.host == "localhost" for r in requests))
+            self.assertTrue(
+                all(r.url.host in {"localhost", "127.0.0.1"} for r in requests)
+            )
             first = await catalog.refresh(include_cloud=True)
             first[-1]["name"] = "caller mutation"
             second = await catalog.refresh(include_cloud=True)
@@ -281,6 +283,40 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError) as caught:
                 await catalog.refresh()
             self.assertNotIn("private", str(caught.exception))
+
+    async def test_magnitude_available_with_ollama_offline(self):
+        model_id = "hf:ornith-ai/Ornith/model.gguf"
+
+        def respond(request):
+            if request.url.host == "localhost":
+                raise httpx.ConnectError("offline")
+            self.assertEqual(request.url.path, "/inference/v1/models")
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": model_id,
+                            "context_length": 262144,
+                            "architecture": {"input_modalities": ["text", "image"]},
+                            "supported_parameters": ["tools"],
+                            "reasoning": {
+                                "supported_efforts": ["none", "high"],
+                                "default_effort": "high",
+                            },
+                        },
+                        {"id": "external:openrouter/remote"},
+                    ]
+                },
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            models = await ModelCatalog(http_client=client).refresh()
+        self.assertEqual(len(models), 1)
+        model = models[0]
+        self.assertEqual(model["name"], f"magnitude:{model_id}")
+        self.assertTrue(model["vision"] and model["tools"])
+        self.assertEqual(model["thinking"], [False, "high"])
 
     async def test_failed_refresh_marks_cached_cloud_metadata_unavailable(self):
         from vikram.providers import CredentialStore

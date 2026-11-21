@@ -51,7 +51,10 @@ session at a time, and the switch is unavailable during a reply. Home also
 lists a session that is waiting for your answer. Settings (⌘,) holds the
 shared default model, OpenRouter, the workspace, MCP servers, and extensions.
 
-Use your existing Ollama installation and installed models. The picker rejects
+Use your existing Ollama installation and installed models. Magnitude models
+also appear in the picker while Magnitude is running on this Mac. To select one
+directly, run `vikram --model magnitude:gemma-4-26b-a4b-it-qat:gguf:q4` or
+use another exact ID reported by `vikram --list-models`. The picker rejects
 remote/cloud-backed and non-chat models. No model downloads happen automatically.
 One reply runs at a time; other chats keep independent drafts and histories.
 

@@ -473,7 +473,10 @@ public struct LocalModel: Sendable, Hashable, Codable, Identifiable {
 
     public var id: String { name }
     public var isCloud: Bool { provider == "openrouter" || name.hasPrefix("openrouter:") }
-    public var providerLabel: String { isCloud ? "OpenRouter" : "Local Ollama" }
+    public var providerLabel: String {
+        if isCloud { return "OpenRouter" }
+        return provider == "magnitude" ? "Local Magnitude" : "Local Ollama"
+    }
     public var displayName: String {
         if let advertisedName { return advertisedName }
         if isCloud { return name.hasPrefix("openrouter:") ? String(name.dropFirst("openrouter:".count)) : name }

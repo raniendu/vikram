@@ -10,7 +10,8 @@ from typing import Literal, Protocol
 
 from vikram.ollama import ThinkingValue, thinking_request
 
-Provider = Literal["ollama", "openrouter"]
+Provider = Literal["ollama", "magnitude", "openrouter"]
+MAGNITUDE_BASE = "http://127.0.0.1:10100/inference/v1"
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 OPENROUTER_KEY = "OPENROUTER_API_KEY"
 CLOUD_DISCLOSURE = (
@@ -30,7 +31,7 @@ class ModelRef:
             raise ValueError("A model name is required.")
         value = value.strip()
         provider, separator, model_id = value.partition(":")
-        if not separator or provider not in ("ollama", "openrouter"):
+        if not separator or provider not in ("ollama", "magnitude", "openrouter"):
             provider, model_id = "ollama", value
         if not model_id or any(c.isspace() or ord(c) < 32 for c in model_id):
             raise ValueError("A model name without whitespace is required.")
@@ -51,7 +52,7 @@ class ModelRef:
 
 def model_settings(model: str, thinking: ThinkingValue | None) -> dict:
     """Map shared selections to the native adapter without model fallbacks."""
-    if ModelRef.parse(model).provider == "ollama":
+    if not ModelRef.parse(model).is_cloud:
         return {"extra_body": thinking_request(thinking)}
     settings: dict[str, dict[str, bool | str]] = {
         "openrouter_provider": {"allow_fallbacks": False}
