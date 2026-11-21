@@ -134,6 +134,36 @@ class SidecarDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved["draft"], "Preserve my draft")
         self.assertEqual(saved["messages"], [])
 
+    async def test_send_from_another_chat_queues_through_the_service(self):
+        await self.send(
+            "long", "send", {"chat_id": self.chat["id"], "request_id": "generation"}
+        )
+        await self.response(event="test_wait")
+        await self.send("other", "create_chat")
+        other = (await self.response("other"))["result"]["id"]
+        await self.send(
+            "draft2", "draft", {"chat_id": other, "text": "Later", "revision": 1}
+        )
+        await self.response("draft2")
+        await self.send(
+            "queued",
+            "send",
+            {"chat_id": other, "request_id": "queued", "queue_if_busy": True},
+        )
+        result = (await self.response("queued"))["result"]
+        self.assertEqual(result["queued"]["text"], "Later")
+        self.assertEqual(result["chat"]["draft"], "")
+        await self.send(
+            "resume",
+            "workbench",
+            {
+                "action": "queue_resume",
+                "chat_id": other,
+                "value": result["queued"]["id"],
+            },
+        )
+        self.assertIn("result", await self.response("resume"))
+
     async def test_send_startup_does_not_block_stop_respond_or_queue(self):
         await self.check_interrupt(
             "send", {"chat_id": self.chat["id"], "request_id": "generation"}

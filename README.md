@@ -57,6 +57,11 @@ directly, run `vikram --model magnitude:gemma-4-26b-a4b-it-qat:gguf:q4` or
 use another exact ID reported by `vikram --list-models`. The picker rejects
 remote/cloud-backed and non-chat models. No model downloads happen automatically.
 One reply runs at a time; other chats keep independent drafts and histories.
+Sending from another chat while a reply runs queues that message; queued
+messages start one at a time, oldest first, after the running reply ends
+(finished, stopped or failed). A chat whose reply stopped or failed keeps its
+own queue paused until you resume it. Queued messages are kept only while the
+app runs: quitting discards them.
 
 Build with native ARM64 Python 3.13+ and Xcode 27 or later. The app uses the
 selected Xcode's macOS SDK for native Liquid Glass controls and navigation.

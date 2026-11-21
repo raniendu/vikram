@@ -151,7 +151,14 @@ class Workbench:
         return texts
 
     async def command(self, params):
-        readonly = {"status", "queue", "queue_edit", "queue_remove", "tree"}
+        readonly = {
+            "status",
+            "queue",
+            "queue_edit",
+            "queue_remove",
+            "queue_resume",
+            "tree",
+        }
         if params["action"] in readonly:
             return await self._command(params)
         if self.runtime.active or self.runtime.starting:
@@ -165,6 +172,8 @@ class Workbench:
         finally:
             self.runtime.starting = False
             self.runtime.start_task = None
+            # Messages queued while this held the reply slot can start now.
+            self.runtime.drain_soon()
 
     async def _command(self, params):
         action = params["action"]
@@ -224,6 +233,9 @@ class Workbench:
                 "credentials": credential_source,
                 "context": context.context_state() if context else {},
                 "queue": context.queued_inputs if context else [],
+                "queue_total": sum(
+                    len(session.queued_inputs) for session in self.contexts.values()
+                ),
                 "resources": {
                     "skills": [
                         item.name for item in ProjectResources(settings).reload().skills
@@ -289,15 +301,21 @@ class Workbench:
             return await self.compact(
                 cid, instructions=value, manual=True, include_draft=False
             )
-        if action in {"queue", "queue_edit", "queue_remove"}:
+        if action in {"queue", "queue_edit", "queue_remove", "queue_resume"}:
             context = self.context(cid)
             if action == "queue":
                 context.queue_input(value, kind=options.get("kind", "steer"))
             elif action == "queue_edit":
                 context.edit_queued(value, options.get("text", ""))
+            elif action == "queue_resume":
+                if not any(item["id"] == value for item in context.queued_inputs):
+                    raise ValueError("That queued message has already been delivered.")
+                context.hold_queued(False, item_id=value)
             else:
                 context.remove_queued(value)
             self.runtime.event("workbench", chat_id=cid)
+            # Queued while no reply runs (or just resumed): start it when the slot is free.
+            self.runtime.drain_soon()
             return context.queued_inputs
         if action == "export":
             from vikram.session_io import export_session

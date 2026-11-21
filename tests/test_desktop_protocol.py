@@ -54,6 +54,28 @@ class ProtocolTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 validate_command(json.dumps(value))
 
+    def test_app_queue_commands_are_accepted(self):
+        def command(method, params):
+            return validate_command(
+                json.dumps({"v": 1, "id": "r", "method": method, "params": params})
+            )
+
+        sent = command(
+            "send",
+            {"chat_id": "a" * 32, "request_id": "q", "queue_if_busy": True},
+        )
+        self.assertTrue(sent.params["queue_if_busy"])
+        with self.assertRaises(ValueError):
+            command(
+                "send",
+                {"chat_id": "a" * 32, "request_id": "q", "queue_if_busy": "yes"},
+            )
+        resumed = command(
+            "workbench",
+            {"action": "queue_resume", "chat_id": "a" * 32, "value": "item"},
+        )
+        self.assertEqual(resumed.params["action"], "queue_resume")
+
     def test_respond_and_plan_mode_are_strictly_validated(self):
         def command(method, params):
             return validate_command(

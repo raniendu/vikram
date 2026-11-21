@@ -292,6 +292,7 @@ class Runtime:
             )
         self.starting = True
         self.start_task = asyncio.current_task()
+        failed = False
         try:
             # Capture selection before awaiting metadata: changes affect only the next reply.
             chat = self.store.chat(chat_id)
@@ -389,9 +390,67 @@ class Runtime:
                 "active": self.active,
                 "models": self.models,
             }
+        except Exception:
+            failed = True
+            raise
         finally:
             self.starting = False
             self.start_task = None
+            if failed:
+                # Messages queued while this reply was starting would otherwise wait.
+                self.drain_soon()
+
+    def queue_draft(self, chat_id: str) -> dict:
+        """Queue the saved draft as a follow-up while another reply holds the slot."""
+        chat = self.store.chat(chat_id)
+        if any(a["message_id"] is None for a in chat["attachments"]):
+            raise ValueError(
+                "Attachments can't wait in the queue. Send this message after the "
+                "running reply finishes, or remove the attachments to queue it."
+            )
+        if not chat["draft"].strip():
+            raise ValueError("Type a message or attach a file.")
+        context = self.workbench.context(chat_id)
+        item = context.queue_input(chat["draft"], kind="followup")
+        try:
+            self.store.save_draft(chat_id, "", chat["draft_revision"] + 1)
+        except BaseException:
+            context.remove_queued(item["id"])
+            raise
+        self.event("workbench", chat_id=chat_id)
+        return {"queued": item, "chat": self.store.chat(chat_id), "active": self.active}
+
+    def _next_queued(self) -> tuple[str, dict] | None:
+        """The oldest message, across all chats, that waits only for the slot."""
+        best = None
+        for chat_id, context in self.workbench.contexts.items():
+            for item in context.queued_inputs:
+                if not item.get("held") and (
+                    best is None or item.get("order", 0) < best[1].get("order", 0)
+                ):
+                    best = (chat_id, item)
+        return best
+
+    def drain_soon(self) -> None:
+        """Start the oldest queued message once no reply holds the slot."""
+        if (
+            self._closed
+            or self.active
+            or self.starting
+            or (self.queued_task is not None and not self.queued_task.done())
+            or self._next_queued() is None
+        ):
+            return
+        self.queued_task = asyncio.create_task(self._send_queued())
+
+    def _reply_ended(self, chat_id: str, status: str) -> None:
+        """A finished reply releases its chat's queue; a stopped or failed one pauses
+        it for the person. Then the slot goes to the oldest queued message."""
+        context = self.workbench.contexts.get(chat_id)
+        if context is not None and context.queued_inputs:
+            context.hold_queued(status != "complete")
+            self.event("workbench", chat_id=chat_id)
+        self.drain_soon()
 
     async def _generate(
         self, attempt: dict, model: dict, thinking, setting=None
@@ -621,36 +680,35 @@ class Runtime:
             self.active = None
             self.stopping = False
             self.event("idle", **route)
-            context = self.workbench.contexts.get(attempt["chat_id"])
-            if (
-                status == "complete"
-                and context
-                and context.queued_inputs
-                and not self._closed
-            ):
-                self.queued_task = asyncio.create_task(
-                    self._send_queued(attempt["chat_id"])
-                )
+            self._reply_ended(attempt["chat_id"], status)
 
-    async def _send_queued(self, chat_id: str) -> None:
-        """A tracked continuation; remove an entry only after Store.begin succeeds."""
-        try:
-            await asyncio.sleep(0)
-            if self._closed or self.active or self.starting:
+    async def _send_queued(self) -> None:
+        """A tracked continuation; remove an entry only after Store.begin succeeds.
+        An entry that cannot start is paused so the next one can."""
+        await asyncio.sleep(0)
+        while not (self._closed or self.active or self.starting):
+            selected = self._next_queued()
+            if selected is None:
                 return
-            context = self.workbench.contexts.get(chat_id)
-            if context and context.queued_inputs:
-                item = context.queued_inputs[0]
+            chat_id, item = selected
+            try:
                 await self.send(chat_id, uuid4().hex, queued_id=item["id"])
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            self.event(
-                "notice",
-                chat_id=chat_id,
-                message="The queued message could not be sent. It remains available to edit or retry.",
-            )
-            self.event("workbench", chat_id=chat_id)
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                context = self.workbench.contexts.get(chat_id)
+                if context is not None:
+                    context.hold_queued(item_id=item["id"])
+                self.event(
+                    "notice",
+                    chat_id=chat_id,
+                    message=(
+                        "A queued message could not be sent, so it is paused. "
+                        "Resume, edit or remove it in its chat."
+                    ),
+                )
+                self.event("workbench", chat_id=chat_id)
 
     async def wait_for_person(self, route: dict, kind: str, request):
         """Park the reply until the window answers `request` with `respond`."""
@@ -767,6 +825,7 @@ class Runtime:
                     self.active = None
                     self.stopping = False
                     self.event("idle", **route)
+                    self._reply_ended(route["chat_id"], status)
             # The tool waiting for an answer runs in its own task, which the reply
             # may not have finished cancelling yet: end its wait here.
             for *_, future in self.waiting.values():
@@ -848,6 +907,8 @@ class Runtime:
                         self.store._require_idle(p["chat_id"])
                         await reset_sandbox(sandbox)
             self.store.delete_chat(p["chat_id"])
+            # Its queued messages go with it.
+            self.workbench.contexts.pop(p["chat_id"], None)
         elif method in {"import_image", "import_attachment"}:
             try:
                 data = base64.b64decode(p["data"], validate=True)
@@ -876,6 +937,12 @@ class Runtime:
         elif method in {"remove_image", "remove_attachment"}:
             self.store.remove_image(p["chat_id"], p["attachment_id"])
         elif method == "send":
+            if (
+                p.get("queue_if_busy")
+                and not p.get("retry")
+                and (self.active or self.starting)
+            ):
+                return self.queue_draft(p["chat_id"])
             return await self.send(
                 p["chat_id"], p.get("request_id", request_id), p.get("retry", False)
             )

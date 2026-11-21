@@ -17,6 +17,10 @@ struct ComposerView: View {
     private var planning: Bool { chat.mode == .plan }
     private var runningHere: Bool { chats.active?.chatId == chat.id }
     private var busyElsewhere: Bool { chats.active != nil && !runningHere }
+    /// The chat whose reply runs now, when it is another one.
+    private var runningTitle: String {
+        chats.chats.first { $0.id == chats.active?.chatId }?.title ?? "another chat"
+    }
     private var invalidImages: Bool {
         pending.contains { !$0.isDocument } && chats.model?.vision != true
     }
@@ -35,6 +39,7 @@ struct ComposerView: View {
                         Button("View all \(queued.count) queued messages") { state.showsWorkbench = true }
                             .buttonStyle(.borderless)
                     }
+                    QueueFootnote(runningElsewhere: busyElsewhere ? runningTitle : nil)
                 }
                 .padding(10)
                 .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
@@ -47,10 +52,9 @@ struct ComposerView: View {
                     "Plan mode · Vikram proposes a plan for your approval before it runs code or does the work.",
                     systemImage: "list.bullet.clipboard")
             }
-            if busyElsewhere {
-                let title =
-                    chats.chats.first { $0.id == chats.active?.chatId }?.title ?? "another chat"
-                notice("A reply is running in “\(title)”. Your draft stays here.")
+            if busyElsewhere && !pending.isEmpty {
+                // Return queues text while another chat replies; attachments can't wait.
+                notice("Attachments can't be queued. Send after the running reply finishes.")
             }
             VStack(alignment: .leading, spacing: 10) {
                 if !pending.isEmpty {
@@ -121,6 +125,14 @@ struct ComposerView: View {
                         .help("Stop reply (⌘.)")
                     } else if chats.sending {
                         ProgressView().controlSize(.small).frame(width: 34, height: 34)
+                    } else if busyElsewhere {
+                        Button("Queue Message", systemImage: "clock") {
+                            Task { await chats.send() }
+                        }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!chats.canSend)
+                        .help("Queue to send after the reply in “\(runningTitle)” finishes")
                     } else {
                         Button("Send Message", systemImage: "arrow.up") {
                             Task { await chats.send() }
@@ -128,7 +140,7 @@ struct ComposerView: View {
                         .labelStyle(.iconOnly)
                         .buttonStyle(.borderedProminent)
                         .disabled(!chats.canSend)
-                        .help(busyElsewhere ? "Wait for the active reply to finish" : "Send message")
+                        .help("Send message")
                     }
                 }
             }

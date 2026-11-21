@@ -20,7 +20,7 @@ MAX_LINE = 15 * 1024 * 1024
 MAX_PENDING = 8
 MAX_IMPORTS = 4
 BACKGROUND_METHODS = {"send", "refresh", "import_attachment", "import_image"}
-QUICK_WORKBENCH = {"queue", "queue_edit", "queue_remove", "tree"}
+QUICK_WORKBENCH = {"queue", "queue_edit", "queue_remove", "queue_resume", "tree"}
 
 
 def emit(payload: dict) -> None:

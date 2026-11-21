@@ -136,3 +136,72 @@ private let workbenchStub = """
         #expect(workbench.error == "Queue unavailable.")
     }
 }
+
+private let busyElsewhereStub = """
+    import json, sys
+    running = {"id":"c0","title":"Running","model":"local:1","messages":[],"draft":"","draft_revision":0}
+    chat = {"id":"c1","title":"Other","model":"local:1","messages":[],"draft":"","draft_revision":0}
+    active = {"chat_id":"c0","attempt_id":"a0","request_id":"r0"}
+    for line in sys.stdin:
+        command = json.loads(line)
+        method, params = command["method"], command.get("params", {})
+        if method in ("hello", "snapshot"):
+            result = {"protocol":1,"chats":[running, chat],"folders":[],
+                      "preferences":{"selected_chat":"c1"},"active":active,"models":[]}
+        elif method == "refresh":
+            result = {"models":[{"name":"local:1","available":True}]}
+        elif method == "chat":
+            result = chat if params["chat_id"] == "c1" else running
+        elif method == "draft":
+            chat["draft"], chat["draft_revision"] = params["text"], params["revision"]
+            result = None
+        elif method == "send":
+            assert params["chat_id"] == "c1" and params["queue_if_busy"] is True
+            item = {"id":"q1","text":chat["draft"],"kind":"followup","held":False}
+            chat["draft"], chat["draft_revision"] = "", chat["draft_revision"] + 1
+            result = {"queued":item,"chat":chat,"active":active}
+        else:
+            result = None
+        print(json.dumps({"v":1,"id":command["id"],"result":result}), flush=True)
+    """
+
+@MainActor @Suite(.serialized) struct CrossChatQueueTests {
+    @Test func sendWhileAnotherChatRepliesQueuesTheDraft() async throws {
+        let connection = ServiceConnection(appVersion: "test") {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+            process.arguments = ["-c", busyElsewhereStub]
+            return process
+        }
+        defer { connection.shutDown() }
+        let chats = ChatController(service: connection)
+        await chats.boot()
+        #expect(chats.selected == "c1")
+        #expect(chats.active?.chatId == "c0")
+        #expect(chats.busyElsewhere)
+        #expect(!chats.canSend)
+        chats.changeDraft("Ask after the other reply")
+        #expect(chats.canSend)
+        await chats.send()
+        #expect(chats.error == nil)
+        #expect(chats.draft.isEmpty)
+        // The running reply in the other chat is untouched.
+        #expect(chats.active?.chatId == "c0")
+        #expect(chats.busyElsewhere)
+    }
+
+    @Test func queuedEntriesDecodePausedStateAndTotal() throws {
+        let value: JSONValue = [
+            "queue": [
+                ["id": "q1", "text": "Later", "kind": "followup", "held": true],
+                ["id": "q2", "text": "Older client", "kind": "followup"],
+            ],
+            "queue_total": 5,
+        ]
+        let status = try value.decode(WorkbenchStatus.self)
+        #expect(status.queue.map(\.isPaused) == [true, false])
+        #expect(status.queueTotal == 5)
+        let legacy: JSONValue = ["queue": [["id": "q1", "text": "x", "kind": "steer"]]]
+        #expect(try legacy.decode(WorkbenchStatus.self).queueTotal == 1)
+    }
+}
