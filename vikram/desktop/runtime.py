@@ -421,6 +421,8 @@ class Runtime:
             history, prompt = inference_messages(
                 self.store, attempt["chat_id"], attempt["message_id"], model["vision"]
             )
+            # Token reports hold only while this compaction is the one in effect.
+            marker = self.store.chat(attempt["chat_id"])["summary_through"]
             from vikram.resources import ProjectResources
 
             extra = {}
@@ -488,7 +490,9 @@ class Runtime:
                     "reasoning_truncated", reasoning_truncated
                 )
                 sources, searches = chunk.get("sources", []), chunk.get("searches", [])
-                usage = chunk.get("usage", usage)
+                reported = chunk.get("usage")
+                if isinstance(reported, dict):
+                    reported = usage = {**reported, "summary_through": marker}
                 activity, mode = chunk.get("activity", activity), chunk.get(
                     "mode", mode
                 )
@@ -506,7 +510,7 @@ class Runtime:
                         reasoning_truncated=reasoning_truncated,
                         # Code and plans can be long: write them only when they change.
                         activity=activity if encoded != saved_activity else None,
-                        usage=chunk.get("usage"),
+                        usage=reported,
                     )
                     saved_activity = encoded
                 except (sqlite3.Error, OSError):

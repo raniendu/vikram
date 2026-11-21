@@ -32,11 +32,16 @@ public final class WorkbenchController {
         self.error = (error as? ServiceError)?.message ?? "This workbench action could not finish. Try again."
     }
 
-    public func estimatedContextTokens(for chatId: String) -> Int? {
-        guard statusChatId == chatId,
-            let count = status?.context["estimated_tokens"]?.number, count >= 0
+    /// The chat's context usage against the window the service reports for its
+    /// model, else `fallbackLimit` (the catalog's window for that model).
+    public func contextUsage(for chatId: String, fallbackLimit: Int? = nil) -> ContextUsage? {
+        guard statusChatId == chatId, let context = status?.context,
+            let count = (context["tokens"] ?? context["estimated_tokens"])?.number, count >= 0,
+            let tokens = Int(exactly: count.rounded(.down)),
+            let limit = context["context_limit"]?.number.flatMap({ Int(exactly: $0) }) ?? fallbackLimit,
+            limit > 0
         else { return nil }
-        return Int(exactly: count)
+        return ContextUsage(tokens: tokens, limit: limit, estimated: context["estimated"]?.bool ?? true)
     }
 
     public func refresh(chatId: String?) async {

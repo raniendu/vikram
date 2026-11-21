@@ -116,8 +116,12 @@ test library.
 Attach up to four files per message, 10 MiB each. Images retain the 24-megapixel limit. Images in
 saved history are omitted with a marker when a text-only model is selected.
 Unsupported draft images must be removed or used with an image-capable model.
-The Mac composer shows the estimated percentage of the selected model’s context
-window used by the saved conversation. Hover over it for the token counts.
+The Mac composer shows a bar of how much of the chat model’s context window the
+conversation fills: the model’s own token count for the latest request (its
+instructions, tools, history and reply), or an estimate until a reply reports
+one. The bar turns yellow at 80%, where automatic compaction starts, and red at
+95%. Hover over it for the token counts. The terminal footer and `/session` use
+the same count.
 Each timed reply shows **Working for…** while it runs. Expand **Worked for…**
 afterward to see its timing and recorded activity. The **Thinking** row lets you
 inspect model thinking live or after the reply. Thinking has its own copy action and is saved with

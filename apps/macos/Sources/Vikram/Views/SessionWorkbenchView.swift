@@ -41,10 +41,12 @@ struct SessionWorkbenchView: View {
                 }
             }
             Section("Context") {
-                LabeledContent("Estimated input", value: contextCount("estimated_tokens"))
+                LabeledContent(
+                    workbench.status?.context["estimated"]?.bool == false ? "Context used" : "Context used (estimated)",
+                    value: contextCount(workbench.status?.context["tokens"] == nil ? "estimated_tokens" : "tokens"))
                 LabeledContent("Model context limit", value: contextCount("context_limit"))
                 if let usage = workbench.status?.context["last_usage"]?.object, !usage.isEmpty {
-                    LabeledContent("Last reply input", value: "\(Int(usage["input_tokens"]?.number ?? 0).formatted()) tokens")
+                    LabeledContent("Last reply input, all requests", value: "\(Int(usage["input_tokens"]?.number ?? 0).formatted()) tokens")
                     LabeledContent("Last reply output", value: "\(Int(usage["output_tokens"]?.number ?? 0).formatted()) tokens")
                     if let cost = usage["cost_usd"]?.string {
                         LabeledContent(usage["cost_estimated"]?.bool == true ? "Estimated cost (USD)" : "Reported cost (USD)", value: cost)

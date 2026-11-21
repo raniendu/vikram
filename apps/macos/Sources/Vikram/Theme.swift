@@ -15,6 +15,8 @@ enum Theme {
     /// Accent-colored text and links on paper.
     static let link = dynamic(light: 0x8A4423, dark: 0xE3B184)
     static let success = dynamic(light: 0x4E7A3E, dark: 0x9BBF7E)
+    /// Ochre on paper and warm yellow in the dark, both legible as small text.
+    static let warning = dynamic(light: 0x9A6B00, dark: 0xE8C547)
     static let danger = dynamic(light: 0xA63C2B, dark: 0xEF9B86)
 
     private static func dynamic(light: UInt32, dark: UInt32) -> Color {
