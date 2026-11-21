@@ -36,6 +36,20 @@ import Testing
         #expect(status.defaultModel == "ollama:local:1")
     }
 
+    @Test func contextUsageLevelsFollowTheCompactionThreshold() {
+        func usage(_ tokens: Int) -> ContextUsage { ContextUsage(tokens: tokens, limit: 1000, estimated: false) }
+        #expect(usage(0).percentText == "0%")
+        #expect(usage(3).percentText == "<1%")
+        #expect(usage(799).level == .normal)
+        #expect(usage(799).percentText == "79%")
+        #expect(usage(800).level == .warning)
+        #expect(usage(949).level == .warning)
+        #expect(usage(950).level == .critical)
+        #expect(usage(1500).fraction == 1)
+        #expect(usage(1500).percentText == "100%")
+        #expect(ContextUsage(tokens: 10, limit: 0, estimated: true).fraction == 0)
+    }
+
     @Test(arguments: ["coding", "mcp", "extension"])
     func hostApprovalsPreserveSummaryAndDiff(_ kind: String) throws {
         let value: JSONValue = [
@@ -62,7 +76,7 @@ private let workbenchStub = """
     chat = {"id":"c1","title":"Chat","model":"local:1","messages":[],"draft":"","draft_revision":0}
     def status():
         return {"workspace":None,"trusted":False,"provider":"ollama","cloud_enabled":False,
-                "credentials":None,"context":{"estimated_tokens":320},"queue":queue,"resources":{},"mcp":[],"extensions":[]}
+                "credentials":None,"context":{"tokens":5348,"estimated_tokens":320,"estimated":False,"context_limit":262144},"queue":queue,"resources":{},"mcp":[],"extensions":[]}
     for line in sys.stdin:
         command = json.loads(line)
         method, params = command["method"], command.get("params", {})
@@ -109,8 +123,11 @@ private let workbenchStub = """
         #expect(chats.draft.isEmpty)
         #expect(workbench.status?.queue.first?.text == "Inspect first")
         #expect(workbench.status?.queue.first?.kind == .steer)
-        #expect(workbench.estimatedContextTokens(for: "c1") == 320)
-        #expect(workbench.estimatedContextTokens(for: "another-chat") == nil)
+        // The service's measured count and the chat model's window win over the catalog's.
+        #expect(
+            workbench.contextUsage(for: "c1", fallbackLimit: 8192)
+                == ContextUsage(tokens: 5348, limit: 262_144, estimated: false))
+        #expect(workbench.contextUsage(for: "another-chat") == nil)
         _ = await workbench.perform("queue_remove", value: "q1")
         #expect(workbench.status?.queue.isEmpty == true)
         chats.changeDraft("fail")

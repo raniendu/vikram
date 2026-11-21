@@ -37,6 +37,16 @@ MAX_REASONING_CHARS = 64_000
 STREAM_UPDATE_SECONDS = 0.1
 
 
+def context_tokens(messages) -> int | None:
+    """Tokens in the latest request's prompt plus its response, as reported."""
+    response = next(
+        (m for m in reversed(messages) if isinstance(m, ModelResponse)), None
+    )
+    if response is None or response.usage.input_tokens <= 0:
+        return None
+    return response.usage.input_tokens + response.usage.output_tokens
+
+
 class ObservedStream(httpx.AsyncByteStream):
     def __init__(self, source, reported: dict):
         self.source, self.reported = source, reported
@@ -270,6 +280,10 @@ async def stream_reply(
                                 "requests": usage.requests,
                                 "cache_read_tokens": usage.cache_read_tokens,
                             }
+                            # The run's totals add up every request; the latest
+                            # request's prompt and output are what the context holds.
+                            if tokens := context_tokens(event.result.new_messages()):
+                                counts["context_tokens"] = tokens
                             if ModelRef.parse(model).is_cloud:
                                 reported_costs = [
                                     (message.provider_details or {}).get("cost")

@@ -80,6 +80,20 @@ def stored_turns(store: Store, chat_id: str, *, vision: bool = True) -> list[dic
     return turns
 
 
+def _text_tokens(turns: list[dict]) -> int:
+    """A rough count for saved turns: four characters a token, 2,048 an image."""
+    chars = images = 0
+    for turn in turns:
+        for part in turn["prompt"]:
+            if isinstance(part, str):
+                chars += len(part)
+            elif isinstance(part, BinaryContent):
+                images += 1
+        chars += len(turn.get("answer") or "")
+        chars += len(str(turn.get("sources", []))) + len(str(turn.get("activity", [])))
+    return math.ceil(chars / 4) + images * 2048
+
+
 def _completed_effects(turn: dict) -> dict:
     """An interrupted answer is not context, but an already executed effect is."""
     if turn.get("answer") is not None:
@@ -341,27 +355,36 @@ class Session:
                 }
             )
 
+    def summary_marker(self) -> str | int | None:
+        """Names the compaction in effect, so older token reports can be set aside."""
+        if not self.summary or not 0 < self._summary_count <= len(self.turns):
+            return None
+        return self.turns[self._summary_count - 1].get("id") or self._summary_count
+
     def context_state(self) -> dict:
         turns = self.turns[self._summary_count :] if self.summary else self.turns
-        chars = len(self.summary)
-        images = 0
-        for turn in turns:
-            for part in turn["prompt"]:
-                if isinstance(part, str):
-                    chars += len(part)
-                elif isinstance(part, BinaryContent):
-                    images += 1
-            chars += len(turn.get("answer") or "")
-            chars += len(str(turn.get("sources", []))) + len(
-                str(turn.get("activity", []))
-            )
-        estimate = math.ceil(chars / 4) + images * 2048
+        estimate = math.ceil(len(self.summary) / 4) + _text_tokens(turns)
+        # The model's own count for the latest request includes the instructions
+        # and tool definitions, which the text estimate cannot see. It holds only
+        # while the history that request used is still the one in effect.
+        tokens, measured = estimate, False
+        marker = self.summary_marker()
+        for index in range(len(turns) - 1, -1, -1):
+            usage = turns[index].get("usage") or {}
+            reported = usage.get("context_tokens")
+            if type(reported) is not int or reported <= 0:
+                continue
+            if usage.get("summary_through") == marker:
+                tokens = reported + _text_tokens(turns[index + 1 :])
+                measured = True
+            break
         return {
+            "tokens": tokens,
             "estimated_tokens": estimate,
             "context_limit": self.context_limit,
-            "estimated": True,
+            "estimated": not measured,
             "percent": (
-                estimate / self.context_limit * 100 if self.context_limit else None
+                tokens / self.context_limit * 100 if self.context_limit else None
             ),
             "compacted_turns": self._summary_count,
             "total_turns": len(self.turns),
@@ -557,8 +580,7 @@ class Session:
         try:
             includes_prompt = (
                 self.context_limit is not None
-                and self.context_state()["estimated_tokens"]
-                + math.ceil(len(prompt) / 4)
+                and self.context_state()["tokens"] + math.ceil(len(prompt) / 4)
                 >= self.context_limit * 0.8
             )
             if self.coding is None or self.coding.settings.get("auto_compact", True):
@@ -573,6 +595,7 @@ class Session:
         if self.tasks is not None:
             self.tasks.model, self.tasks.thinking = selected["name"], setting
         history = self.history()
+        marker = self.summary_marker()
         turn = {
             "prompt": [prompt],
             "answer": None,
@@ -645,6 +668,11 @@ class Session:
                 self.model, thinking, history, list(turn["prompt"]), **kwargs
             )
             async for event in iterator:
+                if isinstance(event.get("usage"), dict):
+                    event = {
+                        **event,
+                        "usage": {**event["usage"], "summary_through": marker},
+                    }
                 last = event
                 if attempt is not None and self.store is not None and "text" in event:
                     self.store.checkpoint(

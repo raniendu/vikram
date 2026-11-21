@@ -104,7 +104,7 @@ class Workbench:
                 )
             force = manual or (
                 context.context_limit is not None
-                and context.context_state()["estimated_tokens"] + incoming
+                and context.context_state()["tokens"] + incoming
                 >= context.context_limit * 0.8
             )
             previous = (context.summary, context._summary_count)

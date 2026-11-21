@@ -24,6 +24,32 @@ public struct ConversationBranch: Sendable, Hashable, Decodable, Identifiable {
     }
 }
 
+/// How much of the chat model's context window the conversation fills.
+public struct ContextUsage: Sendable, Hashable {
+    public enum Level: Sendable, Hashable { case normal, warning, critical }
+
+    /// The model's own count for the latest request, or a text estimate.
+    public var tokens: Int
+    public var limit: Int
+    public var estimated: Bool
+
+    public init(tokens: Int, limit: Int, estimated: Bool) {
+        self.tokens = tokens
+        self.limit = limit
+        self.estimated = estimated
+    }
+
+    public var fraction: Double { limit > 0 ? min(max(Double(tokens) / Double(limit), 0), 1) : 0 }
+
+    /// Automatic compaction starts at 80%; past 95% a request may not fit.
+    public var level: Level { fraction >= 0.95 ? .critical : fraction >= 0.8 ? .warning : .normal }
+
+    public var percentText: String {
+        fraction > 0 && fraction < 0.01
+            ? "<1%" : fraction.formatted(.percent.precision(.fractionLength(0)).rounded(rule: .down))
+    }
+}
+
 public struct IntegrationStatus: Sendable, Hashable, Decodable, Identifiable {
     public var name: String
     public var status: String?

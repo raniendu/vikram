@@ -165,17 +165,8 @@ struct ComposerView: View {
     }
 
     @ViewBuilder private var contextUsage: some View {
-        if let used = workbench.estimatedContextTokens(for: chat.id),
-            let capacity = chats.model?.contextLength, capacity > 0
-        {
-            let fraction = min(Double(used) / Double(capacity), 1)
-            let percent = fraction > 0 && fraction < 0.01
-                ? "<1%" : fraction.formatted(.percent.precision(.fractionLength(0)).rounded(rule: .down))
-            let detail = "Estimated \(used.formatted()) of \(capacity.formatted()) tokens in saved conversation context."
-            Text("\(percent) context used")
-                .monospacedDigit()
-                .help(detail)
-                .accessibilityHint(detail)
+        if let usage = workbench.contextUsage(for: chat.id, fallbackLimit: chats.model?.contextLength) {
+            ContextUsageBar(usage: usage)
         } else {
             Text("Context usage unavailable")
         }
